@@ -1,44 +1,43 @@
 #!chezscheme
-;;; chandler/activate.ss --- activate / load-native 核心(designs/chandler 总设计「运行期激活」)
+;;; chandler/activate.ss --- activate / load-native(新模型:扁平 lib/)
 ;;;
-;;; rubygem 式一行激活:读 ./manifest.lock,(a) 把每个 lib/<name>/<srcdir> prepend 到
-;;; library-directories;(b) 按拓扑序统一 load 所有依赖声明的 native(库自身只写 foreign-procedure)。
-;;; 只在脚本顶层成立(展开期坑,见总设计);编译型入口走 chandler run 的环境变量注入。
+;;; 运行期激活(脚本顶层):挂 lib/(+ path 源目录 + 全局)到 library-directories,
+;;; 并 load 所有 lib/native/<mt>/*.so。规则与 run/exec/repl 一致(install 的 resolved-libdirs)。
+;;; 注:日常激活推荐用 install 生成的 chandler-setup.ss(纯 skiff 即可,无需 (chandler))。
 
 (library (chandler activate)
   (export activate activate-natives load-native native-path native-root)
   (import (chezscheme)
-          (except (chandler layout) native-path)   ; native-path 本库自定义(按 lib/<pkg> 布局)
+          (except (chandler layout) native-path)   ; native-path 本库按扁平 lib/ 自定义
+          (chandler fs)
           (chandler manifest)
-          (chandler lock)
+          (chandler install)
           (chandler runtime))
 
   (define native-root (make-parameter "lib"))
   (define loaded (make-hashtable string-hash string=?))   ; 幂等注册表
 
-  ;; (activate [root]) —— 一步:挂库路径 + 载 native
+  ;; (activate [root]) —— 挂库路径 + 载 native
   (define activate
     (case-lambda
       [() (activate ".")]
       [(root)
        (gate-runtime! root)
-       (mount-library-dirs! root)
+       (library-directories (append (resolved-libdirs root) (library-directories)))
        (activate-natives root)]))
 
-  ;; 仅挂 native(chandler run 的 preamble 用:库路径已由环境变量注入)
+  ;; 仅载 native(chandler-setup.ss / run 的 preamble 已自载,此为 (activate) 子集)
   (define activate-natives
     (case-lambda
       [() (activate-natives ".")]
       [(root)
-       (native-root (join-paths root "lib"))
-       (let ([lk (read-lock (lock-path root))])
-         (for-each
-           (lambda (d)
-             (for-each (lambda (nat)
-                         (load-native (symbol->string (locked-dep-name d))
-                                      (symbol->string nat)))
-                       (locked-dep-natives d)))
-           (topo-order lk)))]))
+       (for-each (lambda (so) (load-one so)) (native-load-paths root))]))
+
+  (define (load-one p)
+    (unless (hashtable-ref loaded p #f)
+      (when (file-exists? p)
+        (load-shared-object p)
+        (hashtable-set! loaded p #t))))
 
   ;; 运行时版本门(manifest 有 chez/skiff 声明时)
   (define (gate-runtime! root)
@@ -48,45 +47,18 @@
           (verify-runtime! (list (cons 'chez (manifest-chez mf))
                                  (cons 'skiff (manifest-skiff mf))))))))
 
-  ;; 把 lib/<name>/<srcdir> 与 path 依赖根 prepend 到 library-directories
-  (define (mount-library-dirs! root)
-    (let* ([lk (read-lock (lock-path root))]
-           [lock-dirs (map (lambda (d)
-                             (lib-root root (symbol->string (locked-dep-name d))
-                                       (locked-dep-srcdir d)))
-                           (lock-deps lk))]
-           [path-dirs (path-dep-dirs root)])
-      (library-directories
-        (append lock-dirs path-dirs (library-directories)))))
+  ;; ── load-native / native-path(边缘/显式用;新模型 native 扁平于 lib/native/<mt>/)──
+  ;;   (native-path soname) 或 (native-path pkg soname) 皆 → <native-root>/native/<mt>/<soname>.<ext>
+  (define native-path
+    (case-lambda
+      [(soname) (flat-native (native-root) soname)]
+      [(pkg soname) (flat-native (native-root) soname)]))
 
-  ;; path 依赖不在 lock:从 manifest 读并挂(srcdir 依上游默认 ".")
-  (define (path-dep-dirs root)
-    (let ([mpath (join-paths root "manifest.ss")])
-      (if (file-exists? mpath)
-          (let ([mf (read-manifest mpath)])
-            (map (lambda (d) (join-paths root (dep-source-loc d)))
-                 (filter (lambda (d) (eq? 'path (dep-source-kind d)))
-                         (append (manifest-deps mf) (manifest-dev-deps mf)))))
-          '())))
+  (define (flat-native root soname)
+    (join-paths (join-paths (join-paths root "native") (current-machine-type))
+                (string-append soname "." (so-ext))))
 
-  ;; ── load-native(总设计草案;边缘/显式控制用,常规由 activate 统一调)──
   (define load-native
     (case-lambda
-      [(pkg) (load-native pkg pkg)]
-      [(pkg soname)
-       (let ([p (native-path pkg soname)])
-         (unless (hashtable-ref loaded p #f)
-           (unless (file-exists? p)
-             (error 'load-native
-                    (format "缺少原生库,先跑 chandler build ~a:~%  ~a" pkg p)))
-           (load-shared-object p)
-           (hashtable-set! loaded p #t))
-         p)]))
-
-  ;; lib/<pkg>/native/<mt>/<soname>.<ext>
-  (define (native-path pkg soname)
-    (let ([pkg-root (join-paths (native-root) pkg)])
-      (join-paths (join-paths (join-paths pkg-root "native") (current-machine-type))
-                  (string-append soname "." (so-ext)))))
-
-  (define (lock-path root) (join-paths root "manifest.lock")))
+      [(soname) (let ([p (native-path soname)]) (load-one p) p)]
+      [(pkg soname) (let ([p (native-path soname)]) (load-one p) p)])))
