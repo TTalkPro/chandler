@@ -10,7 +10,7 @@
           normalize-url url-key mirror-path
           ensure-mirror update-mirror
           resolve-branch resolve-tag list-tags has-rev? resolve-pin
-          materialize dirty? head-rev)
+          materialize checkout-detach dirty? head-rev show-file)
   (import (chezscheme)
           (chandler proc)
           (chandler layout)
@@ -125,6 +125,18 @@
       (git (list "clone" "--shared" "--no-checkout" m dest))
       (git (list "-C" dest "checkout" "--detach" rev))
       dest))
+
+  ;; 从镜像按 rev 读某文件内容(不 checkout);缺失返回 #f。resolve 读上游 manifest 用。
+  (define (show-file url rev path)
+    (let ([m (ensure-mirror url)])
+      (let ([r (run-capture "git"
+                 (append no-hooks (list "-C" m "show" (string-append rev ":" path))) '())])
+        (if (= 0 (proc-result-code r)) (proc-result-out r) #f))))
+
+  ;; 在已物化的 lib/<name> 中切到另一 rev(install 同步用);rev 须已在共享镜像中
+  (define (checkout-detach dir rev)
+    (git (list "-C" dir "checkout" "--detach" rev))
+    dir)
 
   ;; lib/<name> 的当前 HEAD rev(verify 用)
   (define (head-rev dir)

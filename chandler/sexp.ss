@@ -6,7 +6,7 @@
 ;;; canonical 写保证「同输入 → 同字节」(见 designs/02 §2 lock 字节稳定要求)。
 
 (library (chandler sexp)
-  (export read-datum-file write-canonical-file canonical-string
+  (export read-datum-file read-datum-string write-canonical-file canonical-string
           tagged-list? expect-tag
           field field-ref field-ref* field-all field-keys
           alist->sorted)
@@ -23,6 +23,14 @@
             (unless (eof-object? rest)
               (error 'read-datum-file "文件含多个顶层 form,期望单一" path rest)))
           datum))))
+
+  ;; 从字符串读单一 datum(供解析镜像中 git show 出的清单内容)
+  (define (read-datum-string s)
+    (let ([p (open-input-string s)])
+      (let ([datum (read p)])
+        (when (eof-object? datum)
+          (error 'read-datum-string "内容为空"))
+        datum)))
 
   ;; ── 结构助手 ──
   ;; (tagged-list? x 'foo) → x 形如 (foo ...)

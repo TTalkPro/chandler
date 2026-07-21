@@ -6,7 +6,7 @@
 ;;; 退出码;system 返回码可靠)。纯 POSIX;Windows 适配留待跨平台阶段。
 
 (library (chandler proc)
-  (export run-capture run-check run-status shell-quote
+  (export run-capture run-check run-status run-foreground shell-quote
           proc-result-code proc-result-out proc-result-err)
   (import (chezscheme))
 
@@ -54,9 +54,10 @@
 
   (define (read-file-string path)
     (if (file-exists? path)
-        (call-with-port (open-file-input-port path
-                          (file-options) (buffer-mode block) (native-transcoder))
-          (lambda (p) (get-string-all p)))
+        (let ([s (call-with-port (open-file-input-port path
+                                   (file-options) (buffer-mode block) (native-transcoder))
+                   (lambda (p) (get-string-all p)))])
+          (if (eof-object? s) "" s))          ; 空文件 get-string-all 返回 eof,规整为 ""
         ""))
 
   ;; ── 主入口 ──
@@ -106,6 +107,18 @@
     (case-lambda
       [(prog args) (run-status prog args '())]
       [(prog args opts) (proc-result-code (run-capture prog args opts))]))
+
+  ;; run-foreground:继承 stdio 跑命令(run/exec 用),返回退出码。不捕获输出。
+  (define run-foreground
+    (case-lambda
+      [(prog args) (run-foreground prog args '())]
+      [(prog args opts)
+       (let* ([cwd (assq-val 'cwd opts)]
+              [env (assq-val 'env opts)]
+              [base (quote-command prog args)]
+              [with-cd (if cwd (string-append "cd " (shell-quote cwd) " && " base) base)]
+              [full (if env (string-append (env-prefix env) with-cd) with-cd)])
+         (system full))]))
 
   (define (assq-val k alist)
     (let ([p (assq k alist)]) (and p (cdr p)))))

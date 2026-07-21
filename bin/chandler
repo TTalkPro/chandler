@@ -1,0 +1,11 @@
+#!/bin/sh
+# chandler --- 入口 wrapper
+# 定位仓库根(bin/..),把它加进库搜索路径,跑 CLI 程序。
+# 开发期解释执行;安装后 CHANDLER_HOME 指向已装库目录(见 install.sh)。
+set -eu
+
+here=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+libroot=${CHANDLER_HOME:-$here}
+scheme=${CHANDLER_SCHEME:-scheme}
+
+exec "$scheme" -q --libdirs "$libroot" --program "$libroot/chandler/cli/main.sps" "$@"

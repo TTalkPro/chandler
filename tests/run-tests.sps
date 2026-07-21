@@ -10,7 +10,15 @@
         (prefix (chandler test layout) layout:)
         (prefix (chandler test version) version:)
         (prefix (chandler test manifest) manifest:)
-        (prefix (chandler test lock) lock:))
+        (prefix (chandler test lock) lock:)
+        (prefix (chandler test proc) proc:)
+        (prefix (chandler test fetch) fetch:)
+        (prefix (chandler test resolve) resolve:)
+        (prefix (chandler test install) install:)
+        (prefix (chandler test activate) activate:)
+        (prefix (chandler test cli) cli:)
+        (prefix (chandler test registry) registry:)
+        (prefix (chandler test build) build:))
 
 (define all-suites
   (list
@@ -19,6 +27,14 @@
     (cons 'layout layout:suite)
     (cons 'version version:suite)
     (cons 'manifest manifest:suite)
-    (cons 'lock lock:suite)))
+    (cons 'lock lock:suite)
+    (cons 'proc proc:suite)
+    (cons 'fetch fetch:suite)
+    (cons 'resolve resolve:suite)
+    (cons 'install install:suite)
+    (cons 'activate activate:suite)
+    (cons 'cli cli:suite)
+    (cons 'registry registry:suite)
+    (cons 'build build:suite)))
 
 (exit (if (run-suites all-suites) 0 1))
