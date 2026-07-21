@@ -12,6 +12,8 @@
           resolve-branch resolve-tag list-tags has-rev? resolve-pin
           materialize checkout-detach dirty? head-rev show-file)
   (import (chezscheme)
+          (chandler util)
+          (chandler fs)
           (chandler proc)
           (chandler layout)
           (chandler hash))
@@ -19,10 +21,8 @@
   (define offline? (make-parameter #f))
   (define cache-root (make-parameter #f))   ; #f → 惰性取默认
 
-  (define (home) (or (getenv "HOME") (getenv "USERPROFILE") "."))
-
   (define (default-cache-root)
-    (join-paths (or (getenv "XDG_CACHE_HOME") (join-paths (home) ".cache")) "chandler"))
+    (join-paths (or (getenv "XDG_CACHE_HOME") (join-paths (home-dir) ".cache")) "chandler"))
 
   (define (root) (or (cache-root) (default-cache-root)))
 
@@ -147,31 +147,13 @@
     (> (string-length
          (string-trim (git (list "-C" dir "status" "--porcelain")))) 0))
 
-  ;; ── 目录/字符串工具 ──
-  (define (ensure-parent path)
-    (ensure-dir (parent-dir path)))
-
-  (define (ensure-dir dir)
-    (unless (or (string=? dir "") (file-directory? dir))
-      (ensure-dir (parent-dir dir))
-      (guard (e [#t (void)]) (mkdir dir))))
-
-  (define (parent-dir path)
-    (let loop ([i (- (string-length path) 1)])
-      (cond
-        [(< i 0) ""]
-        [(char=? #\/ (string-ref path i)) (substring path 0 i)]
-        [else (loop (- i 1))])))
-
+  ;; ── URL key 专用助手(通用字符串/FS 工具来自 util/fs)──
   (define (readable-tail norm)
-    ;; 取末两段路径,非字母数字换 -,截断
-    (let* ([segs (filter (lambda (s) (> (string-length s) 0)) (split-char norm #\/))]
+    ;; 取末两段路径,非字母数字换 -
+    (let* ([segs (filter (lambda (s) (> (string-length s) 0)) (string-split norm #\/))]
            [n (length segs)]
-           [pick (if (>= n 2) (list (list-ref segs (- n 2)) (list-ref segs (- n 1)))
-                     segs)]
-           [joined (fold-left (lambda (a s) (if (string=? a "") s (string-append a "-" s)))
-                              "" pick)])
-      (sanitize joined)))
+           [pick (if (>= n 2) (list (list-ref segs (- n 2)) (list-ref segs (- n 1))) segs)])
+      (sanitize (string-join pick "-"))))
 
   (define (sanitize s)
     (list->string
@@ -180,60 +162,15 @@
                  c #\-))
            (string->list s))))
 
+  ;; downcase scheme + host(host 大小写不敏感、path 敏感);scp 式 git@host:path → 全 downcase
   (define (string-downcase-scheme-host url)
-    ;; 简化:整体不动大小写路径,只 downcase "scheme://host" 段;稳妥起见仅 downcase 到首个 / 后的 host
-    ;; 实务上 host 大小写不敏感、path 敏感。这里 downcase scheme + host。
     (let ([idx (string-search url "://")])
       (if idx
-          (let* ([after (+ idx 3)]
-                 [slash (string-index-from url #\/ after)]
-                 [hostend (or slash (string-length url))])
-            (string-append
-              (string-downcase (substring url 0 hostend))
-              (substring url hostend (string-length url))))
-          (string-downcase url))))   ; scp 式 git@host:path → 全 downcase(host 主导)
-
-  (define (string-search s sub)
-    (let ([ls (string-length s)] [lsub (string-length sub)])
-      (let loop ([i 0])
-        (cond
-          [(> (+ i lsub) ls) #f]
-          [(string=? sub (substring s i (+ i lsub))) i]
-          [else (loop (+ i 1))]))))
-
-  (define (string-index-from s c from)
-    (let ([ls (string-length s)])
-      (let loop ([i from])
-        (cond [(>= i ls) #f]
-              [(char=? c (string-ref s i)) i]
-              [else (loop (+ i 1))]))))
-
-  (define (strip-suffix s suf)
-    (let ([ls (string-length s)] [lf (string-length suf)])
-      (if (and (>= ls lf) (string=? suf (substring s (- ls lf) ls)))
-          (substring s 0 (- ls lf)) s)))
+          (let* ([hostend (or (char-index url #\/ (+ idx 3)) (string-length url))])
+            (string-append (string-downcase (substring url 0 hostend))
+                           (substring url hostend (string-length url))))
+          (string-downcase url))))
 
   (define (strip-trailing-slash s)
     (let loop ([n (string-length s)])
-      (if (and (> n 0) (char=? #\/ (string-ref s (- n 1))))
-          (loop (- n 1))
-          (substring s 0 n))))
-
-  (define (split-char s c)
-    (let loop ([chars (string->list s)] [cur '()] [acc '()])
-      (cond
-        [(null? chars) (reverse (cons (list->string (reverse cur)) acc))]
-        [(char=? (car chars) c) (loop (cdr chars) '() (cons (list->string (reverse cur)) acc))]
-        [else (loop (cdr chars) (cons (car chars) cur) acc)])))
-
-  (define (split-lines s) (split-char s #\newline))
-
-  (define (string-trim s)
-    (let* ([cs (string->list s)]
-           [cs (drop-ws cs)]
-           [cs (reverse (drop-ws (reverse cs)))])
-      (list->string cs)))
-  (define (drop-ws cs)
-    (cond [(null? cs) cs]
-          [(memv (car cs) '(#\space #\tab #\return #\newline)) (drop-ws (cdr cs))]
-          [else cs])))
+      (if (and (> n 0) (char=? #\/ (string-ref s (- n 1)))) (loop (- n 1)) (substring s 0 n)))))
