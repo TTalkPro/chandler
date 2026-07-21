@@ -8,7 +8,9 @@
 (library (chandler proc)
   (export run-capture run-check run-status run-foreground shell-quote
           proc-result-code proc-result-out proc-result-err)
-  (import (chezscheme))
+  (import (chezscheme)
+          (chandler util)
+          (chandler fs))
 
   (define-record-type proc-result
     (fields code out err))
@@ -18,47 +20,25 @@
     (let ([op (open-output-string)])
       (display #\' op)
       (string-for-each
-        (lambda (c)
-          (if (char=? c #\')
-              (display "'\\''" op)
-              (display c op)))
+        (lambda (c) (if (char=? c #\') (display "'\\''" op) (display c op)))
         s)
       (display #\' op)
       (get-output-string op)))
 
   (define (quote-command prog args)
-    (let ([op (open-output-string)])
-      (display (shell-quote prog) op)
-      (for-each (lambda (a) (display #\space op) (display (shell-quote a) op)) args)
-      (get-output-string op)))
+    (string-join (map shell-quote (cons prog args)) " "))
 
   ;; ── 唯一临时目录(mkdir 原子性:已存在即抛,重试)──
   (define counter 0)
   (define (next-counter) (set! counter (+ counter 1)) counter)
-
-  (define (temp-base)
-    (or (getenv "TMPDIR") "/tmp"))
 
   (define (make-temp-dir)
     (let ([t (current-time 'time-utc)])
       (let loop ([n (+ (* (time-second t) 1000000)
                        (quotient (time-nanosecond t) 1000)
                        (next-counter))])
-        (let ([d (string-append (temp-base) "/chandler-" (number->string n))])
-          (if (guard (e [#t #f]) (mkdir d) #t)
-              d
-              (loop (+ n 1)))))))
-
-  (define (rm-rf path)
-    (system (string-append "rm -rf " (shell-quote path))))
-
-  (define (read-file-string path)
-    (if (file-exists? path)
-        (let ([s (call-with-port (open-file-input-port path
-                                   (file-options) (buffer-mode block) (native-transcoder))
-                   (lambda (p) (get-string-all p)))])
-          (if (eof-object? s) "" s))          ; 空文件 get-string-all 返回 eof,规整为 ""
-        ""))
+        (let ([d (string-append (or (getenv "TMPDIR") "/tmp") "/chandler-" (number->string n))])
+          (if (ignore-errors (mkdir d) #t) d (loop (+ n 1)))))))
 
   ;; ── 主入口 ──
   ;; run-capture:(values code stdout stderr) 经 proc-result;opts: (cwd . dir) (env . ((k.v)…))
@@ -69,25 +49,20 @@
        (let* ([dir (make-temp-dir)]
               [outf (string-append dir "/out")]
               [errf (string-append dir "/err")]
-              [cwd (assq-val 'cwd opts)]
-              [env (assq-val 'env opts)]
+              [cwd (alist-ref opts 'cwd)]
+              [env (alist-ref opts 'env)]
               [base (quote-command prog args)]
-              [with-redir (string-append base " >" (shell-quote outf)
-                                         " 2>" (shell-quote errf))]
-              [with-cd (if cwd
-                           (string-append "cd " (shell-quote cwd) " && " with-redir)
-                           with-redir)]
+              [with-redir (string-append base " >" (shell-quote outf) " 2>" (shell-quote errf))]
+              [with-cd (if cwd (string-append "cd " (shell-quote cwd) " && " with-redir) with-redir)]
               [with-env (if env (string-append (env-prefix env) with-cd) with-cd)])
          (let ([code (system with-env)])
-           (let ([out (read-file-string outf)]
-                 [err (read-file-string errf)])
+           (let ([out (read-file-string outf)] [err (read-file-string errf)])
              (rm-rf dir)
              (make-proc-result code out err))))]))
 
   (define (env-prefix env)
     (fold-left
-      (lambda (acc kv)
-        (string-append acc (car kv) "=" (shell-quote (cdr kv)) " "))
+      (lambda (acc kv) (string-append acc (car kv) "=" (shell-quote (cdr kv)) " "))
       "" env))
 
   ;; run-check:成功返回 stdout;失败抛(带 prog/args/退出码/stderr 上下文)
@@ -113,12 +88,9 @@
     (case-lambda
       [(prog args) (run-foreground prog args '())]
       [(prog args opts)
-       (let* ([cwd (assq-val 'cwd opts)]
-              [env (assq-val 'env opts)]
+       (let* ([cwd (alist-ref opts 'cwd)]
+              [env (alist-ref opts 'env)]
               [base (quote-command prog args)]
               [with-cd (if cwd (string-append "cd " (shell-quote cwd) " && " base) base)]
               [full (if env (string-append (env-prefix env) with-cd) with-cd)])
-         (system full))]))
-
-  (define (assq-val k alist)
-    (let ([p (assq k alist)]) (and p (cdr p)))))
+         (system full))])))
