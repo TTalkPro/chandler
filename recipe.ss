@@ -1,30 +1,41 @@
 #!chezscheme
-;;; recipe.ss --- bake 构建描述(由【另一仓库】的 bake 消费)
+;;; recipe.ss --- bake 构建/安装描述(生态闭环:skiff 跑 · chandler 管依赖 · bake 装库)
 ;;;
-;;; bake 在独立仓库实现;本文件描述如何编译/安装 Chandler。开发期用解释执行即可,
-;;; 无需 bake 也完全可用(见 designs/08 §1 形态表):
-;;;   scheme --libdirs . --program tests/run-tests.sps   # 跑测试(110+ 用例)
-;;;   ./bin/chandler --version                           # 入口(解释执行)
-;;;   ./install.sh                                        # 自举安装到用户级 libdir
+;;; 有了本文件,chandler 可直接被 bake 构建与安装,补上整个体系的最后一环:
+;;;   • skiff  —— 运行时,跑上面所有工具
+;;;   • chandler —— 包管理器,拉取/激活依赖
+;;;   • bake   —— 构建工具,编译库树、装进 Chez lib dir(本 recipe 消费方)
+;;; 且 bake 自身依赖 (chandler lock/registry/layout/sexp/util/fs),故「bake 装 chandler 库」
+;;; 正是闭环所在。
 ;;;
-;;; 预期最终形态(示意,以 bake 仓库的 DSL 权威为准):
-;;;
-;;;   (default-task 'build)
-;;;
-;;;   ;; 编译 umbrella + 子库树为 .so(bake compile-tree,布局规范即隐式构建描述)
-;;;   (task 'build '(compile-libs)
-;;;     (lambda () (compile-tree "." "build")))
-;;;
-;;;   (task 'test '(build)
-;;;     (lambda () (run "scheme" "--libdirs" "." "--program" "tests/run-tests.sps")))
-;;;
-;;;   ;; 安装:复用 (chandler registry) 事务装进用户级 libdir + bin/chandler
-;;;   (task 'install '(build)
-;;;     (lambda () (run "./install.sh")))
-;;;
-;;;   ;; 自举本工具为快启动镜像(可选,见 designs/08 §1)
-;;;   (task 'boot '(build)
-;;;     (lambda () (make-boot-file "chandler.boot" '("petite" "scheme")
-;;;                                "chandler.ss" "chandler/cli/main.sps")))
-;;;
-;;; Chandler 自身零外部依赖(只用 (chezscheme)),故无 manifest deps 需 chandler 供货。
+;;;   bake            # = bake build,编译 (chandler) 库树为 .so
+;;;   bake test       # 跑全测试套件(132 用例)
+;;;   bake install    # 装 (chandler) 库树 → ~/.local/share/chez/lib(--global 装 /usr/local)
+;;;   bake uninstall  # 据安装清单干净卸载
+;;;   bake -T         # 列任务
+
+(define-lib-roots ".")                       ; 库搜索根 = 仓库根(布局规范:umbrella 在根)
+
+;; ── build(默认):编译 (chandler) umbrella + 其 import 闭包为 .so ──
+(library-task 'build '(chandler))
+
+;; ── test:跑测试套件(解释执行,无需先编译)──
+;;   (build/install/uninstall 是 bake 的 tool-task,不带描述,故不列入 `bake -T`,但可直接调用。)
+(task 'test "跑全测试套件(132 用例)"
+  '()
+  (lambda ()
+    (run "scheme" "--libdirs" "." "--program" "tests/run-tests.sps")))
+
+;; ── install / uninstall:把 (chandler) 库树装进 Chez 用户级 lib dir ──
+;;   → (import (chandler …)) 全局可解析(apps 的 (activate) 与 bake 自身都需要)。
+;;   CLI 启动器(bin/chandler,运行时发现 skiff→chez)由 chandler 自装提供:
+;;     chandler install-self    或    ./install.sh
+(install-task 'install
+  (lib chandler)
+  (from ".")
+  (target user))
+(uninstall-task 'uninstall
+  (lib chandler)
+  (target user))
+
+(default-task 'build)
