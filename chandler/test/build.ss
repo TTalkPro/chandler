@@ -5,53 +5,12 @@
   (export suite)
   (import (chezscheme)
           (chandler test harness)
-          (chandler proc)
+          (chandler test fixtures)
           (chandler fetch)
           (chandler install)
           (chandler build))
 
-  (define (mock-bake)
-    (string-append (current-directory) "/tests/mock-bake.sh"))
-
-  (define (mktmp) (let ([r (run-capture "mktemp" '("-d"))]) (trim (proc-result-out r))))
-  (define (write-file p s) (call-with-output-file p (lambda (o) (display s o)) 'truncate))
-  (define (read-file p) (if (file-exists? p) (call-with-input-file p get-string-all) ""))
-  (define (trim s) (let* ([cs (string->list s)] [cs (reverse (lt (reverse (lt cs))))]) (list->string cs)))
-  (define (lt cs) (cond [(null? cs) cs] [(memv (car cs) '(#\space #\tab #\return #\newline)) (lt (cdr cs))] [else cs]))
-
-  ;; 造带 native 声明的库仓
-  (define (make-native-lib name soname)
-    (let ([dir (mktmp)])
-      (define (g . args) (run-check "git" (cons "-C" (cons dir args)) '()))
-      (run-check "git" (list "init" "-q" "-b" "main" dir) '())
-      (g "config" "user.email" "t@t") (g "config" "user.name" "t")
-      (write-file (string-append dir "/manifest.ss")
-        (format "(manifest (format 1) (name ~s) (version \"0.1.0\") (srcdir \".\") (native (~a (path \"native/~a\") (build make))))"
-                name soname soname))
-      (write-file (string-append dir "/" name ".ss")
-        (format "#!chezscheme~%(library (~a) (export ok) (import (chezscheme)) (define ok #t))~%" name))
-      (g "add" "-A") (g "commit" "-q" "-m" "c1")
-      dir))
-
-  (define (make-plain-lib name)
-    (let ([dir (mktmp)])
-      (define (g . args) (run-check "git" (cons "-C" (cons dir args)) '()))
-      (run-check "git" (list "init" "-q" "-b" "main" dir) '())
-      (g "config" "user.email" "t@t") (g "config" "user.name" "t")
-      (write-file (string-append dir "/manifest.ss")
-        (format "(manifest (format 1) (name ~s) (version \"0.1.0\") (srcdir \".\"))" name))
-      (write-file (string-append dir "/" name ".ss")
-        (format "#!chezscheme~%(library (~a) (export ok) (import (chezscheme)) (define ok #t))~%" name))
-      (g "add" "-A") (g "commit" "-q" "-m" "c1")
-      dir))
-
-  (define (make-app deps)   ; deps=((name . url)…)
-    (let ([dir (mktmp)] [op (open-output-string)])
-      (fprintf op "(manifest (format 1) (name \"app\") (version \"0.1.0\") (srcdir \".\") (deps")
-      (for-each (lambda (d) (fprintf op " (~a (git ~s) (branch \"main\"))" (car d) (cdr d))) deps)
-      (fprintf op "))")
-      (write-file (string-append dir "/manifest.ss") (get-output-string op))
-      dir))
+  (define (mock-bake) (string-append (current-directory) "/tests/mock-bake.sh"))
 
   (define (with-mock log thunk)
     (putenv "CHANDLER_BAKE" (mock-bake))
@@ -62,7 +21,7 @@
     ;; 无 native 的依赖:build 直接排单,无需授权
     (build-plain-no-auth
       (parameterize ([cache-root (mktmp)])
-        (let* ([b (make-plain-lib "b")]
+        (let* ([b (make-lib-repo "b")]
                [app (make-app (list (cons 'b b)))]
                [log (string-append (mktmp) "/log")])
           (install app '())
@@ -115,11 +74,4 @@
               (write-file (string-append (lib-dir app 'n) "/manifest.ss")
                 "(manifest (format 1) (name \"n\") (version \"0.1.0\") (srcdir \".\") (native (libn (path \"native/libn\") (build (script \"evil.sh\")))))")
               ;; 未重新授权 → 报错
-              (assert-raises (lambda () (build app '())))))))))
-
-  (define (substr? s sub)
-    (let ([ls (string-length s)] [lsub (string-length sub)])
-      (let loop ([i 0])
-        (cond [(> (+ i lsub) ls) #f]
-              [(string=? sub (substring s i (+ i lsub))) #t]
-              [else (loop (+ i 1))])))))
+              (assert-raises (lambda () (build app '()))))))))))

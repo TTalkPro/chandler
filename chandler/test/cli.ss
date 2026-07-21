@@ -5,27 +5,10 @@
   (export suite)
   (import (chezscheme)
           (chandler test harness)
-          (chandler proc)
+          (chandler test fixtures)
           (chandler fetch)
           (chandler cli args)
           (chandler cli main))
-
-  (define (mktmp) (let ([r (run-capture "mktemp" '("-d"))]) (trim (proc-result-out r))))
-  (define (write-file p s) (call-with-output-file p (lambda (o) (display s o)) 'truncate))
-  (define (trim s) (let* ([cs (string->list s)] [cs (reverse (lt (reverse (lt cs))))]) (list->string cs)))
-  (define (lt cs) (cond [(null? cs) cs] [(memv (car cs) '(#\space #\tab #\return #\newline)) (lt (cdr cs))] [else cs]))
-
-  (define (make-lib-repo name)
-    (let ([dir (mktmp)])
-      (define (g . args) (run-check "git" (cons "-C" (cons dir args)) '()))
-      (run-check "git" (list "init" "-q" "-b" "main" dir) '())
-      (g "config" "user.email" "t@t") (g "config" "user.name" "t")
-      (write-file (string-append dir "/manifest.ss")
-        (format "(manifest (format 1) (name ~s) (version \"0.1.0\") (srcdir \".\"))" name))
-      (write-file (string-append dir "/" name ".ss")
-        (format "#!chezscheme~%(library (~a) (export ~a-ok) (import (chezscheme)) (define ~a-ok #t))~%" name name name))
-      (g "add" "-A") (g "commit" "-q" "-m" "c1")
-      dir))
 
   (define-suite suite
     ;; ── args ──
