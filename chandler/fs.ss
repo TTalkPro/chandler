@@ -1,0 +1,111 @@
+#!chezscheme
+;;; chandler/fs.ss --- 文件系统操作(优先 Chez 原生,替代 shell-out)
+;;;
+;;; 消除 fetch/install/registry/selfinstall 各写一份 ensure-dir/rm-rf/dir-entries 的冗余。
+;;; 用 Chez 原生 directory-list/rename-file/delete-directory/bytevector I/O,不 shell-out
+;;; (更快、可移植、无引用注入面)。
+
+(library (chandler fs)
+  (export parent-dir base-name path-join*
+          ensure-dir ensure-parent
+          dir-entries files-under dir-empty?
+          rm-rf copy-file move-file
+          read-file-string read-lines write-text
+          sweep-empty-parents home-dir)
+  (import (chezscheme)
+          (chandler util))
+
+  ;; ── 路径拆分(纯字符串;拼接见 (chandler layout))──
+  (define (parent-dir path)
+    (let ([i (last-slash path)])
+      (cond [(< i 0) ""] [(= i 0) "/"] [else (substring path 0 i)])))
+
+  (define (base-name path)
+    (let ([i (last-slash path)])
+      (if (< i 0) path (substring path (+ i 1) (string-length path)))))
+
+  (define (last-slash path)
+    (let loop ([i (- (string-length path) 1)])
+      (cond [(< i 0) -1] [(char=? #\/ (string-ref path i)) i] [else (loop (- i 1))])))
+
+  (define (path-join* a b)
+    (cond [(string=? a "") b]
+          [(char=? #\/ (string-ref a (- (string-length a) 1))) (string-append a b)]
+          [else (string-append a "/" b)]))
+
+  ;; ── 目录创建(递归,幂等)──
+  (define (ensure-dir dir)
+    (unless (or (string=? dir "") (string=? dir "/") (file-directory? dir))
+      (ensure-dir (parent-dir dir))
+      (ignore-errors (mkdir dir))))            ; 并发/竞态下已存在即忽略
+
+  (define (ensure-parent path) (ensure-dir (parent-dir path)))
+
+  ;; ── 目录枚举(原生 directory-list;不含 . ..)──
+  (define (dir-entries dir)
+    (if (file-directory? dir)
+        (sort string<? (ignore-errors (directory-list dir)))
+        '()))
+
+  (define (dir-empty? dir) (null? (dir-entries dir)))
+
+  ;; 递归列出目录下所有普通文件(绝对路径)
+  (define (files-under dir)
+    (if (file-directory? dir)
+        (fold-left
+          (lambda (acc name)
+            (let ([full (path-join* dir name)])
+              (if (file-directory? full)
+                  (append acc (files-under full))
+                  (cons full acc))))
+          '() (dir-entries dir))
+        '()))
+
+  ;; ── 删除(原生递归)──
+  (define (rm-rf path)
+    (cond
+      [(not (or (file-exists? path) (file-directory? path))) (void)]
+      [(file-directory? path)
+       (for-each (lambda (e) (rm-rf (path-join* path e))) (dir-entries path))
+       (ignore-errors (delete-directory path))]
+      [else (ignore-errors (delete-file path))]))
+
+  ;; 删除因某文件消失而变空的祖先目录链
+  (define (sweep-empty-parents path)
+    (let loop ([d (parent-dir path)])
+      (when (and (> (string-length d) 1) (file-directory? d) (dir-empty? d))
+        (ignore-errors (delete-directory d))
+        (loop (parent-dir d)))))
+
+  ;; ── 拷贝/移动(原生 bytevector / rename-file)──
+  (define (copy-file src dst)
+    (ensure-parent dst)
+    (let ([bytes (call-with-port (open-file-input-port src) get-bytevector-all)])
+      (call-with-port (open-file-output-port dst (file-options no-fail))
+        (lambda (p) (unless (eof-object? bytes) (put-bytevector p bytes))))))
+
+  (define (move-file src dst)
+    (ensure-parent dst)
+    (rename-file src dst))
+
+  ;; ── 文本 I/O ──
+  (define (read-file-string path)
+    (if (file-exists? path)
+        (let ([s (call-with-input-file path get-string-all)])
+          (if (eof-object? s) "" s))
+        ""))
+
+  (define (read-lines path)
+    (if (file-exists? path)
+        (call-with-input-file path
+          (lambda (p)
+            (let loop ([acc '()])
+              (let ([l (get-line p)])
+                (if (eof-object? l) (reverse acc) (loop (cons l acc)))))))
+        '()))
+
+  (define (write-text path s)
+    (ensure-parent path)
+    (call-with-output-file path (lambda (p) (display s p)) 'truncate))
+
+  (define (home-dir) (or (getenv "HOME") (getenv "USERPROFILE") ".")))
