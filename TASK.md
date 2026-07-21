@@ -112,6 +112,7 @@ install.sh                  薄壳:运行时发现 → chandler install-self
 - [x] **10.2** 安全红线落地:clone 时 `core.hooksPath=/dev/null`、清单只 `read`、`--allow-build` 描述哈希绑定。威胁清单对照自查。对应:[08 §3-4](designs/08-bootstrap-security.md)。
 - [x] **10.3** `recipe.ss` **落地为可跑的 bake 构建描述**(`build`=`library-task '(chandler)`、`test`、`install`/`uninstall`=`install-task`/`uninstall-task` → Chez lib dir);README 用法;全量 `run-tests` **三运行时全绿**(`scheme`/`petite`/已部署的 `skiff` 均 132/132);`chandler run` 依 manifest 自动选运行时(skiff-only→skiff)。
 - [x] **闭环验证**:`bake build → test → install → uninstall` 全通(bake 0.1.0 跑在 skiff 0.1.0 上);`bake install` 把 `(chandler …)` 库树装进 `~/.local/share/chez/lib`,`(import (chandler lock/registry/…))` 从安装位置可解析——正是 bake 自身依赖的库面。**skiff 跑 · chandler 管依赖 · bake 装库** 三工具互相支撑,生态闭环达成。
+- [x] **自安装改为基于 `bake install`**:`chandler install-self` 去掉自写的库树拷贝(`install-tree!`),库树完全委托 `bake install`/`bake install-global`(读本仓 recipe.ss 的 install-task),chandler 只补运行时发现启动器;`uninstall-self` 据 bake 的 `.bake-install/chandler.files` 清单删库(不依赖源码)。`recipe.ss` 增 `install-global`/`uninstall-global`(target global)。端到端:`./install.sh`(库经 bake)→ 安装的 chandler 在 skiff 上管理项目 → `uninstall-self` 零残留,全通。
 
 ---
 

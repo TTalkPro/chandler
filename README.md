@@ -12,18 +12,17 @@
 
 ## 安装
 
-需 skiff(优先)或 Chez Scheme ≥ 10.0(自带 `git`)。安装方式对齐 **bake**(生态里的构建工具,独立项目):`install.sh` 只做**运行时发现**(skiff → Chez)后委托给工具自身的 `install-self`,默认装到 `~/.local`。
+需 skiff(优先)或 Chez Scheme ≥ 10.0(自带 `git`),以及生态里的构建工具 **bake**——**chandler 的自安装基于 `bake install`**:库树由 bake 装进 Chez lib dir(读本仓 `recipe.ss`),`install.sh` 再补一个运行时发现启动器。
 
 ```sh
 git clone <this-repo> chandler && cd chandler
-./install.sh                      # → ~/.local/share/chez/lib + ~/.local/bin/chandler
-./install.sh --prefix ~/opt       # 自定义 prefix
+./install.sh                      # 库经 bake → ~/.local/share/chez/lib,启动器 → ~/.local/bin/chandler
 ./install.sh --global             # /usr/local(需 root)
 export PATH="$HOME/.local/bin:$PATH"
 chandler --version
 ```
 
-安装生成的 `bin/chandler` 启动器**运行时发现**:优先 `skiff`,回退 `scheme`/`chez`(designs/06 双运行时)。卸载:`chandler uninstall-self`(据 `.chandler-self.files` 清单干净删除)。开发期无需安装,直接 `./bin/chandler <命令>`(同样 skiff 优先)。
+安装生成的 `bin/chandler` 启动器**运行时发现**:优先 `skiff`,回退 `scheme`/`chez`(designs/06 双运行时)。卸载:`chandler uninstall-self`(据 bake 的 `.bake-install/chandler.files` 清单删库 + 删启动器,不依赖源码)。开发期无需安装,直接 `./bin/chandler <命令>`(同样 skiff 优先)。
 
 ### 用 bake 构建/安装(生态闭环)
 
