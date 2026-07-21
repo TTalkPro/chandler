@@ -110,7 +110,8 @@ install.sh                  薄壳:运行时发现 → chandler install-self
 
 - [x] **10.1** 安装模型对齐 bake:`install.sh` 薄壳(运行时发现 skiff→Chez)委托 `chandler install-self`(`chandler/cli/selfinstall.ss`);默认装 `~/.local`,`--prefix`/`--global`;生成运行时发现启动器 + `.chandler-self.files` 清单;`uninstall-self`/`self-update`。对应:[08 §2](designs/08-bootstrap-security.md)。
 - [x] **10.2** 安全红线落地:clone 时 `core.hooksPath=/dev/null`、清单只 `read`、`--allow-build` 描述哈希绑定。威胁清单对照自查。对应:[08 §3-4](designs/08-bootstrap-security.md)。
-- [x] **10.3** `recipe.ss` 完善(交另仓 bake 消费的构建描述);README 用法;全量 `run-tests` + 双运行时(仅 chez,skiff 未在本机则跳过标注)。
+- [x] **10.3** `recipe.ss` **落地为可跑的 bake 构建描述**(`build`=`library-task '(chandler)`、`test`、`install`/`uninstall`=`install-task`/`uninstall-task` → Chez lib dir);README 用法;全量 `run-tests` **三运行时全绿**(`scheme`/`petite`/已部署的 `skiff` 均 132/132);`chandler run` 依 manifest 自动选运行时(skiff-only→skiff)。
+- [x] **闭环验证**:`bake build → test → install → uninstall` 全通(bake 0.1.0 跑在 skiff 0.1.0 上);`bake install` 把 `(chandler …)` 库树装进 `~/.local/share/chez/lib`,`(import (chandler lock/registry/…))` 从安装位置可解析——正是 bake 自身依赖的库面。**skiff 跑 · chandler 管依赖 · bake 装库** 三工具互相支撑,生态闭环达成。
 
 ---
 
@@ -127,7 +128,8 @@ install.sh                  薄壳:运行时发现 → chandler install-self
 
 **全部 11 个阶段(0–10)完成,M1–M4 全部达成。** 环境:Chez 10.4.1 / ta6le。
 
-- 测试:`tests/run-tests.sps` **132 用例全绿**(17 个 suite:util/fs/sexp/layout/version/manifest/lock/proc/fetch/resolve/install/activate/cli/registry/build/selfinstall)。纯 Chez、无外部依赖;`scheme` 与 `petite` 均全绿(双运行时可移植性)。
+- 测试:`tests/run-tests.sps` **132 用例全绿**(17 个 suite:util/fs/sexp/layout/version/manifest/lock/proc/fetch/resolve/install/activate/cli/registry/build/selfinstall)。**`scheme`、`petite`、已部署的 `skiff` 三运行时均 132/132**——chandler 自身即跑在 skiff 上(启动器能力探测通过后优先 skiff)。
+- **skiff 端到端验证**:skiff 应用(manifest 声明 `(skiff …)`)经 chandler-on-skiff 走 `init→add→install→verify→run` 全通;`chandler run` 依 manifest 自动选运行时(skiff-only→skiff、chez→chez),应用运行期自证落在正确运行时。
 - 端到端验证:`init→add→install→verify→list→tree→run→exec` 经二进制跑通;`(activate)` 真实挂载并 import 依赖;全局 `install/uninstall/list/doctor`;`build` 排单经 mock bake + 授权哈希绑定;`install-self` 装 `~/.local` + 自卸载自洽(启动器 skiff 优先运行时发现)。
 - 实现的库:`(chandler)` umbrella + 底座 `util/fs/hash/proc` + `sexp/layout/version/manifest/lock/fetch/resolve/install/registry/runtime/activate/build/cli.{args,commands,main,selfinstall}`;测试夹具 `(chandler test fixtures)`。
 - 对外共享面(bake 反向依赖):`(chandler lock/registry/layout/sexp)` 导出干净,不 import bake。

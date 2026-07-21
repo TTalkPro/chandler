@@ -25,6 +25,19 @@ chandler --version
 
 安装生成的 `bin/chandler` 启动器**运行时发现**:优先 `skiff`,回退 `scheme`/`chez`(designs/06 双运行时)。卸载:`chandler uninstall-self`(据 `.chandler-self.files` 清单干净删除)。开发期无需安装,直接 `./bin/chandler <命令>`(同样 skiff 优先)。
 
+### 用 bake 构建/安装(生态闭环)
+
+chandler 带 `recipe.ss`,可被生态里的构建工具 **bake** 直接构建与安装——把 `(chandler …)` 库树装进 Chez lib dir,`(import (chandler …))` 全局可解析(bake 自身即依赖 `(chandler lock/registry/…)`,这是 **skiff 跑 · chandler 管依赖 · bake 装库** 的闭环处):
+
+```sh
+bake            # = bake build,编译 (chandler) 库树为 .so
+bake test       # 跑全测试套件(132 用例)
+bake install    # 装 (chandler) 库树 → ~/.local/share/chez/lib(--global 装 /usr/local)
+bake uninstall  # 据清单干净卸载
+```
+
+> `bake install` 装的是 **库**(供 `import`);`chandler` **CLI 启动器**由 `chandler install-self` / `install.sh` 提供。
+
 ## 快速上手
 
 ```sh
