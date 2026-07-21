@@ -11,6 +11,7 @@
           read-approvals write-approvals approval-hash
           dep-native-spec)
   (import (chezscheme)
+          (chandler util)
           (chandler proc)
           (chandler layout)
           (chandler sexp)
@@ -29,7 +30,7 @@
         (error 'build "无 manifest.lock,先跑 chandler install" root))
       (let* ([lk (read-lock lpath)]
              [order (topo-order lk)]
-             [allow (assq-val 'allow-build opts)]
+             [allow (alist-ref opts 'allow-build)]
              [approvals-path (join-paths root ".chandler-approvals")]
              [approvals (read-approvals approvals-path)])
         ;; 1) 收集需授权的 native 构建 + 校验授权
@@ -117,19 +118,10 @@
   (define (allowed? allow name)
     (cond
       [(eq? allow #t) #t]
-      [(string? allow) (member name (split-commas allow))]
+      [(string? allow) (and (member name (string-split allow #\,)) #t)]
       [else #f]))
 
   ;; ── 工具 ──
   (define (canonical-inline datum)
     ;; 单行 canonical 串(哈希/透传给 bake --spec 用);复用 write 到 string
-    (let ([op (open-output-string)]) (write datum op) (get-output-string op)))
-
-  (define (assq-val k alist) (let ([p (assq k alist)]) (and p (cdr p))))
-
-  (define (split-commas s)
-    (let loop ([chars (string->list s)] [cur '()] [acc '()])
-      (cond
-        [(null? chars) (reverse (cons (list->string (reverse cur)) acc))]
-        [(char=? #\, (car chars)) (loop (cdr chars) '() (cons (list->string (reverse cur)) acc))]
-        [else (loop (cdr chars) (cons (car chars) cur) acc)]))))
+    (let ([op (open-output-string)]) (write datum op) (get-output-string op))))
