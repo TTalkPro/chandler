@@ -5,27 +5,24 @@
   (export suite)
   (import (chezscheme)
           (chandler test harness)
-          (chandler proc)
+          (chandler test fixtures)
           (chandler fetch))
 
-  ;; 造一个本地 git 源仓:2 提交 + tag v1.0.0;返回 (path . (rev1 rev2))
+  ;; 造一个本地 git 源仓:2 提交 + tag v1.0.0;返回 (path rev1 rev2)。git 原语来自 fixtures
   (define (make-source-repo)
-    (let ([dir (make-tmp)])
-      (define (g . args) (run-check "git" (cons "-C" (cons dir args)) '()))
-      (run-check "git" (list "init" "-q" "-b" "main" dir) '())
-      (g "config" "user.email" "t@t")
-      (g "config" "user.name" "t")
+    (let ([dir (mktmp)])
+      (git-init! dir)
       (write-file (string-append dir "/a.txt") "one")
-      (g "add" "-A") (g "commit" "-q" "-m" "c1")
-      (let ([rev1 (trim (g "rev-parse" "HEAD"))])
-        (g "tag" "v1.0.0")
+      (git-commit! dir "c1")
+      (let ([rev1 (trim (git-in dir "rev-parse" "HEAD"))])
+        (git-in dir "tag" "v1.0.0")
         (write-file (string-append dir "/a.txt") "two")
-        (g "add" "-A") (g "commit" "-q" "-m" "c2")
-        (let ([rev2 (trim (g "rev-parse" "HEAD"))])
+        (git-commit! dir "c2")
+        (let ([rev2 (trim (git-in dir "rev-parse" "HEAD"))])
           (list dir rev1 rev2)))))
 
   (define (with-cache thunk)
-    (parameterize ([cache-root (make-tmp)])
+    (parameterize ([cache-root (mktmp)])
       (thunk)))
 
   (define-suite suite
@@ -68,7 +65,7 @@
         (lambda ()
           (let* ([repo (make-source-repo)]
                  [url (car repo)] [rev1 (cadr repo)]
-                 [dest (string-append (make-tmp) "/http")])
+                 [dest (string-append (mktmp) "/http")])
             (materialize url rev1 dest)
             ;; checkout 到 rev1
             (assert-string= rev1 (head-rev dest))
@@ -81,22 +78,7 @@
             (assert-true (dirty? dest))))))
 
     (offline-miss-errors
-      (parameterize ([cache-root (make-tmp)] [offline? #t])
+      (parameterize ([cache-root (mktmp)] [offline? #t])
         (assert-raises (lambda () (ensure-mirror "https://never/cached"))))))
 
-  ;; ── helpers ──
-  (define (make-tmp)
-    (let ([r (run-capture "mktemp" '("-d"))])
-      (trim (proc-result-out r))))
-  (define (write-file path s)
-    (call-with-output-file path (lambda (p) (display s p)) 'truncate))
-  (define (read-file path)
-    (call-with-input-file path (lambda (p) (get-string-all p))))
-  (define (trim s)
-    (let* ([cs (string->list s)]
-           [cs (reverse (ltrim (reverse (ltrim cs))))])
-      (list->string cs)))
-  (define (ltrim cs)
-    (cond [(null? cs) cs]
-          [(memv (car cs) '(#\space #\tab #\return #\newline)) (ltrim (cdr cs))]
-          [else cs])))
+  )   ; helpers(mktmp/write-file/read-file/trim/git-*)来自 (chandler test fixtures)
