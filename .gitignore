@@ -11,9 +11,13 @@
 *.wpo
 
 # Chandler 生成物
+/vendor/
 /lib/
-/build/
+chandler-setup.ss
 .chandler-run.ss
+.chandler-repl.ss
+.chandler-install.ss
 
 # bake 编译产物
 _build/
+/build/
