@@ -40,6 +40,7 @@
          [(remove)  (cmd-remove root flags pos)]
          [(run)     (cmd-run root flags pos rest)]
          [(exec)    (cmd-exec root flags rest)]
+         [(repl)    (cmd-repl root flags)]
          [(uninstall) (cmd-uninstall root flags)]
          [(doctor)  (cmd-doctor root flags)]
          [(install-self) (cmd-install-self (self-src-root) flags)]
@@ -81,7 +82,7 @@
     (printf "chandler ~a~%" chandler-cli-version))
 
   (define (list-tasks)
-    (printf "命令:init install update verify list tree add remove run exec version~%"))
+    (printf "命令:init install update verify list tree add remove run exec repl version~%"))
 
   (define (usage)
     (printf "chandler —— git-first 的 Chez Scheme 库管理器(Skiff 生态)~%~%")
@@ -96,6 +97,7 @@
     (printf "  list | tree                  显示已锁依赖~%")
     (printf "  run <script.ss> [args…]      挂依赖库路径 + 载 native 后跑脚本~%")
     (printf "  exec -- <cmd…>               设 CHEZSCHEMELIBDIRS 后跑命令~%")
-    (printf "  install-self [--prefix D]    自装 chandler 到 ~~/.local(--global=/usr/local)~%")
-    (printf "  uninstall-self [--prefix D]  卸载自装的 chandler~%~%")
+    (printf "  repl [--runtime skiff|chez]  交互 shell,自动挂项目/全局库路径~%")
+    (printf "  install-self [--global]      自装 chandler(库经 bake install → ~~/.local 或 /usr/local)~%")
+    (printf "  uninstall-self [--global]    卸载自装的 chandler~%~%")
     (printf "全局旗标: -C <dir> --offline --production --force --keep-extra --verbose~%")))

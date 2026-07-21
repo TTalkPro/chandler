@@ -7,6 +7,7 @@
           (chandler test harness)
           (chandler test fixtures)
           (chandler fetch)
+          (chandler install)
           (chandler cli args)
           (chandler cli main))
 
@@ -63,6 +64,27 @@
           (assert-equal 0 (main (list "-C" app "install")))
           (assert-equal 0 (main (list "-C" app "verify")))
           (assert-equal 0 (main (list "-C" app "list")))
-          ;; lib/greet 物化
-          (assert-true (file-exists? (string-append app "/lib/greet/greet.ss")))))))
-  )
+          ;; 新模型:git 依赖 checkout 到 vendor/,bake install 到扁平 lib/,生成 setup
+          (assert-true (file-exists? (string-append app "/vendor/greet/greet.ss")))  ; checkout
+          (assert-true (file-exists? (string-append app "/lib/greet.ss")))           ; bake 装的扁平库
+          (assert-true (file-exists? (string-append app "/chandler-setup.ss"))))))   ; 生成的引入文件
+
+    ;; ── 库搜索模式判定(run/exec/repl 统一):无 lock/依赖 → 全局;有 → 项目(最高优先)──
+    (libdir-mode-detection
+      (parameterize ([cache-root (mktmp)])
+        (let* ([greet (make-lib-repo "greet")]
+               [app (mktmp)])
+          ;; 仅 init(有 manifest,无 lock)→ 非项目 → 全局模式
+          (main (list "-C" app "init" "--name=app"))
+          (assert-false (project-mode? app))
+          (assert-equal (list (global-libdir)) (resolved-libdirs app))
+          ;; add + install → lock 有依赖 → 项目模式
+          (main (list "-C" app "add" "greet" greet "--branch" "main"))
+          (main (list "-C" app "install"))
+          (assert-true (project-mode? app))
+          ;; 项目 libdirs:扁平 lib/ 在前 + 项目根 + 全局兜底在末尾
+          (let ([dirs (resolved-libdirs app)])
+            (assert-true (>= (length dirs) 2))
+            (assert-string= (string-append app "/lib") (car dirs))               ; 扁平 lib/ 在前
+            (assert-string= (global-libdir) (list-ref dirs (- (length dirs) 1)))))))  ; 全局兜底在末尾
+    ))

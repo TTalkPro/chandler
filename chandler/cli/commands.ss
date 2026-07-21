@@ -6,7 +6,7 @@
 
 (library (chandler cli commands)
   (export cmd-init cmd-install cmd-update cmd-verify cmd-list cmd-tree
-          cmd-add cmd-remove cmd-run cmd-exec
+          cmd-add cmd-remove cmd-run cmd-exec cmd-repl
           cmd-uninstall cmd-doctor cmd-build
           ensure-gitignore-lib skeleton-manifest-datum)
   (import (chezscheme)
@@ -19,6 +19,7 @@
           (chandler lock)
           (chandler install)
           (chandler registry)
+          (chandler runtime)
           (chandler build)
           (chandler cli args))
 
@@ -213,12 +214,12 @@
                field))
          body))
 
-  ;; ── run / exec(designs/06 §5)──
-  ;; run:组库路径 + 载 native + 跑脚本(用生成的 preamble,自包含,不需子进程有 (chandler))
+  ;; ── run / exec / repl:库搜索规则统一(install 的 resolved-libdirs,同 repl)──
+  ;; run:组库路径 + 载 native + 跑脚本(生成 preamble,自包含,不需子进程有 (chandler))
   (define (cmd-run root flags positionals rest)
     (let ([script (and (pair? positionals) (car positionals))])
       (unless script (error 'run "用法:chandler run <script.ss> [args…]"))
-      (let* ([dirs (library-search-dirs root)]
+      (let* ([dirs (resolved-libdirs root)]
              [natives (native-load-paths root)]
              [preamble (make-preamble root natives (abspath root script))]
              [interp (choose-interp root flags)]
@@ -230,9 +231,45 @@
   ;; exec:仅设 CHEZSCHEMELIBDIRS 后跑任意命令(给编辑器/CI)
   (define (cmd-exec root flags rest)
     (unless (and rest (pair? rest)) (error 'exec "用法:chandler exec -- <cmd…>"))
-    (let ([dirs (library-search-dirs root)])
+    (let ([dirs (resolved-libdirs root)])
       (run-foreground (car rest) (cdr rest)
                       (list (cons 'env (list (cons "CHEZSCHEMELIBDIRS" (path-list dirs))))))))
+
+  ;; ── repl:交互式 shell,自动挂库搜索路径(与 run/exec 同规则)──
+  ;;   项目模式(lock 存在且有依赖):lib/ + path 源目录 + 项目库根 + 全局(项目最高优先)
+  ;;   全局模式(无 lock / 无依赖):用户全局 lib 目录
+  (define (cmd-repl root flags)
+    (let* ([project? (project-mode? root)]
+           [dirs     (resolved-libdirs root)]
+           [natives  (if project? (native-load-paths root) '())]
+           [interp   (repl-interp root flags)])
+      (fprintf (current-error-port)
+               "chandler repl:~a · ~a 个库搜索目录 · 运行时 ~a~%"
+               (if project? "项目模式" "全局模式") (length dirs) interp)
+      (let ([args (append (list "--libdirs" (path-list dirs))
+                          (if (null? natives) '() (list (make-repl-preamble root natives))))])
+        (run-foreground interp args))))
+
+  ;; 运行时:--runtime 覆盖 > manifest 声明 skiff-only > 跟随 chandler 当前所在运行时
+  (define (repl-interp root flags)
+    (let ([rt (flag flags 'runtime)])
+      (cond
+        [(equal? rt "chez")  (or (getenv* "CHANDLER_SCHEME") "scheme")]
+        [(equal? rt "skiff") (or (getenv* "CHANDLER_SKIFF") "skiff")]
+        [(eq? 'skiff (interp-kind root flags)) (or (getenv* "CHANDLER_SKIFF") "skiff")]
+        [(eq? 'skiff (current-runtime))        (or (getenv* "CHANDLER_SKIFF") "skiff")]
+        [else (or (getenv* "CHANDLER_SCHEME") "scheme")])))
+
+  ;; native 预载 preamble(仅项目有 native 时):加载各 .so 后落入 REPL
+  (define (make-repl-preamble root natives)
+    (let ([tmp (join-paths root ".chandler-repl.ss")])
+      (call-with-output-file tmp
+        (lambda (p)
+          (for-each (lambda (so)
+                      (when (file-exists? so) (fprintf p "(load-shared-object ~s)~%" so)))
+                    natives))
+        'truncate)
+      tmp))
 
   ;; 选解释器(designs/06 §3):--runtime 旗标 > manifest 声明 > scheme。
   ;;   --runtime skiff|chez 显式指定;否则仅 (skiff …) 无 (chez …) → skiff;其余 → scheme。
@@ -275,15 +312,20 @@
     (if (and (string? rev) (>= (string-length rev) 10)) (substring rev 0 10) rev))
 
   ;; ── .gitignore / scaffold / basename(init 用)──
+  ;; 忽略 chandler 生成物:vendor/(依赖 checkout)、lib/(bake 装的)、chandler-setup.ss、临时文件
+  (define gitignore-entries '("/vendor/" "/lib/" "chandler-setup.ss"
+                              ".chandler-run.ss" ".chandler-repl.ss" ".chandler-install.ss"))
   (define (ensure-gitignore-lib root)
-    (let ([gi (join-paths root ".gitignore")])
-      (let ([lines (read-lines gi)])            ; fs.read-lines:文件缺失 → '()
-        (unless (member "lib/" (map string-trim lines))
-          (call-with-output-file gi
-            (lambda (p)
-              (for-each (lambda (l) (display l p) (newline p)) lines)
-              (display "lib/" p) (newline p))
-            'truncate)))))
+    (let* ([gi (join-paths root ".gitignore")]
+           [lines (read-lines gi)]              ; fs.read-lines:文件缺失 → '()
+           [have (map string-trim lines)]
+           [missing (filter (lambda (e) (not (member e have))) gitignore-entries)])
+      (unless (null? missing)
+        (call-with-output-file gi
+          (lambda (p)
+            (for-each (lambda (l) (display l p) (newline p)) lines)
+            (for-each (lambda (e) (display e p) (newline p)) missing))
+          'truncate))))
 
   (define (scaffold-lib root name)
     (let ([umbrella (join-paths root (string-append name ".ss"))]
