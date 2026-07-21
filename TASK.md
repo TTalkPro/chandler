@@ -11,6 +11,8 @@
 ```
 chandler.ss                 (library (chandler))         umbrella:re-export activate/load-native/runtime
 chandler/
+  util.ss                   (chandler util)              横切工具:字符串 + alist + ignore-errors 宏
+  fs.ss                     (chandler fs)                文件系统(原生 directory-list/rename/bytevector)
   proc.ss                   (chandler proc)              子进程封装(git / bake 调用)
   hash.ss                   (chandler hash)              纯 Scheme SHA-256(lock 哈希 / registry 完整性)
   sexp.ss                   (chandler sexp)              清单 read + canonical 写(只读不求值)
@@ -31,6 +33,7 @@ chandler/
     selfinstall.ss          (chandler cli selfinstall)   install-self / uninstall-self(对齐 bake)
     main.ss                 (chandler cli main)          dispatch + 退出码
     main.sps                                             程序入口(取 argv 调 main)
+  test/fixtures.ss          (chandler test fixtures)     测试夹具:临时目录 / 文件 / git 仓构造
   test/*.ss                 与被测库共置的测试库
 bin/chandler                开发期入口 wrapper(运行时发现:skiff 优先)
 tests/
@@ -124,9 +127,9 @@ install.sh                  薄壳:运行时发现 → chandler install-self
 
 **全部 11 个阶段(0–10)完成,M1–M4 全部达成。** 环境:Chez 10.4.1 / ta6le。
 
-- 测试:`tests/run-tests.sps` **113 用例全绿**(15 个 suite:sexp/layout/version/manifest/lock/proc/fetch/resolve/install/activate/cli/registry/build/selfinstall)。纯 Chez、无外部依赖;Petite 子集亦可跑 CLI(双运行时可移植性验证通过)。
+- 测试:`tests/run-tests.sps` **132 用例全绿**(17 个 suite:util/fs/sexp/layout/version/manifest/lock/proc/fetch/resolve/install/activate/cli/registry/build/selfinstall)。纯 Chez、无外部依赖;`scheme` 与 `petite` 均全绿(双运行时可移植性)。
 - 端到端验证:`init→add→install→verify→list→tree→run→exec` 经二进制跑通;`(activate)` 真实挂载并 import 依赖;全局 `install/uninstall/list/doctor`;`build` 排单经 mock bake + 授权哈希绑定;`install-self` 装 `~/.local` + 自卸载自洽(启动器 skiff 优先运行时发现)。
-- 实现的库:`(chandler)` umbrella + `sexp/layout/version/hash/manifest/lock/proc/fetch/resolve/install/registry/runtime/activate/build/cli.{args,commands,main,selfinstall}`。
+- 实现的库:`(chandler)` umbrella + 底座 `util/fs/hash/proc` + `sexp/layout/version/manifest/lock/fetch/resolve/install/registry/runtime/activate/build/cli.{args,commands,main,selfinstall}`;测试夹具 `(chandler test fixtures)`。
 - 对外共享面(bake 反向依赖):`(chandler lock/registry/layout/sexp)` 导出干净,不 import bake。
 
 ### 实现期发现/决定(偏离或补充设计处)
@@ -135,3 +138,10 @@ install.sh                  薄壳:运行时发现 → chandler install-self
 2. 新增 `(chandler proc)`——子进程封装,用临时文件 + `system` 捕获退出码(`open-process-ports` 拿不到退出码)。**修掉一处隐蔽 bug**:`get-string-all` 对空文件返回 eof 而非 `""`,曾致 `git status --porcelain` 干净仓库崩溃。
 3. `add`/`remove` 采用 datum 级改写(而非设计倾向的文本级插入);对 init 生成的规范清单无损,代价是重排手写格式——v0.1 取舍,已在 [01](designs/01-cli.md) 注明的 fallback 范围内。
 4. `run` 用生成的 preamble 脚本(先 `load-shared-object` native 再 `load` 目标),自包含、不需子进程持有 `(chandler)`。
+
+### 优化 pass(去冗余 / 清模块 / 用宏)
+
+- **新增底座 `(chandler util)`**(字符串 split/trim/prefix/suffix/search/join、`alist-ref`、`ignore-errors` 宏)与 **`(chandler fs)`**(原生 `directory-list`/`rename-file`/`delete-directory`/bytevector I/O,替掉散落各处 shell-out 到 `ls`/`cp`/`mv`/`rm`/`find`)。分层:`util`(叶)← `fs` ← `proc` ← 其余域模块。
+- 各模块删掉自带的 split/trim/prefix?/contains?/parent-dir/ensure-dir/rm-rf/dir-entries/assq-val 副本,统一走 util/fs(`fetch` 减 ~90 行;`registry` 完全脱离 `proc`)。
+- **测试夹具集中到 `(chandler test fixtures)`**(mktmp/write-file/read-file/trim/git-init!/git-commit!/make-lib-repo/make-native-lib/make-app),消除 7-8 个测试文件各写一份的 boilerplate。
+- 最佳实践:文件操作优先 Chez 原生原语而非 shell;重复的 `(guard (e [#t #f]) …)` 收敛为 `ignore-errors` 宏。全程 `scheme` + `petite` 132 用例保持全绿。

@@ -56,6 +56,8 @@ bake 是独立工具,但按依赖方向 **bake → chandler 库**(反向禁止,c
 
 | 库 | 导出 | bake 用途 |
 |----|------|-----------|
+| `(chandler util)` | 字符串工具、`alist-ref`、`ignore-errors` 宏 | 通用底座 |
+| `(chandler fs)` | 原生文件系统操作(枚举/拷贝/删除/递归) | compile-tree 遍历、产物拷贝 |
 | `(chandler lock)` | lock 读取/拓扑序 | pack 校验闭包、排 native |
 | `(chandler registry)` | 注册表事务([05](05-install-registry.md)) | `bake install`/`uninstall` |
 | `(chandler layout)` | 布局规范路径推导(库名↔路径、native 落点、`so-ext`) | compile-tree 遍历、pack 组装 |
