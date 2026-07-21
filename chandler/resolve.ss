@@ -9,6 +9,8 @@
   (export resolve resolve/provider
           resolution? resolution-lock resolution-warnings)
   (import (chezscheme)
+          (chandler util)
+          (chandler layout)
           (chandler sexp)
           (chandler manifest)
           (chandler lock)
@@ -29,13 +31,13 @@
   ;; opts: (production . #t) (root-dir . "path")
   (define (resolve root-mf . opts)
     (let ([o (if (null? opts) '() (car opts))])
-      (resolve/provider root-mf (git-provider (assq-val 'root-dir o ".")) o)))
+      (resolve/provider root-mf (git-provider (alist-ref o 'root-dir ".")) o)))
 
   ;; ── 核心算法(provider 注入)──
   ;; provider: (name sk sl pk pv) → (values rev srcdir child-deps natives path?)
   ;;   child-deps = manifest dep record 列表;natives = symbol 列表;rev=#f 表 path(不入 lock)
   (define (resolve/provider root-mf provider opts)
-    (let* ([production? (assq-val 'production opts #f)]
+    (let* ([production? (alist-ref opts 'production #f)]
            [overrides (manifest-overrides root-mf)]
            [chosen (make-eq-hashtable)]        ; name → rentry
            [warnings '()])
@@ -120,7 +122,7 @@
   ;; ── chosen → lock(排除 path 依赖;dev scope 保留)──
   (define (chosen->lock chosen root-mf)
     (let ([entries (filter (lambda (e) (not (rentry-path? e)))
-                           (vector->list (hashtable-values-vec chosen)))])
+                           (vector->list (hashtable-values chosen)))])
       (make-lock
         1
         #f                                  ; manifest-sha256 由 install 层填(它有文件路径)
@@ -156,7 +158,7 @@
                (for-each (lambda (d) (visit (dep-name d) (cons n path))) (rentry-deps e))
                (hashtable-set! state n 'done)))]))
       (vector-for-each (lambda (e) (visit (rentry-name e) '()))
-                       (hashtable-values-vec chosen))))
+                       (hashtable-values chosen))))
 
   ;; ── git-backed provider ──
   (define (git-provider root-dir)
@@ -171,8 +173,8 @@
                          (map native-name (manifest-native mf)) #f))
                (values rev "." '() '() #f)))]     ; 裸库默认
         [(path)
-         (let* ([dir (path-append root-dir sl)]
-                [mpath (path-append dir "manifest.ss")])
+         (let* ([dir (join-paths root-dir sl)]
+                [mpath (join-paths dir "manifest.ss")])
            (if (file-exists? mpath)
                (let ([mf (read-manifest mpath)])
                  (values #f (manifest-srcdir mf) (manifest-deps mf)
@@ -229,44 +231,17 @@
 
   (define (builtin? name) (builtin-prefix? name))
 
-  (define (assq-val k alist . default)
-    (let ([p (assq k alist)])
-      (if p (cdr p) (if (null? default) #f (car default)))))
-
   (define (pin-str k v) (if k (format "~a:~a" k v) "?"))
-
-  (define (path-append a b)
-    (cond [(string=? a "") b]
-          [(string=? a ".") b]
-          [(char=? #\/ (string-ref a (- (string-length a) 1))) (string-append a b)]
-          [else (string-append a "/" b)]))
-
-  ;; hashtable values as vector(Chez hashtable-values 返回 vector)
-  (define (hashtable-values-vec ht) (hashtable-values ht))
 
   ;; 从 URL 抽 host(冲突裁决 R4);https://host/… 或 git@host:… 或本地路径
   (define (url-host url)
     (let ([norm (normalize-url url)])
-      (let ([idx (substr-index norm "://")])
+      (let ([idx (string-search norm "://")])
         (cond
-          [idx (let* ([after (+ idx 3)]
-                      [slash (char-index norm #\/ after)])
-                 (substring norm after (or slash (string-length norm))))]
-          [(char-index norm #\@ 0)
+          [idx (let ([slash (char-index norm #\/ (+ idx 3))])
+                 (substring norm (+ idx 3) (or slash (string-length norm))))]
+          [(char-index norm #\@)
            => (lambda (at)
                 (let ([colon (char-index norm #\: at)])
                   (substring norm (+ at 1) (or colon (string-length norm)))))]
-          [else norm]))))                   ; 本地 path:整体为「host」,同路径才等
-
-  (define (substr-index s sub)
-    (let ([ls (string-length s)] [lsub (string-length sub)])
-      (let loop ([i 0])
-        (cond [(> (+ i lsub) ls) #f]
-              [(string=? sub (substring s i (+ i lsub))) i]
-              [else (loop (+ i 1))]))))
-  (define (char-index s c from)
-    (let ([ls (string-length s)])
-      (let loop ([i from])
-        (cond [(>= i ls) #f]
-              [(char=? c (string-ref s i)) i]
-              [else (loop (+ i 1))])))))
+          [else norm])))))                  ; 本地 path:整体为「host」,同路径才等

@@ -9,6 +9,8 @@
           lib-dir project-lock-path project-manifest-path
           library-search-dirs native-load-paths)
   (import (chezscheme)
+          (chandler util)
+          (chandler fs)
           (chandler proc)
           (chandler layout)
           (chandler sexp)
@@ -168,29 +170,11 @@
                    (topo-order lk))))
           '())))
 
-  ;; ── 工具 ──
-  (define (opt opts k default)
-    (let ([p (assq k opts)]) (if p (cdr p) default)))
-
-  (define (rm-rf dir) (run-check "rm" (list "-rf" dir) '()))
+  ;; ── 工具(通用来自 util/fs:opt→alist-ref、rm-rf/dir-entries→fs)──
+  (define (opt opts k default) (alist-ref opts k default))
 
   (define (dot-entry? e)
     (and (> (string-length e) 0) (char=? #\. (string-ref e 0))))
 
   (define (short-rev rev)
-    (if (and (string? rev) (>= (string-length rev) 10)) (substring rev 0 10) rev))
-
-  ;; 目录条目(不含 . ..);shell ls -A
-  (define (dir-entries dir)
-    (let ([r (run-capture "ls" (list "-A" dir))])
-      (if (= 0 (proc-result-code r))
-          (filter (lambda (s) (> (string-length s) 0))
-                  (split-nl (proc-result-out r)))
-          '())))
-
-  (define (split-nl s)
-    (let loop ([chars (string->list s)] [cur '()] [acc '()])
-      (cond
-        [(null? chars) (reverse (cons (list->string (reverse cur)) acc))]
-        [(char=? #\newline (car chars)) (loop (cdr chars) '() (cons (list->string (reverse cur)) acc))]
-        [else (loop (cdr chars) (cons (car chars) cur) acc)]))))
+    (if (and (string? rev) (>= (string-length rev) 10)) (substring rev 0 10) rev)))
