@@ -10,7 +10,8 @@
           native-dir native-path
           library-name->path srcdir-join
           lib-root native-so-name)
-  (import (chezscheme))
+  (import (chezscheme)
+          (chandler util))
 
   (define (current-machine-type)
     (symbol->string (machine-type)))
@@ -22,10 +23,6 @@
         [(string-suffix? "nt"  m) "dll"]     ; Windows
         [(string-suffix? "osx" m) "dylib"]   ; macOS
         [else                     "so"])))    ; Linux/BSD
-
-  (define (string-suffix? suf s)
-    (let ([ls (string-length s)] [lf (string-length suf)])
-      (and (>= ls lf) (string=? suf (substring s (- ls lf) ls)))))
 
   ;; ── 路径拼接(POSIX 分隔;Windows 亦接受 /,Chez 内部规范化)──
   (define (path-join a b)

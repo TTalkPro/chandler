@@ -7,6 +7,7 @@
 (library (chandler runtime)
   (export current-runtime runtime-version verify-runtime!)
   (import (chezscheme)
+          (chandler util)
           (chandler version))
 
   ;; 探测:Skiff 运行时约定暴露顶层 skiff-version(字符串);否则标准 Chez
@@ -32,8 +33,8 @@
   ;; constraints: alist ((chez . range-or-#f) (skiff . range-or-#f))
   (define (verify-runtime! constraints)
     (let ([rt (current-runtime)]
-          [chez-c (assq-val 'chez constraints)]
-          [skiff-c (assq-val 'skiff constraints)])
+          [chez-c (alist-ref constraints 'chez)]
+          [skiff-c (alist-ref constraints 'skiff)])
       (case rt
         [(chez)
          (when skiff-c
@@ -51,7 +52,4 @@
     (unless (version-match? range actual)
       (error 'verify-runtime!
              (format "运行时不满足要求:需 ~a ~a,当前 ~a。请安装匹配运行时或调整 manifest。"
-                     what range actual))))
-
-  (define (assq-val k alist)
-    (let ([p (assq k alist)]) (and p (cdr p)))))
+                     what range actual)))))

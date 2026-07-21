@@ -8,7 +8,8 @@
 (library (chandler version)
   (export parse-version version-compare version<? version=?
           version-match? select-highest strip-v)
-  (import (chezscheme))
+  (import (chezscheme)
+          (chandler util))
 
   ;; ── 解析:字符串 → (int ...);剥 v 前缀,按 . 切,pre-release/build(- +)截断 ──
   (define (strip-v s)
@@ -19,8 +20,8 @@
 
   (define (parse-version s0)
     (let* ([s (strip-v s0)]
-           [core (car (split-on s '(#\- #\+)))]      ; 去 pre-release/build
-           [parts (split-on core '(#\.))])
+           [core (car (string-split s '(#\- #\+)))]      ; 去 pre-release/build
+           [parts (string-split core '(#\.))])
       (map (lambda (p)
              (let ([n (string->number p)])
                (if (and n (integer? n) (exact? n) (>= n 0)) n
@@ -61,19 +62,19 @@
   (define (version-match? constraint ver)
     (let ([v (parse-version ver)]
           [toks (filter (lambda (t) (> (string-length t) 0))
-                        (split-on constraint '(#\space #\tab)))])
+                        (string-split constraint '(#\space #\tab)))])
       (for-all (lambda (tok) (match-one tok v)) toks)))
 
   (define (match-one tok v)
     (cond
       [(string=? tok "*") #t]
-      [(prefix? "^" tok) (in-range? v (caret-range (rest tok)))]
-      [(prefix? "~" tok) (in-range? v (tilde-range (rest tok)))]
-      [(prefix? ">=" tok) (>= (version-compare v (parse-version (rest2 tok))) 0)]
-      [(prefix? "<=" tok) (<= (version-compare v (parse-version (rest2 tok))) 0)]
-      [(prefix? ">" tok)  (>  (version-compare v (parse-version (rest tok))) 0)]
-      [(prefix? "<" tok)  (<  (version-compare v (parse-version (rest tok))) 0)]
-      [(prefix? "=" tok)  (=  (version-compare v (parse-version (rest tok))) 0)]
+      [(string-prefix? "^" tok) (in-range? v (caret-range (rest tok)))]
+      [(string-prefix? "~" tok) (in-range? v (tilde-range (rest tok)))]
+      [(string-prefix? ">=" tok) (>= (version-compare v (parse-version (rest2 tok))) 0)]
+      [(string-prefix? "<=" tok) (<= (version-compare v (parse-version (rest2 tok))) 0)]
+      [(string-prefix? ">" tok)  (>  (version-compare v (parse-version (rest tok))) 0)]
+      [(string-prefix? "<" tok)  (<  (version-compare v (parse-version (rest tok))) 0)]
+      [(string-prefix? "=" tok)  (=  (version-compare v (parse-version (rest tok))) 0)]
       [else               (=  (version-compare v (parse-version tok)) 0)]))  ; 裸串=精确
 
   ;; range = (lo . hi):lo 闭、hi 开;hi=#f 表无上界
@@ -106,8 +107,7 @@
   ;; ── 从 tag 列表选满足约束的最高者(返回原始 tag 串,或 #f)──
   (define (select-highest constraint tags)
     (let ([ok (filter (lambda (t)
-                        (guard (e [#t #f])          ; 非版本样式 tag 跳过
-                          (version-match? constraint t)))
+                        (ignore-errors (version-match? constraint t)))  ; 非版本样式 tag 跳过
                       tags)])
       (if (null? ok) #f
           (fold-left (lambda (best t)
@@ -115,19 +115,6 @@
                            t best))
                      (car ok) (cdr ok)))))
 
-  ;; ── 小工具 ──
-  (define (prefix? p s)
-    (let ([lp (string-length p)] [ls (string-length s)])
-      (and (>= ls lp) (string=? p (substring s 0 lp)))))
+  ;; ── 小工具(通用字符串来自 util:prefix? / split → string-prefix? / string-split)──
   (define (rest s) (substring s 1 (string-length s)))
-  (define (rest2 s) (substring s 2 (string-length s)))
-
-  ;; 按分隔符集合切分字符串
-  (define (split-on s delims)
-    (let loop ([chars (string->list s)] [cur '()] [acc '()])
-      (cond
-        [(null? chars)
-         (reverse (cons (list->string (reverse cur)) acc))]
-        [(memv (car chars) delims)
-         (loop (cdr chars) '() (cons (list->string (reverse cur)) acc))]
-        [else (loop (cdr chars) (cons (car chars) cur) acc)]))))
+  (define (rest2 s) (substring s 2 (string-length s))))
