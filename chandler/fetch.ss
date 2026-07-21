@@ -1,0 +1,227 @@
+#!chezscheme
+;;; chandler/fetch.ss --- git 镜像缓存 / 解析原语 / 物化(designs/04)
+;;;
+;;; 网络操作全走缓存间接层:先镜像 clone 到 <cache>/git/<url-key>,解析/物化都从本地缓存。
+;;; 安全:所有 git 调用带 -c core.hooksPath=/dev/null(clone/checkout 零执行,designs/08 §3)。
+;;; 不内嵌 git,shell out 到系统 git(凭证/代理由用户既有 git 配置接管)。
+
+(library (chandler fetch)
+  (export cache-root offline? default-cache-root
+          normalize-url url-key mirror-path
+          ensure-mirror update-mirror
+          resolve-branch resolve-tag list-tags has-rev? resolve-pin
+          materialize dirty? head-rev)
+  (import (chezscheme)
+          (chandler proc)
+          (chandler layout)
+          (chandler hash))
+
+  (define offline? (make-parameter #f))
+  (define cache-root (make-parameter #f))   ; #f → 惰性取默认
+
+  (define (home) (or (getenv "HOME") (getenv "USERPROFILE") "."))
+
+  (define (default-cache-root)
+    (join-paths (or (getenv "XDG_CACHE_HOME") (join-paths (home) ".cache")) "chandler"))
+
+  (define (root) (or (cache-root) (default-cache-root)))
+
+  ;; ── git 调用:统一禁 hooks ──
+  (define no-hooks '("-c" "core.hooksPath=/dev/null"))
+  (define (git args . opt) (run-check "git" (append no-hooks args) (opt0 opt)))
+  (define (git-status args . opt) (run-status "git" (append no-hooks args) (opt0 opt)))
+  (define (opt0 opt) (if (null? opt) '() (car opt)))
+
+  ;; ── URL 规范化 + key ──
+  ;; 规范化只为 key 归并同库不同写法(https/ssh、带不带 .git、尾斜杠、大小写 host)
+  (define (normalize-url url)
+    (let* ([s (string-downcase-scheme-host url)]
+           [s (strip-suffix s ".git")]
+           [s (strip-trailing-slash s)])
+      s))
+
+  (define (url-key url)
+    (let* ([norm (normalize-url url)]
+           [h (substring (sha256-string norm) 0 16)]
+           [tail (readable-tail norm)])
+      (string-append tail "-" h)))
+
+  (define (mirror-path url)
+    (join-paths (join-paths (root) "git") (url-key url)))
+
+  ;; ── 镜像获取 ──
+  (define (ensure-mirror url)
+    (let ([p (mirror-path url)])
+      (cond
+        [(file-directory? p) p]
+        [(offline?)
+         (error 'ensure-mirror
+                (format "离线模式,缓存缺该仓库镜像:~a~%  ~a" url p))]
+        [else
+         (ensure-parent p)
+         (git (list "clone" "--mirror" url p))
+         p])))
+
+  (define (update-mirror url)
+    (let ([p (ensure-mirror url)])
+      (when (offline?)
+        (error 'update-mirror "离线模式不可 fetch" url))
+      (git (list "-C" p "fetch" "--prune" "--tags"))
+      p))
+
+  ;; ── 解析原语(尽量缓存零网络;缺失且非离线才 fetch)──
+  (define (rev-parse mirror ref)
+    ;; 解引用到 commit;失败返回 #f
+    (let ([r (run-capture "git"
+               (append no-hooks (list "-C" mirror "rev-parse" "--verify" "-q"
+                                      (string-append ref "^{commit}"))) '())])
+      (if (= 0 (proc-result-code r))
+          (string-trim (proc-result-out r))
+          #f)))
+
+  (define (resolve-branch url branch)
+    (let ([m (ensure-mirror url)])
+      (or (rev-parse m branch)
+          (and (not (offline?))
+               (begin (update-mirror url) (rev-parse m branch)))
+          (error 'resolve-branch "分支不存在" url branch))))
+
+  (define (resolve-tag url tag)
+    (let ([m (ensure-mirror url)])
+      (or (rev-parse m tag)
+          (and (not (offline?))
+               (begin (update-mirror url) (rev-parse m tag)))
+          (error 'resolve-tag "tag 不存在" url tag))))
+
+  (define (list-tags url)
+    (let ([m (ensure-mirror url)])
+      (filter (lambda (s) (> (string-length s) 0))
+              (split-lines (run-check "git" (append no-hooks (list "-C" m "tag" "--list")) '())))))
+
+  (define (has-rev? url rev)
+    (let ([m (ensure-mirror url)])
+      (= 0 (git-status (list "-C" m "cat-file" "-e" (string-append rev "^{commit}"))))))
+
+  ;; resolve-pin:(kind . val) → 全长 rev。kind ∈ tag/rev/branch/version(version 交解析层预处理)
+  (define (resolve-pin url pin-kind pin-val)
+    (case pin-kind
+      [(tag) (resolve-tag url pin-val)]
+      [(branch) (resolve-branch url pin-val)]
+      [(rev)
+       (let ([m (ensure-mirror url)])
+         (or (rev-parse m pin-val)
+             (and (not (offline?)) (begin (update-mirror url) (rev-parse m pin-val)))
+             (error 'resolve-pin "rev 在仓库中不存在" url pin-val)))]
+      [else (error 'resolve-pin "未知 pin 类型" pin-kind)]))
+
+  ;; ── 物化:--shared clone(借缓存对象库)+ detached checkout,保留 .git ──
+  (define (materialize url rev dest)
+    (let ([m (ensure-mirror url)])
+      (unless (has-rev? url rev)
+        (unless (offline?) (update-mirror url)))
+      (ensure-parent dest)
+      (when (file-directory? dest)
+        (error 'materialize "目标已存在" dest))
+      (git (list "clone" "--shared" "--no-checkout" m dest))
+      (git (list "-C" dest "checkout" "--detach" rev))
+      dest))
+
+  ;; lib/<name> 的当前 HEAD rev(verify 用)
+  (define (head-rev dir)
+    (string-trim (git (list "-C" dir "rev-parse" "HEAD"))))
+
+  ;; 工作区是否有脏改动(verify / install 拒动用)
+  (define (dirty? dir)
+    (> (string-length
+         (string-trim (git (list "-C" dir "status" "--porcelain")))) 0))
+
+  ;; ── 目录/字符串工具 ──
+  (define (ensure-parent path)
+    (ensure-dir (parent-dir path)))
+
+  (define (ensure-dir dir)
+    (unless (or (string=? dir "") (file-directory? dir))
+      (ensure-dir (parent-dir dir))
+      (guard (e [#t (void)]) (mkdir dir))))
+
+  (define (parent-dir path)
+    (let loop ([i (- (string-length path) 1)])
+      (cond
+        [(< i 0) ""]
+        [(char=? #\/ (string-ref path i)) (substring path 0 i)]
+        [else (loop (- i 1))])))
+
+  (define (readable-tail norm)
+    ;; 取末两段路径,非字母数字换 -,截断
+    (let* ([segs (filter (lambda (s) (> (string-length s) 0)) (split-char norm #\/))]
+           [n (length segs)]
+           [pick (if (>= n 2) (list (list-ref segs (- n 2)) (list-ref segs (- n 1)))
+                     segs)]
+           [joined (fold-left (lambda (a s) (if (string=? a "") s (string-append a "-" s)))
+                              "" pick)])
+      (sanitize joined)))
+
+  (define (sanitize s)
+    (list->string
+      (map (lambda (c)
+             (if (or (char-alphabetic? c) (char-numeric? c) (char=? c #\-) (char=? c #\.))
+                 c #\-))
+           (string->list s))))
+
+  (define (string-downcase-scheme-host url)
+    ;; 简化:整体不动大小写路径,只 downcase "scheme://host" 段;稳妥起见仅 downcase 到首个 / 后的 host
+    ;; 实务上 host 大小写不敏感、path 敏感。这里 downcase scheme + host。
+    (let ([idx (string-search url "://")])
+      (if idx
+          (let* ([after (+ idx 3)]
+                 [slash (string-index-from url #\/ after)]
+                 [hostend (or slash (string-length url))])
+            (string-append
+              (string-downcase (substring url 0 hostend))
+              (substring url hostend (string-length url))))
+          (string-downcase url))))   ; scp 式 git@host:path → 全 downcase(host 主导)
+
+  (define (string-search s sub)
+    (let ([ls (string-length s)] [lsub (string-length sub)])
+      (let loop ([i 0])
+        (cond
+          [(> (+ i lsub) ls) #f]
+          [(string=? sub (substring s i (+ i lsub))) i]
+          [else (loop (+ i 1))]))))
+
+  (define (string-index-from s c from)
+    (let ([ls (string-length s)])
+      (let loop ([i from])
+        (cond [(>= i ls) #f]
+              [(char=? c (string-ref s i)) i]
+              [else (loop (+ i 1))]))))
+
+  (define (strip-suffix s suf)
+    (let ([ls (string-length s)] [lf (string-length suf)])
+      (if (and (>= ls lf) (string=? suf (substring s (- ls lf) ls)))
+          (substring s 0 (- ls lf)) s)))
+
+  (define (strip-trailing-slash s)
+    (let loop ([n (string-length s)])
+      (if (and (> n 0) (char=? #\/ (string-ref s (- n 1))))
+          (loop (- n 1))
+          (substring s 0 n))))
+
+  (define (split-char s c)
+    (let loop ([chars (string->list s)] [cur '()] [acc '()])
+      (cond
+        [(null? chars) (reverse (cons (list->string (reverse cur)) acc))]
+        [(char=? (car chars) c) (loop (cdr chars) '() (cons (list->string (reverse cur)) acc))]
+        [else (loop (cdr chars) (cons (car chars) cur) acc)])))
+
+  (define (split-lines s) (split-char s #\newline))
+
+  (define (string-trim s)
+    (let* ([cs (string->list s)]
+           [cs (drop-ws cs)]
+           [cs (reverse (drop-ws (reverse cs)))])
+      (list->string cs)))
+  (define (drop-ws cs)
+    (cond [(null? cs) cs]
+          [(memv (car cs) '(#\space #\tab #\return #\newline)) (drop-ws (cdr cs))]
+          [else cs])))
