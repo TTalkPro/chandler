@@ -14,16 +14,18 @@
   (define repo-root (current-directory))   ; 跑 run-tests 时 = chandler 仓库根
 
   (define-suite suite
-    ;; ── runtime ──
-    (runtime-is-chez
-      (assert-equal 'chez (current-runtime)))
+    ;; ── runtime(双运行时:scheme→chez / skiff→skiff)──
+    (runtime-detection
+      ;; current-runtime ∈ {chez, skiff},且 skiff ⟺ 顶层绑定 skiff-version
+      (assert-true (memq (current-runtime) '(chez skiff)))
+      (assert-equal (if (top-level-bound? 'skiff-version) 'skiff 'chez)
+                    (current-runtime)))
 
     (runtime-version-format
-      ;; 形如 10.4.1
+      ;; 非空,以数字打头(chez 如 10.4.1;skiff 如 0.0.0-dev)
       (let ([v (runtime-version)])
         (assert-true (> (string-length v) 0))
-        (assert-true (for-all char-numeric?
-                              (filter (lambda (c) (not (char=? c #\.))) (string->list v))))))
+        (assert-true (char-numeric? (string-ref v 0)))))
 
     (verify-runtime-pass
       (assert-true (verify-runtime! (list (cons 'chez ">=10.0") (cons 'skiff #f)))))

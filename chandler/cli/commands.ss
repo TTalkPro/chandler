@@ -234,12 +234,24 @@
       (run-foreground (car rest) (cdr rest)
                       (list (cons 'env (list (cons "CHEZSCHEMELIBDIRS" (path-list dirs))))))))
 
-  ;; 选解释器:manifest 有 skiff 且 --runtime skiff → skiff;否则 scheme
+  ;; 选解释器(designs/06 §3):--runtime 旗标 > manifest 声明 > scheme。
+  ;;   --runtime skiff|chez 显式指定;否则仅 (skiff …) 无 (chez …) → skiff;其余 → scheme。
   (define (choose-interp root flags)
+    (case (interp-kind root flags)
+      [(skiff) (or (getenv "CHANDLER_SKIFF") "skiff")]
+      [else    (or (getenv "CHANDLER_SCHEME") "scheme")]))
+
+  (define (interp-kind root flags)
     (let ([rt (flag flags 'runtime)])
       (cond
-        [(and (string? rt) (string=? rt "skiff")) (or (getenv "CHANDLER_SKIFF") "skiff")]
-        [else (or (getenv "CHANDLER_SCHEME") "scheme")])))
+        [(equal? rt "skiff") 'skiff]
+        [(equal? rt "chez") 'chez]
+        [else                                          ; 依 manifest:仅 skiff → skiff
+         (let ([mpath (join-paths root "manifest.ss")])
+           (if (file-exists? mpath)
+               (let ([mf (read-manifest mpath)])
+                 (if (and (manifest-skiff mf) (not (manifest-chez mf))) 'skiff 'chez))
+               'chez))])))
 
   ;; 生成 preamble 临时脚本:先 load 各 native,再 load 目标脚本
   (define (make-preamble root natives script-abs)
