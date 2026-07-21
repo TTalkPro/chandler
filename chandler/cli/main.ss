@@ -9,7 +9,7 @@
           (chandler cli commands)
           (chandler cli selfinstall))
 
-  (define chandler-cli-version "0.1.0-dev")
+  (define chandler-cli-version "0.1.0")
 
   ;; main:argv(不含程序名)→ 退出码
   (define (main argv)

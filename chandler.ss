@@ -11,4 +11,4 @@
           (chandler activate)
           (chandler runtime))
 
-  (define chandler-version "0.1.0-dev"))
+  (define chandler-version "0.1.0"))
