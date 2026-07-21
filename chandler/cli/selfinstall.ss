@@ -1,57 +1,94 @@
 #!chezscheme
-;;; chandler/cli/selfinstall.ss --- chandler install-self / uninstall-self(对齐 bake,designs/08)
+;;; chandler/cli/selfinstall.ss --- chandler install-self / uninstall-self
 ;;;
-;;; 把 Chandler 自己的库树装到 ~/.local(默认),写一个**运行时发现**启动器:
-;;; 优先 skiff,回退 Chez scheme(designs/06 双运行时;skiff 是 Chez 超集,--libdirs/--program 通用)。
-;;; 这是「工具自装」——install.sh 只负责找个运行时把本命令跑起来,安装逻辑全在此。
+;;; **自安装基于 bake install**(生态闭环):库树的拷贝完全委托给 `bake install`
+;;; (读本仓 recipe.ss 的 install-task,装进 Chez lib dir 并写 bake 卸载清单);
+;;; chandler 只额外补一个**运行时发现启动器**(bin/chandler,skiff 优先 → Chez),
+;;; 这是 bake 不管的部分。卸载据 bake 清单删库 + 删启动器,不依赖源码目录。
 ;;;
-;;; 布局(POSIX):
-;;;   <prefix>/share/chez/lib/chandler.ss + chandler/**   ← 库树(= (import (chandler)) 可解析处)
-;;;   <prefix>/bin/chandler                                ← 运行时发现启动器
-;;;   <prefix>/share/chez/lib/.chandler-self.files         ← 已装文件清单(干净卸载)
-;;; prefix:--prefix > --global(/usr/local)> $HOME/.local(默认)
+;;; 落点(与 bake install-task 的 target 对齐):
+;;;   user(默认) → ~/.local/share/chez/lib + ~/.local/bin/chandler
+;;;   --global    → /usr/local/share/chez/lib + /usr/local/bin/chandler(需 root)
 
 (library (chandler cli selfinstall)
   (export cmd-install-self cmd-uninstall-self
-          self-prefix self-home self-bindir self-launcher self-manifest
-          self-runtimes)
+          self-libdir self-bindir self-launcher self-runtimes bake-command)
   (import (chezscheme)
           (chandler util)
           (chandler fs)
-          (chandler proc)                     ; 仅用于 chmod +x(无原生 chmod)
+          (chandler proc)                     ; 调 bake / chmod
           (chandler layout)
-          (chandler cli args))                ; flag / flag?
+          (chandler cli args))                ; flag?
 
-  ;; 运行时发现顺序:skiff 优先,其次 Chez 各名(petite 排除:与 bake 一致,留给编译型工具的约定)
+  ;; 运行时发现顺序:skiff 优先,其次 Chez 各名
   (define self-runtimes "skiff scheme chez chez-scheme chezscheme")
+  (define (bake-command) (or (getenv* "CHANDLER_BAKE") "bake"))
 
   (define (win?)
-    (let ([m (current-machine-type)])
-      (and (>= (string-length m) 2)
-           (string=? "nt" (substring m (- (string-length m) 2) (string-length m))))))
+    (string-suffix? "nt" (current-machine-type)))
 
-  ;; ── prefix / 布局 ──
-  (define (self-prefix flags)
-    (cond
-      [(flag flags 'prefix) => (lambda (p) p)]
-      [(flag? flags 'global) (if (win?) "C:/Program Files" "/usr/local")]
-      [(win?) (or (getenv "LOCALAPPDATA")
-                  (let ([up (getenv "USERPROFILE")])
-                    (and up (string-append up "/AppData/Local")))
-                  (error 'install-self "无法解析 %LOCALAPPDATA%(用 --prefix)"))]
-      [else (string-append (or (getenv "HOME") ".") "/.local")]))
+  ;; ── 落点(与 recipe 的 install-task target 对齐)──
+  (define (self-libdir flags)
+    (if (flag? flags 'global) "/usr/local/share/chez/lib"
+        (string-append (home-dir) "/.local/share/chez/lib")))
+  (define (self-bindir flags)
+    (if (flag? flags 'global) "/usr/local/bin"
+        (string-append (home-dir) "/.local/bin")))
+  (define (self-launcher flags)
+    (string-append (self-bindir flags) "/" (if (win?) "chandler.cmd" "chandler")))
 
-  ;; home = 库树落点(= Chez 库搜索根,chandler.ss 直接在此)
-  (define (self-home prefix)
-    (if (win?) (string-append prefix "/chandler/lib")
-        (string-append prefix "/share/chez/lib")))
-  (define (self-bindir prefix)
-    (if (win?) (string-append prefix "/chandler/bin") (string-append prefix "/bin")))
-  (define (self-launcher prefix)
-    (string-append (self-bindir prefix) "/" (if (win?) "chandler.cmd" "chandler")))
-  (define (self-manifest home) (string-append home "/.chandler-self.files"))
+  ;; bake 的已装清单(卸载据此删库,不依赖源码)
+  (define (bake-manifest libdir) (string-append libdir "/.bake-install/chandler.files"))
 
-  ;; ── 启动器模板(运行时发现:skiff → Chez)──
+  ;; ── install-self:bake install 装库 + 写启动器 ──
+  (define (cmd-install-self root flags)
+    (let* ([libdir   (self-libdir flags)]
+           [launcher (self-launcher flags)]
+           [global?  (flag? flags 'global)])
+      ;; --force:已装则先卸库(bake install 遇清单会拒)
+      (when (and (flag? flags 'force) (file-exists? (bake-manifest libdir)))
+        (bake-uninstall root global?))
+      ;; 1. 库树 → 委托 bake install(cwd = 源码 checkout,读其 recipe.ss)
+      (run-check (bake-command)
+                 (list (if global? "install-global" "install"))
+                 (list (cons 'cwd root)))
+      ;; 2. 运行时发现启动器(bake 不管这个)
+      (write-text launcher (if (win?) (launcher-cmd libdir) (launcher-sh libdir)))
+      (unless (win?) (run-check "chmod" (list "+x" launcher) '()))
+      (printf "install ~a~%" launcher)
+      (printf "已自装 chandler → ~a(库经 bake install)~%" libdir)
+      (path-hint (self-bindir flags))
+      0))
+
+  ;; ── uninstall-self:据 bake 清单删库 + 删启动器(不依赖源码)──
+  (define (cmd-uninstall-self root flags)
+    (let ([libdir (self-libdir flags)]
+          [launcher (self-launcher flags)])
+      (uninstall-by-manifest libdir)
+      (when (file-exists? launcher)
+        (delete-file launcher) (sweep-empty-parents launcher)
+        (printf "rm ~a~%" launcher))
+      (printf "已卸载 chandler(自 ~a)~%" libdir)
+      0))
+
+  ;; 据 bake 清单(绝对路径,逐行)删文件 + 清空父目录 + 删清单本身
+  (define (uninstall-by-manifest libdir)
+    (let ([mf (bake-manifest libdir)])
+      (if (file-exists? mf)
+          (begin
+            (for-each (lambda (f)
+                        (when (file-exists? f) (delete-file f) (sweep-empty-parents f)))
+                      (read-lines mf))
+            (delete-file mf) (sweep-empty-parents mf))
+          (fprintf (current-error-port)
+                   "warning: 未找到 bake 安装清单 ~a(库可能未经 bake install 安装)~%" mf))))
+
+  ;; 卸库(--force 复用):优先据清单删;有源码时也可 bake uninstall
+  (define (bake-uninstall root global?)
+    (uninstall-by-manifest (if global? "/usr/local/share/chez/lib"
+                               (string-append (home-dir) "/.local/share/chez/lib"))))
+
+  ;; ── 启动器模板(运行时发现:skiff → Chez;非 Chez 须过能力探测)──
   (define (launcher-sh home)
     (string-append
       "#!/bin/sh\n"
@@ -95,84 +132,7 @@
   (define (backslashes s)
     (list->string (map (lambda (c) (if (char=? c #\/) #\\ c)) (string->list s))))
 
-  ;; ── install-self ──
-  (define (cmd-install-self root flags)
-    (let* ([prefix   (self-prefix flags)]
-           [home     (self-home prefix)]
-           [bindir   (self-bindir prefix)]
-           [launcher (self-launcher prefix)]
-           [mf       (self-manifest home)])
-      (when (and (file-exists? mf) (not (flag? flags 'force)))
-        (error 'install-self
-               (format "chandler 已自装于 ~a(先 chandler uninstall-self,或 --force)" home)))
-      (let ([installed (install-tree! root home)])
-        (write-text launcher (if (win?) (launcher-cmd home) (launcher-sh home)))
-        (unless (win?) (chmod-exec launcher))
-        (printf "install ~a~%" launcher)
-        (set! installed (cons launcher installed))
-        (ensure-parent mf)
-        (call-with-output-file mf
-          (lambda (p) (for-each (lambda (f) (display f p) (newline p))
-                                (list-sort string<? installed)))
-          'truncate)
-        (printf "已自装 chandler → ~a~%" home)
-        (path-hint bindir)
-        0)))
-
-  ;; 拷 chandler.ss + chandler/**(跳过 test/),返回已装绝对路径列表
-  (define (install-tree! root home)
-    (let ([installed '()])
-      (define (cp abs rel)
-        (let ([dst (string-append home "/" rel)])
-          (copy-file abs dst)                 ; fs.copy-file 自建父目录
-          (set! installed (cons dst installed))
-          (printf "install ~a~%" dst)))
-      ;; umbrella
-      (cp (string-append root "/chandler.ss") "chandler.ss")
-      ;; 子树:所有 .ss / .sps,排除 chandler/test/
-      (for-each
-        (lambda (abs)
-          (let ([rel (strip-prefix abs (string-append root "/"))])
-            (when (and (installable? rel) (not (in-test? rel)))
-              (cp abs rel))))
-        (files-under (string-append root "/chandler")))
-      installed))
-
-  (define (installable? rel)
-    (let ([e (ext rel)]) (or (string=? e "ss") (string=? e "sps"))))
-  (define (in-test? rel) (string-contains? rel "chandler/test/"))
-
-  ;; ── uninstall-self ──
-  (define (cmd-uninstall-self root flags)
-    (let* ([prefix (self-prefix flags)]
-           [home   (self-home prefix)]
-           [mf     (self-manifest home)])
-      (unless (file-exists? mf)
-        (error 'uninstall-self (format "chandler 未自装于 ~a(无 ~a)" home mf)))
-      (for-each
-        (lambda (f)
-          (when (file-exists? f)
-            (delete-file f) (sweep-empty-parents f)
-            (printf "rm ~a~%" f)))
-        (file->lines mf))
-      (delete-file mf) (sweep-empty-parents mf)
-      (printf "已卸载 chandler(自 ~a)~%" home)
-      0))
-
-  ;; ── selfinstall 专用助手(通用 FS/字符串来自 fs/util)──
-  (define (chmod-exec path) (run-check "chmod" (list "+x" path) '()))
-
-  (define (file->lines path) (read-lines path))   ; 自装清单无空行,read-lines 即可
-
   (define (path-hint bindir)
     (let ([p (or (getenv "PATH") "")])
       (unless (string-contains? p bindir)
-        (printf "  提示:把 ~a 加入 PATH:export PATH=\"~a:$PATH\"~%" bindir bindir))))
-
-  ;; 路径扩展名(仅本模块判 .ss/.sps 用)
-  (define (ext path)
-    (let loop ([i (- (string-length path) 1)])
-      (cond [(< i 0) ""]
-            [(char=? #\/ (string-ref path i)) ""]
-            [(char=? #\. (string-ref path i)) (substring path (+ i 1) (string-length path))]
-            [else (loop (- i 1))]))))
+        (printf "  提示:把 ~a 加入 PATH:export PATH=\"~a:$PATH\"~%" bindir bindir)))))
