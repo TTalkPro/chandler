@@ -4,6 +4,7 @@
 (library (chandler cli main)
   (export main)
   (import (chezscheme)
+          (chandler util)
           (chandler cli args)
           (chandler cli commands)
           (chandler cli selfinstall))
@@ -53,14 +54,9 @@
   ;; 优先 CHANDLER_SRC(install.sh 设),否则从程序路径 …/chandler/cli/main.sps 反推。
   (define (self-src-root)
     (or (getenv "CHANDLER_SRC")
-        (let ([prog (car (command-line))])
-          (strip-suffix prog "/chandler/cli/main.sps"))
+        (let ([prog (car (command-line))] [suf "/chandler/cli/main.sps"])
+          (and (string-suffix? suf prog) (strip-suffix prog suf)))
         (current-directory)))
-
-  (define (strip-suffix s suf)
-    (let ([ls (string-length s)] [lf (string-length suf)])
-      (and (>= ls lf) (string=? suf (substring s (- ls lf) ls))
-           (substring s 0 (- ls lf)))))
 
   ;; self-update:提示走 install.sh(自更新 = 对自身仓库重跑安装事务,designs/08 §2)
   (define (cmd-self-update root flags)

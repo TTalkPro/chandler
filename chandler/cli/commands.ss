@@ -10,6 +10,8 @@
           cmd-uninstall cmd-doctor cmd-build
           ensure-gitignore-lib skeleton-manifest-datum)
   (import (chezscheme)
+          (chandler util)
+          (chandler fs)
           (chandler proc)
           (chandler sexp)
           (chandler layout)
@@ -252,12 +254,10 @@
         'truncate)
       tmp))
 
-  (define (path-list dirs)
-    (fold-left (lambda (acc d) (if (string=? acc "") d (string-append acc ":" d))) "" dirs))
+  (define (path-list dirs) (string-join dirs ":"))
 
   (define (abspath root p)
-    (if (and (> (string-length p) 0) (char=? #\/ (string-ref p 0)))
-        p (join-paths root p)))
+    (if (string-prefix? "/" p) p (join-paths root p)))
 
   (define (short rev)
     (if (and (string? rev) (>= (string-length rev) 10)) (substring rev 0 10) rev))
@@ -265,8 +265,8 @@
   ;; ── .gitignore / scaffold / basename(init 用)──
   (define (ensure-gitignore-lib root)
     (let ([gi (join-paths root ".gitignore")])
-      (let ([lines (if (file-exists? gi) (read-lines gi) '())])
-        (unless (member "lib/" (map strip lines))
+      (let ([lines (read-lines gi)])            ; fs.read-lines:文件缺失 → '()
+        (unless (member "lib/" (map string-trim lines))
           (call-with-output-file gi
             (lambda (p)
               (for-each (lambda (l) (display l p) (newline p)) lines)
@@ -285,27 +285,7 @@
           'truncate))
       (unless (file-exists? subdir) (mkdir subdir))))
 
+  ;; 目录路径 → 末段名(默认 "app");通用 FS/字符串来自 fs/util
   (define (basename p)
-    (let ([parts (filter (lambda (s) (> (string-length s) 0)) (split p #\/))])
-      (if (null? parts) "app" (list-ref parts (- (length parts) 1)))))
-
-  (define (split s c)
-    (let loop ([chars (string->list s)] [cur '()] [acc '()])
-      (cond
-        [(null? chars) (reverse (cons (list->string (reverse cur)) acc))]
-        [(char=? c (car chars)) (loop (cdr chars) '() (cons (list->string (reverse cur)) acc))]
-        [else (loop (cdr chars) (cons (car chars) cur) acc)])))
-
-  (define (read-lines path)
-    (call-with-input-file path
-      (lambda (p)
-        (let loop ([acc '()])
-          (let ([l (get-line p)])
-            (if (eof-object? l) (reverse acc) (loop (cons l acc))))))))
-
-  (define (strip s)
-    (list->string (reverse (drop-ws (reverse (drop-ws (string->list s)))))))
-  (define (drop-ws cs)
-    (cond [(null? cs) cs]
-          [(memv (car cs) '(#\space #\tab #\return #\newline)) (drop-ws (cdr cs))]
-          [else cs])))
+    (let ([parts (filter (lambda (s) (> (string-length s) 0)) (string-split p #\/))])
+      (if (null? parts) "app" (list-ref parts (- (length parts) 1))))))

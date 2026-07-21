@@ -16,8 +16,11 @@
           self-prefix self-home self-bindir self-launcher self-manifest
           self-runtimes)
   (import (chezscheme)
-          (chandler proc)
-          (chandler layout))
+          (chandler util)
+          (chandler fs)
+          (chandler proc)                     ; 仅用于 chmod +x(无原生 chmod)
+          (chandler layout)
+          (chandler cli args))                ; flag / flag?
 
   ;; 运行时发现顺序:skiff 优先,其次 Chez 各名(petite 排除:与 bake 一致,留给编译型工具的约定)
   (define self-runtimes "skiff scheme chez chez-scheme chezscheme")
@@ -121,8 +124,7 @@
     (let ([installed '()])
       (define (cp abs rel)
         (let ([dst (string-append home "/" rel)])
-          (ensure-parent dst)
-          (run-check "cp" (list "-p" abs dst) '())
+          (copy-file abs dst)                 ; fs.copy-file 自建父目录
           (set! installed (cons dst installed))
           (printf "install ~a~%" dst)))
       ;; umbrella
@@ -138,7 +140,7 @@
 
   (define (installable? rel)
     (let ([e (ext rel)]) (or (string=? e "ss") (string=? e "sps"))))
-  (define (in-test? rel) (str-contains? rel "chandler/test/"))
+  (define (in-test? rel) (string-contains? rel "chandler/test/"))
 
   ;; ── uninstall-self ──
   (define (cmd-uninstall-self root flags)
@@ -157,77 +159,20 @@
       (printf "已卸载 chandler(自 ~a)~%" home)
       0))
 
-  ;; ── 文件工具 ──
-  (define (files-under dir)
-    (if (file-directory? dir)
-        (let ([r (run-capture "find" (list dir "-type" "f"))])
-          (if (= 0 (proc-result-code r))
-              (filter (lambda (s) (> (string-length s) 0)) (lines (proc-result-out r)))
-              '()))
-        '()))
-
-  (define (write-text path s)
-    (ensure-parent path)
-    (call-with-output-file path (lambda (p) (display s p)) 'truncate))
+  ;; ── selfinstall 专用助手(通用 FS/字符串来自 fs/util)──
   (define (chmod-exec path) (run-check "chmod" (list "+x" path) '()))
 
-  (define (ensure-parent path) (ensure-dir (parent-dir path)))
-  (define (ensure-dir dir)
-    (unless (or (string=? dir "") (file-directory? dir))
-      (ensure-dir (parent-dir dir))
-      (guard (e [#t (void)]) (mkdir dir))))
-  (define (parent-dir path)
-    (let loop ([i (- (string-length path) 1)])
-      (cond [(< i 0) ""]
-            [(char=? #\/ (string-ref path i)) (substring path 0 i)]
-            [else (loop (- i 1))])))
-  (define (sweep-empty-parents f)
-    (let loop ([d (parent-dir f)])
-      (when (and (> (string-length d) 1) (file-directory? d) (dir-empty? d))
-        (guard (e [#t (void)]) (delete-directory d))
-        (loop (parent-dir d)))))
-  (define (dir-empty? d)
-    (let ([r (run-capture "ls" (list "-A" d))])
-      (and (= 0 (proc-result-code r))
-           (null? (filter (lambda (s) (> (string-length s) 0)) (lines (proc-result-out r)))))))
-
-  (define (file->lines path)
-    (if (file-exists? path)
-        (call-with-input-file path
-          (lambda (p)
-            (let loop ([acc '()])
-              (let ([l (get-line p)])
-                (if (eof-object? l) (reverse acc)
-                    (loop (if (> (string-length l) 0) (cons l acc) acc)))))))
-        '()))
+  (define (file->lines path) (read-lines path))   ; 自装清单无空行,read-lines 即可
 
   (define (path-hint bindir)
     (let ([p (or (getenv "PATH") "")])
-      (unless (str-contains? p bindir)
+      (unless (string-contains? p bindir)
         (printf "  提示:把 ~a 加入 PATH:export PATH=\"~a:$PATH\"~%" bindir bindir))))
 
-  ;; ── 字符串 ──
-  (define (flag flags k) (let ([p (assq k flags)]) (and p (cdr p))))
-  (define (flag? flags k) (and (assq k flags) (cdr (assq k flags)) #t))
+  ;; 路径扩展名(仅本模块判 .ss/.sps 用)
   (define (ext path)
     (let loop ([i (- (string-length path) 1)])
       (cond [(< i 0) ""]
             [(char=? #\/ (string-ref path i)) ""]
             [(char=? #\. (string-ref path i)) (substring path (+ i 1) (string-length path))]
-            [else (loop (- i 1))])))
-  (define (strip-prefix s pre)
-    (let ([lp (string-length pre)])
-      (if (and (>= (string-length s) lp) (string=? pre (substring s 0 lp)))
-          (substring s lp (string-length s)) s)))
-  (define (str-contains? hay needle)
-    (let ([hn (string-length hay)] [nn (string-length needle)])
-      (let loop ([i 0])
-        (cond [(> (+ i nn) hn) #f]
-              [(string=? (substring hay i (+ i nn)) needle) #t]
-              [else (loop (+ i 1))]))))
-  (define (lines s)
-    (let loop ([chars (string->list s)] [cur '()] [acc '()])
-      (cond
-        [(null? chars) (reverse (cons (list->string (reverse cur)) acc))]
-        [(char=? #\newline (car chars)) (loop (cdr chars) '() (cons (list->string (reverse cur)) acc))]
-        [else (loop (cdr chars) (cons (car chars) cur) acc)]))))
+            [else (loop (- i 1))]))))
