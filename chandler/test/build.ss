@@ -12,10 +12,18 @@
 
   (define (mock-bake) (string-append (current-directory) "/tests/mock-bake.sh"))
 
+  ;; 用 mock bake 跑 thunk;结束后**恢复** CHANDLER_BAKE(否则污染后续 selfinstall 测试)
   (define (with-mock log thunk)
-    (putenv "CHANDLER_BAKE" (mock-bake))
-    (putenv "MOCK_BAKE_LOG" log)
-    (thunk))
+    (let ([old-bake (getenv "CHANDLER_BAKE")] [old-log (getenv "MOCK_BAKE_LOG")])
+      (putenv "CHANDLER_BAKE" (mock-bake))
+      (putenv "MOCK_BAKE_LOG" log)
+      (guard (e [#t (restore-env old-bake old-log) (raise e)])
+        (let ([r (thunk)]) (restore-env old-bake old-log) r))))
+
+  (define (restore-env bake log)
+    ;; Chez putenv 无法删除变量;还原为原值,原本无则置空串(bake-command 视空为无 → 回退 "bake")
+    (putenv "CHANDLER_BAKE" (or bake ""))
+    (putenv "MOCK_BAKE_LOG" (or log "")))
 
   (define-suite suite
     ;; 无 native 的依赖:build 直接排单,无需授权

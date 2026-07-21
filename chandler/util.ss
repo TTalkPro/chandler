@@ -7,8 +7,13 @@
   (export string-split split-lines string-trim
           string-prefix? string-suffix? string-search string-contains?
           char-index strip-prefix strip-suffix string-join
-          alist-ref ignore-errors)
+          alist-ref getenv* ignore-errors)
   (import (chezscheme))
+
+  ;; getenv 但空串视为未设(Chez putenv 无法删变量,还原为 "" 时需当作无)
+  (define (getenv* name)
+    (let ([v (getenv name)])
+      (and v (> (string-length v) 0) v)))
 
   (define ws '(#\space #\tab #\return #\newline))
 

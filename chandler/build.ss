@@ -20,7 +20,7 @@
           (chandler install)
           (chandler hash))
 
-  (define (bake-command) (or (getenv "CHANDLER_BAKE") "bake"))
+  (define (bake-command) (or (getenv* "CHANDLER_BAKE") "bake"))
 
   ;; ── 主入口:build root opts ──
   ;; opts: (allow-build . (#t | "a,b,..")) (production . bool)
