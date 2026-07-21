@@ -10,7 +10,8 @@
 
 (library (chandler cli args)
   (export parse-args flag flag? positional-ref)
-  (import (chezscheme))
+  (import (chezscheme)
+          (chandler util))
 
   ;; 取值短旗标(-C dir)
   (define value-short '(#\C))
@@ -61,17 +62,12 @@
   ;; --k 或 --k=v → (values key val);val=#t 布尔、'need-value 待吃下一 token
   (define (split-long s)
     (let ([body (substring s 2 (string-length s))])
-      (let ([eq (index-of body #\=)])
+      (let ([eq (char-index body #\=)])
         (if eq
             (values (string->symbol (substring body 0 eq))
                     (substring body (+ eq 1) (string-length body)))
             (let ([k (string->symbol body)])
               (values k (if (memq k value-long) 'need-value #t)))))))
-
-  (define (index-of s c)
-    (let ([n (string-length s)])
-      (let loop ([i 0])
-        (cond [(>= i n) #f] [(char=? c (string-ref s i)) i] [else (loop (+ i 1))]))))
 
   ;; flags alist 访问
   (define (flag flags k . default)
