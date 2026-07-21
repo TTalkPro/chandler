@@ -42,7 +42,7 @@
 
 ### native 项语法
 
-语法归此处、**语义契约归 [bake 总设计「自定义原生构建」](../chez-bake-build-tool-design.md)**(后端、注入变量、落点不变量):
+语法归此处、**语义契约归 **bake 项目**「自定义原生构建」**(后端、注入变量、落点不变量):
 
 ```
 <native> ::= (<name> <source> <pin>? (build <backend>)? <nopt>*)

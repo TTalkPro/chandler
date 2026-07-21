@@ -27,11 +27,15 @@ Chandler 全部状态就四块,每条命令声明自己读/写哪块:
 | `chandler exec -- <cmd…>` | lock | — | 否 | 导出 `CHEZSCHEMELIBDIRS` 后 exec 任意命令(给编辑器/CI 用) |
 | `chandler list` / `chandler tree` | lock | — | 否 | 平铺 / 树形显示已锁定依赖(名、rev、来源) |
 | `chandler verify` | lock, lib/ | — | 否 | 校验 `lib/` 与 lock 一致(rev 匹配、无脏改动),CI 用;不一致退出码非 0 |
-| `chandler install --global [dir]` | — | 全局 libdir | 否 | 把一个库(默认当前仓库)装进全局目录,写卸载清单(见 [05](05-install-registry.md)) |
-| `chandler uninstall --global <name>` | 全局注册表 | 全局 libdir | 否 | 按已装文件清单干净删除 |
-| `chandler cache <clean|dir|list>` | 缓存 | 缓存 | 否 | 管理 git 缓存(见 [04](04-fetch-cache.md)) |
+| `chandler build [--allow-build[=a,b]]` | lock, lib/ | build/ 产物 | 否 | 排单 → bake 编译依赖闭包 + native(见 [07](07-bake-integration.md)) |
+| `chandler install --global[=dir]` | — | 全局 libdir | 否 | 把一个库(默认当前仓库)装进全局目录,写卸载清单(见 [05](05-install-registry.md)) |
+| `chandler uninstall --global --name=<n>` | 全局注册表 | 全局 libdir | 否 | 按已装文件清单干净删除 |
+| `chandler list --global` / `doctor --global` | 全局注册表 | — | 否 | 列出 / 体检全局已装包(见 [05](05-install-registry.md)) |
+| `chandler install-self [--prefix D] [--global]` | — | prefix | 否 | 自装 chandler 到 `~/.local`(bake 式,skiff 优先启动器,见 [08](08-bootstrap-security.md)) |
+| `chandler uninstall-self [--prefix D]` | 自装清单 | prefix | 否 | 卸载自装的 chandler |
+| `chandler cache <clean\|dir\|list>` | 缓存 | 缓存 | 否 | 管理 git 缓存(见 [04](04-fetch-cache.md))——**缓存层已实现,命令壳待补** |
 
-全局旗标:`--offline`(禁网,缓存未命中即错,见 [04](04-fetch-cache.md))、`--allow-build`(授权 native 构建,见 [08](08-bootstrap-security.md))、`-C <dir>`(切工作目录)、`--verbose`。
+全局旗标:`--offline`(禁网,缓存未命中即错,见 [04](04-fetch-cache.md))、`--allow-build[=a,b]`(授权 native 构建,见 [08](08-bootstrap-security.md))、`--production`、`--force`、`--keep-extra`、`-C <dir>`(切工作目录)、`--verbose`。
 
 ## `install` 的判定逻辑(核心路径)
 
@@ -54,11 +58,13 @@ chandler install:
 
 ## `add` 的回写策略
 
-`manifest.ss` 是用户手写文件,机器改写不能破坏注释与排版。策略:**文本级定位 `(deps` 尾部插入一行**,不做整文件重排;定位失败(用户写法太花)则报错提示手动添加。`remove` 同理按行删。宁可保守报错,不做聪明重排。
+**已实现:datum 级改写**——`read` 整个 `manifest.ss` datum,往 `(deps …)` 追加一项(无 deps 则新建),`canonical` 写回。对 `init` 生成的规范清单无损;代价是会**重排手写格式与注释**。`remove` 同理按名过滤 deps/dev-deps。
+
+> 设计初衷倾向文本级插入(保留手写排版),但 Chandler 生态里清单多由 `init` 生成,datum 级改写更简单可靠,作 v0.1 取舍。若需保留手写注释,v0.2 再换文本级。
 
 ## 错误与退出码
 
-沿用 sysexits 风格(与 [pack 规范 §5](../chez-skiff-pack-spec.md) 一致):
+沿用 sysexits 风格(与 bake 项目 pack 规范的退出码约定一致):
 
 | 码 | 场景 |
 |----|------|

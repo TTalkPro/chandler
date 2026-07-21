@@ -26,7 +26,7 @@ chandler/                        ; 本仓库
 
 ## 2. 自举:`install.sh` + `install-self`(对齐 bake,打破鸡生蛋)
 
-**模型与 [bake](../chez-bake-build-tool-design.md) 一致**:`install.sh` 是**薄壳**,只做运行时发现后把安装逻辑委托给工具自身的 `install-self` 子命令(而非另写一套 bootstrap)。
+**模型与 bake 项目一致**:`install.sh` 是**薄壳**,只做运行时发现后把安装逻辑委托给工具自身的 `install-self` 子命令(而非另写一套 bootstrap)。
 
 ```
 git clone + ./install.sh [--prefix DIR | --global | --force]:
@@ -43,7 +43,8 @@ git clone + ./install.sh [--prefix DIR | --global | --force]:
 ```
 
 - **布局对齐 bake**:`<prefix>/share/…` 放库树、`<prefix>/bin/<tool>` 放启动器、`.<tool>-self.files` 清单;chandler 的库树落 `share/chez/lib`(Chez 库搜索根),使 `(import (chandler))` 可解析——兑现「机制三件套」之一。
-- **启动器 = 运行时发现**:生成的 `bin/chandler`(及开发期 `bin/chandler`)按 `skiff scheme chez chez-scheme chezscheme` 逐个 `command -v`,首个命中即 `exec <rt> --libdirs <home> --program <home>/chandler/cli/main.sps "$@"`;皆无 → exit 127。skiff 是 Chez 超集,`--libdirs`/`--program` 通用。
+- **启动器 = 运行时发现 + 能力探测**:生成的 `bin/chandler`(及开发期 `bin/chandler`、`install.sh`)按 `skiff scheme chez chez-scheme chezscheme` 逐个 `command -v`;Chez 各名已知可运行程序直接用,**非 Chez 运行时(skiff 等)须先过能力探测**——喂一段打印独特 token 的 R6RS 程序,输出含 token 才算「能跑程序」。命中即 `exec <rt> --libdirs <home> --program <home>/chandler/cli/main.sps "$@"`;皆无 → exit 127。
+  - **为何要探测**:早期 skiff(如 `0.0.0-dev`)是 demo stub——吞掉旗标、只打印 banner、退出码仍 0,靠顺序/退出码无法回退。探测让启动器**今天**跳过 stub 用 Chez,而 skiff 成熟(支持 `--program`)后**自动**被优先选用,无需改启动器。skiff 是 Chez 超集,`--libdirs`/`--program` 语义一旦实现即通用。
 - **卸载自洽**:`chandler uninstall-self` 据 `.chandler-self.files` 逐文件删除 + 清空父目录。
 - 后续升级:`chandler self-update` = `git pull && ./install.sh`(install-self 的 `--force` 覆盖旧树)。
 - 生态自举全序:**skiff/Chez → Chandler → bake(chandler 装)→ Skiff/应用**;bake 编译 Chandler 的 `.so` 树是锦上添花,没有 bake 也完全可用(解释执行)。

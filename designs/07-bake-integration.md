@@ -1,6 +1,6 @@
 # Chandler × bake 协作接口设计
 
-> 总原则(两份总设计既定):**chandler 供货、bake 烘焙**——`chandler` 读 `manifest.ss` 管依赖获取,`bake` 读 `recipe.ss` 管编译,两份清单互不共享。但 [pack 规范 §10](../chez-skiff-pack-spec.md) 把「各依赖 `.so` 树」记为「Chandler 编译闭包」,而编译能力在 bake——本文把这条协作边界定成**显式接口**,消除职责悬空。
+> 总原则(两份总设计既定):**chandler 供货、bake 烘焙**——`chandler` 读 `manifest.ss` 管依赖获取,`bake` 读 `recipe.ss` 管编译,两份清单互不共享。但 **bake 项目**的 pack 规范 §10 把「各依赖 `.so` 树」记为「Chandler 编译闭包」,而编译能力在 bake——本文把这条协作边界定成**显式接口**,消除职责悬空。
 
 ## 1. 职责矩阵(裁决悬空点)
 
@@ -71,6 +71,5 @@ bake 是独立工具,但按依赖方向 **bake → chandler 库**(反向禁止,c
 
 ## 相关文档
 
-- [../chez-bake-build-tool-design.md](../chez-bake-build-tool-design.md) — 编译语义(指纹/WPO/并行)与 native 后端权威
-- [../chez-skiff-pack-spec.md](../chez-skiff-pack-spec.md) — pack 消费本接口的产物
+- **bake 项目**(独立仓库)— 编译语义(指纹/WPO/并行)与 native 后端权威、`bake pack` / pack 规范
 - [05-install-registry.md](05-install-registry.md) — 共享注册表

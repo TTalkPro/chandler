@@ -8,7 +8,7 @@
 (library (chandler sexp)
   (export read-datum-file read-datum-string write-canonical-file canonical-string
           tagged-list? expect-tag
-          field field-ref field-ref* field-all field-keys
+          field field-ref field-ref*
           alist->sorted)
   (import (chezscheme))
 
@@ -62,14 +62,6 @@
   (define (field-ref* body k)
     (let ([f (field body k)])
       (if f (cdr f) '())))
-
-  ;; 取 body 中**所有** key=k 的项(可重复字段,如 deps 内多条)
-  (define (field-all body k)
-    (filter (lambda (x) (and (pair? x) (eq? (car x) k))) body))
-
-  ;; body 内所有形如 (k ...) 的顶层字段的 key 列表(校验未知字段用)
-  (define (field-keys body)
-    (map car (filter pair? body)))
 
   ;; alist 按 car(symbol)字典序稳定排序 —— lock canonical 输出用
   (define (alist->sorted alist)

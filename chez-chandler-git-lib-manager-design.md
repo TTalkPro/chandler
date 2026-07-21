@@ -5,7 +5,7 @@
 >
 > **航海隐喻**:Skiff(轻舟)是运行时;**Chandler(船具商)专门给船供应补给和装备** = 包供应商/库管理器,天然配对。项目清单文件叫 **`manifest.ss`**(载货清单 = 船上装了什么 = 项目依赖了什么),这两层意思字面重合。
 >
-> **配套工具**:[bake](chez-bake-build-tool-design.md) —— 构建/编译工具(build + Rake 双关)。分工:`chandler` 供货(拉取/安装依赖,读 `manifest.ss`)→ `bake` 编译应用(读 `recipe.ss`)。两份清单**各自独立、互不共享**。
+> **配套工具**:bake(独立项目)—— 构建/编译工具(build + Rake 双关)。分工:`chandler` 供货(拉取/安装依赖,读 `manifest.ss`)→ `bake` 编译应用(读 `recipe.ss`)。两份清单**各自独立、互不共享**。
 
 ## 需求回顾
 
@@ -240,7 +240,7 @@ R6RS 库只在代码里用 `import` 声明依赖,没有 rebar.config / Cargo.tom
 且 Chez 编译库也用 `.so` 扩展名,和 FFI 的 C 共享库同名不同物,极易混淆。
 
 ### 5. 原生构建执行 = 任意代码执行 + 约定不通用
-> native 构建的完整契约(后端、注入、落点、模型 A/B)见 [bake 文档「自定义原生构建」](chez-bake-build-tool-design.md);此处只列它对 Chandler 侧的约束。
+> native 构建的完整契约(后端、注入、落点、模型 A/B)见 **bake 项目**「自定义原生构建」;此处只列它对 Chandler 侧的约束。
 
 - **安全**:跑依赖仓库里的构建(make/cmake/script)就是 RCE,须 `--allow-build` 显式确认、可审计。`manifest.ss` 的 `(native … (build …))` 就是这份显式授权的落点。**信任标准是"谁写的脚本"**:依赖的构建一律不可信,你自己 `recipe.ss` 的 `run`/`sh` 才可信。
 - **路径替换约定**:后端各有事实标准——make 用 autotools 的 **`PREFIX`+`DESTDIR`**,cmake 用 **`CMAKE_INSTALL_PREFIX`**(也认 `DESTDIR`),script 用 bake 传的 **`$NATIVE_OUT`**。三者收敛到同一落点(见下)。
@@ -263,4 +263,4 @@ Chandler 本身是 Chez 程序,分发时不能靠它自己装,需要 `install.sh
 ## 可能的下一步
 
 - `manifest.ss` schema 与 `lib/` 布局 + `(chandler)` 激活 API 已成草案(见上),下一步补**安装/卸载的文件清单机制**(全局安装时的可清除性)。
-- 划清 `manifest.ss`(Chandler:依赖=载货)与 [bake](chez-bake-build-tool-design.md) 的 `recipe.ss`(构建步骤)的边界,避免职责重叠。
+- 划清 `manifest.ss`(Chandler:依赖=载货)与 bake(独立项目)的 `recipe.ss`(构建步骤)的边界,避免职责重叠。

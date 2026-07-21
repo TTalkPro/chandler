@@ -49,6 +49,8 @@ fetch 策略:能满足解析就**不碰网**(tag/rev pin 且缓存命中 → 零
 
 ## 5. 缓存管理
 
+> **实现状态**:`(chandler fetch)` 的镜像缓存层(clone/fetch/`--shared` 物化/`--offline`/文件锁)已实现并在 `install` 路径生效;下列 `chandler cache …` **命令壳尚未接入 CLI**(v0.2)。
+
 - `chandler cache dir` — 打印缓存根(脚本/CI 用);
 - `chandler cache list` — 各镜像仓 URL、大小、最后 fetch 时间;
 - `chandler cache clean [--all | <url>…]` — 删除镜像;因 `--shared` clone 依赖缓存对象库,**clean 前检查**:提示哪些项目的 `lib/` 还借着它(缓存侧记 borrow 清单,尽力而为),`--all` 需二次确认;误删后果 = 相应 `lib/` 损坏,重跑 `install` 可恢复(rev 在 lock 里)。

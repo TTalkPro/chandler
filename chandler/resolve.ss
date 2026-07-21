@@ -6,9 +6,8 @@
 ;;; 算法与 IO(metadata provider)解耦:核心可用 mock provider 单测,默认 provider 走 git。
 
 (library (chandler resolve)
-  (export resolve resolve/provider git-provider
-          resolution? resolution-lock resolution-warnings
-          make-rspec rspec-name)
+  (export resolve resolve/provider
+          resolution? resolution-lock resolution-warnings)
   (import (chezscheme)
           (chandler sexp)
           (chandler manifest)

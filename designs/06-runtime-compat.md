@@ -4,7 +4,7 @@
 
 ## 1. Skiff 与标准 Chez 的差异(与 Chandler 相关的部分)
 
-从 [Skiff 运行时设计](../chez-skiff-runtime-design.md)提取对包管理有影响的差异:
+从 **skiff 项目**的运行时设计提取对包管理有影响的差异:
 
 | 维度 | 标准 Chez | Skiff | 对 Chandler 的影响 |
 |------|-----------|-------|-------------------|
@@ -75,6 +75,6 @@ chandler run app.ss:
 
 ## 相关文档
 
-- [../chez-skiff-runtime-design.md](../chez-skiff-runtime-design.md) — Skiff 本体
+- **skiff 项目**(独立仓库)— Skiff 运行时本体(Chez + libuv)
 - [02-manifest-lock-spec.md](02-manifest-lock-spec.md) — `chez`/`skiff` 字段语法
 - [08-bootstrap-security.md](08-bootstrap-security.md) — Chandler 自身在两种运行时下的分发

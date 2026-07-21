@@ -12,7 +12,7 @@
 
 ## 安装
 
-需 skiff(优先)或 Chez Scheme ≥ 10.0(自带 `git`)。安装方式对齐 [bake](../bake):`install.sh` 只做**运行时发现**(skiff → Chez)后委托给工具自身的 `install-self`,默认装到 `~/.local`。
+需 skiff(优先)或 Chez Scheme ≥ 10.0(自带 `git`)。安装方式对齐 **bake**(生态里的构建工具,独立项目):`install.sh` 只做**运行时发现**(skiff → Chez)后委托给工具自身的 `install-self`,默认装到 `~/.local`。
 
 ```sh
 git clone <this-repo> chandler && cd chandler

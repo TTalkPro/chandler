@@ -5,3 +5,12 @@
 *.scm~
 *.scm#*
 .#*.scm
+
+# Chez 编译产物
+*.so
+*.wpo
+
+# Chandler 生成物
+/lib/
+/build/
+.chandler-run.ss

@@ -28,7 +28,7 @@ myproj/                        ← 仓库根 = 搜索根(加进 CHEZSCHEMELIBDIR
   tools/                       ← codegen 等一次性脚本(gen-*.ss)
   specs/  examples/  design/   ← 规格 / 示例 / 设计文档
   manifest.ss  manifest.lock   ← Chandler 清单(仅当有外部依赖时)
-  bake.ss                      ← bake 构建+安装描述(见下)
+  recipe.ss                    ← bake 构建+安装描述(见下)
 ```
 
 > **native 放仓库根、不放 `myproj/` 子树**:C/C++ 的 `.so` 与 Chez 编译产物的 `.so` 同名不同物(见 Chandler 难点 4)。把 C 产物放在 `native/<machine-type>/`(不构成任何库名前缀),Chez 搜索库时不会撞到它。
@@ -57,7 +57,7 @@ bake 承担 chez-markding 里 `Makefile` 的角色并泛化,处理**本项目自
   - 发源码还是带 `.so` 取决于 ABI 取舍(bake 文档难点 4);默认发源码,消费方首次编译。
 - **`bake test` / `bake clean`**:同 chez-markding Makefile(跑 `tests/`、删 `.so`)。
 
-详见 [chez-bake-build-tool-design.md](chez-bake-build-tool-design.md)。
+详见 **bake 项目**(独立仓库)。
 
 ## Chandler:消费(与本规范咬合)
 
@@ -67,6 +67,6 @@ bake 承担 chez-markding 里 `Makefile` 的角色并泛化,处理**本项目自
 
 ## 相关文档
 
-- [chez-skiff-runtime-design.md](chez-skiff-runtime-design.md) —— Skiff 运行时
+- **skiff 项目**(独立仓库)—— Skiff 运行时
 - [chez-chandler-git-lib-manager-design.md](chez-chandler-git-lib-manager-design.md) —— Chandler 包管理器 / `activate` / `load-native`
-- [chez-bake-build-tool-design.md](chez-bake-build-tool-design.md) —— bake 构建 + 安装
+- **bake 项目**(独立仓库)—— bake 构建 + 安装

@@ -34,6 +34,16 @@
 
 取舍:git-first 免去维护 index,代价是**上游须有 `manifest.ss` 或由消费方在自己 manifest 里补全元数据**(见 [03 §依赖元数据的三级来源](03-resolution.md))。
 
+## 实现状态
+
+**全部 8 篇设计已落地实现**(纯 Chez,113 个测试全绿;见仓库根 [README.md](../README.md)、[TASK.md](../TASK.md))。已实现命令:`init/add/remove/install/update/build/verify/list/tree/run/exec` + `install --global`/`uninstall`/`doctor` + `install-self`/`uninstall-self`。
+
+与本目录设计的**已知偏差**(TASK.md 有完整记录):
+
+- **`add`/`remove` 用 datum 级改写**而非 [01](01-cli.md) 倾向的文本级插入——对 `init` 生成的规范清单无损,代价是重排手写格式。
+- **`chandler cache` 子命令未接入 CLI**:[04](04-fetch-cache.md) 的 git 镜像缓存层已实现并在 `install` 路径生效,但 `cache dir/list/clean` 的命令壳待补。
+- 新增两个设计未列的基础库:`(chandler hash)`(纯 Scheme SHA-256,Chez 无内建)与 `(chandler proc)`(子进程封装)。
+
 ## 命名约定澄清
 
-[库布局规范](../chez-skiff-library-layout.md)目录骨架中写有 `bake.ss`,而 [bake 总设计](../chez-bake-build-tool-design.md)定名 `recipe.ss`。**以 `recipe.ss` 为准**(bake 文档是其单一权威);库布局文档中的 `bake.ss` 视为笔误,后续修订。
+库构建描述文件统一为 **`recipe.ss`**(bake 读),依赖清单为 `manifest.ss`(chandler 读)。二者各自独立、互不共享。

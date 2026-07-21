@@ -9,33 +9,36 @@
 ## 目标仓库布局(最终态)
 
 ```
-chandler.ss                 (library (chandler))         umbrella:re-export + activate/load-native
+chandler.ss                 (library (chandler))         umbrella:re-export activate/load-native/runtime
 chandler/
   proc.ss                   (chandler proc)              子进程封装(git / bake 调用)
-  sexp.ss                   (chandler sexp)              清单 read + pretty-print(只读不求值)
+  hash.ss                   (chandler hash)              纯 Scheme SHA-256(lock 哈希 / registry 完整性)
+  sexp.ss                   (chandler sexp)              清单 read + canonical 写(只读不求值)
   layout.ss                 (chandler layout)            machine-type / so-ext / 路径 / 库名↔路径
   version.ss                (chandler version)           版本区间解析与匹配
   manifest.ss               (chandler manifest)          解析+校验 manifest.ss
   lock.ss                   (chandler lock)              读写 manifest.lock、拓扑序
   fetch.ss                  (chandler fetch)             git 镜像缓存 / 物化
   resolve.ss                (chandler resolve)           BFS 解析 / 冲突裁决 / 环检测
-  install.ss                (chandler install)           lib/ 物化 / install 判定
+  install.ss                (chandler install)           lib/ 物化 / install 判定 / verify
   registry.ss               (chandler registry)          全局安装文件清单事务
   runtime.ss                (chandler runtime)            chez/skiff 探测 + 版本门
   activate.ss               (chandler activate)          activate / load-native 核心
-  build.ss                  (chandler build)             排单 → bake
+  build.ss                  (chandler build)             排单 → bake + --allow-build 授权
   cli/
     args.ss                 (chandler cli args)          参数解析
     commands.ss             (chandler cli commands)      各子命令实现
+    selfinstall.ss          (chandler cli selfinstall)   install-self / uninstall-self(对齐 bake)
     main.ss                 (chandler cli main)          dispatch + 退出码
+    main.sps                                             程序入口(取 argv 调 main)
   test/*.ss                 与被测库共置的测试库
-bin/chandler                入口 wrapper → scheme --program chandler/cli/main.sps(经 run.sps)
+bin/chandler                开发期入口 wrapper(运行时发现:skiff 优先)
 tests/
   run-tests.sps             汇总跑 chandler/test/*
-  smoke.ss                  端到端冒烟
-manifest.ss  manifest.lock  Chandler 自身依赖清单(自举:目标为零外部依赖)
-recipe.ss                   bake 构建描述(另仓 bake 消费;本仓先占位)
-install.sh                  自举安装
+  mock-bake.sh              build 测试用的 mock bake
+manifest.ss  manifest.lock  Chandler 自身依赖清单(自举:零外部依赖)
+recipe.ss                   bake 构建描述(另仓 bake 消费)
+install.sh                  薄壳:运行时发现 → chandler install-self
 ```
 
 ---
@@ -102,7 +105,7 @@ install.sh                  自举安装
 
 ## 阶段 10 — 自举与安全收尾
 
-- [x] **10.1** `install.sh`:探测 scheme→clone→`bootstrap.ss` 复用 registry 事务装用户级→装 `bin/chandler` wrapper。`self-update`。对应:[08 §2](designs/08-bootstrap-security.md)。
+- [x] **10.1** 安装模型对齐 bake:`install.sh` 薄壳(运行时发现 skiff→Chez)委托 `chandler install-self`(`chandler/cli/selfinstall.ss`);默认装 `~/.local`,`--prefix`/`--global`;生成运行时发现启动器 + `.chandler-self.files` 清单;`uninstall-self`/`self-update`。对应:[08 §2](designs/08-bootstrap-security.md)。
 - [x] **10.2** 安全红线落地:clone 时 `core.hooksPath=/dev/null`、清单只 `read`、`--allow-build` 描述哈希绑定。威胁清单对照自查。对应:[08 §3-4](designs/08-bootstrap-security.md)。
 - [x] **10.3** `recipe.ss` 完善(交另仓 bake 消费的构建描述);README 用法;全量 `run-tests` + 双运行时(仅 chez,skiff 未在本机则跳过标注)。
 
@@ -121,9 +124,9 @@ install.sh                  自举安装
 
 **全部 11 个阶段(0–10)完成,M1–M4 全部达成。** 环境:Chez 10.4.1 / ta6le。
 
-- 测试:`tests/run-tests.sps` **110 用例全绿**(12 个 suite:harness/sexp/layout/version/manifest/lock/proc/fetch/resolve/install/activate/cli/registry/build)。纯 Chez、无外部依赖;Petite 子集亦可跑 CLI(双运行时可移植性验证通过)。
-- 端到端验证:`init→add→install→verify→list→tree→run→exec` 经二进制跑通;`(activate)` 真实挂载并 import 依赖;全局 `install/uninstall/list/doctor`;`build` 排单经 mock bake + 授权哈希绑定;`install.sh` 自举安装 + 自卸载自洽。
-- 实现的库:`(chandler)` umbrella + `sexp/layout/version/hash/manifest/lock/proc/fetch/resolve/install/registry/runtime/activate/build/cli.{args,commands,main}`。
+- 测试:`tests/run-tests.sps` **113 用例全绿**(15 个 suite:sexp/layout/version/manifest/lock/proc/fetch/resolve/install/activate/cli/registry/build/selfinstall)。纯 Chez、无外部依赖;Petite 子集亦可跑 CLI(双运行时可移植性验证通过)。
+- 端到端验证:`init→add→install→verify→list→tree→run→exec` 经二进制跑通;`(activate)` 真实挂载并 import 依赖;全局 `install/uninstall/list/doctor`;`build` 排单经 mock bake + 授权哈希绑定;`install-self` 装 `~/.local` + 自卸载自洽(启动器 skiff 优先运行时发现)。
+- 实现的库:`(chandler)` umbrella + `sexp/layout/version/hash/manifest/lock/proc/fetch/resolve/install/registry/runtime/activate/build/cli.{args,commands,main,selfinstall}`。
 - 对外共享面(bake 反向依赖):`(chandler lock/registry/layout/sexp)` 导出干净,不 import bake。
 
 ### 实现期发现/决定(偏离或补充设计处)

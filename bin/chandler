@@ -8,12 +8,22 @@ here=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 libroot=${CHANDLER_HOME:-$here}
 export CHANDLER_SRC="$here"
 
-for rt in skiff scheme chez chez-scheme chezscheme; do
-  if command -v "${CHANDLER_SCHEME:-$rt}" >/dev/null 2>&1; then
-    exec "${CHANDLER_SCHEME:-$rt}" -q --libdirs "$libroot" \
-      --program "$libroot/chandler/cli/main.sps" "$@"
-  fi
+# 能否运行 R6RS 程序?(跳过只会打印 demo 的早期 skiff stub;Chez 各名已知可用)
+_prog_ok() {
+  printf '(import (chezscheme))(display "CHANDLER_RT_OK")' \
+    | "$1" -q --program /dev/stdin 2>/dev/null | grep -q CHANDLER_RT_OK
+}
+
+for rt in "${CHANDLER_SCHEME:-}" skiff scheme chez chez-scheme chezscheme; do
+  [ -n "$rt" ] || continue
+  command -v "$rt" >/dev/null 2>&1 || continue
+  case "$rt" in
+    scheme|chez|chez-scheme|chezscheme) : ;;      # Chez 变体:直接用
+    *) _prog_ok "$rt" || continue ;;              # 其它(skiff 等):须通过能力探测
+  esac
+  exec "$rt" -q --libdirs "$libroot" \
+    --program "$libroot/chandler/cli/main.sps" "$@"
 done
 
-echo "chandler: 未找到 Scheme 运行时(需 skiff 或 Chez Scheme)。" 1>&2
+echo "chandler: 未找到可运行程序的 Scheme 运行时(需 skiff 或 Chez Scheme)。" 1>&2
 exit 127

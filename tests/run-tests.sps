@@ -5,7 +5,6 @@
 
 (import (chezscheme)
         (chandler test harness)
-        (prefix (chandler test harness-selftest) self:)
         (prefix (chandler test sexp) sexp:)
         (prefix (chandler test layout) layout:)
         (prefix (chandler test version) version:)
@@ -23,7 +22,6 @@
 
 (define all-suites
   (list
-    (cons 'harness self:suite)
     (cons 'sexp sexp:suite)
     (cons 'layout layout:suite)
     (cons 'version version:suite)
