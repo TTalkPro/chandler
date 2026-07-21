@@ -9,7 +9,7 @@
 ;;; 正是闭环所在。
 ;;;
 ;;;   bake            # = bake build,编译 (chandler) 库树为 .so
-;;;   bake test       # 跑全测试套件(132 用例)
+;;;   bake test       # 跑全测试套件(130 用例)
 ;;;   bake install    # 装 (chandler) 库树 → ~/.local/share/chez/lib(--global 装 /usr/local)
 ;;;   bake uninstall  # 据安装清单干净卸载
 ;;;   bake -T         # 列任务
@@ -21,15 +21,16 @@
 
 ;; ── test:跑测试套件(解释执行,无需先编译)──
 ;;   (build/install/uninstall 是 bake 的 tool-task,不带描述,故不列入 `bake -T`,但可直接调用。)
-(task 'test "跑全测试套件(132 用例)"
+(task 'test "跑全测试套件(130 用例)"
   '()
   (lambda ()
     (run "scheme" "--libdirs" "." "--program" "tests/run-tests.sps")))
 
-;; ── install / uninstall:把 (chandler) 库树装进 Chez 用户级 lib dir ──
+;; ── install / uninstall:把 (chandler) 库树装进 Chez lib dir ──
 ;;   → (import (chandler …)) 全局可解析(apps 的 (activate) 与 bake 自身都需要)。
-;;   CLI 启动器(bin/chandler,运行时发现 skiff→chez)由 chandler 自装提供:
-;;     chandler install-self    或    ./install.sh
+;;   chandler 的自安装(install.sh / install-self)即委托这些任务装库,再补一个
+;;   运行时发现启动器(bin/chandler);故 chandler「自安装基于 bake install」。
+;;   user → ~/.local/share/chez/lib;global → /usr/local/share/chez/lib(需 root)。
 (install-task 'install
   (lib chandler)
   (from ".")
@@ -37,5 +38,13 @@
 (uninstall-task 'uninstall
   (lib chandler)
   (target user))
+
+(install-task 'install-global
+  (lib chandler)
+  (from ".")
+  (target global))
+(uninstall-task 'uninstall-global
+  (lib chandler)
+  (target global))
 
 (default-task 'build)
