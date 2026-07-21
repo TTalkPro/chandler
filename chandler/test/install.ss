@@ -5,46 +5,12 @@
   (export suite)
   (import (chezscheme)
           (chandler test harness)
+          (chandler test fixtures)
           (chandler proc)
           (chandler layout)
           (chandler lock)
           (chandler fetch)
           (chandler install))
-
-  ;; ── 环境搭建 ──
-  (define (mktmp) (let ([r (run-capture "mktemp" '("-d"))]) (trim (proc-result-out r))))
-  (define (write-file path s) (call-with-output-file path (lambda (p) (display s p)) 'truncate))
-  (define (read-file path) (call-with-input-file path get-string-all))
-  (define (trim s) (let* ([cs (string->list s)] [cs (reverse (lt (reverse (lt cs))))]) (list->string cs)))
-  (define (lt cs) (cond [(null? cs) cs] [(memv (car cs) '(#\space #\tab #\return #\newline)) (lt (cdr cs))] [else cs]))
-
-  (define (make-lib-repo name deps)   ; deps=((name . url)…)
-    (let ([dir (mktmp)])
-      (define (g . args) (run-check "git" (cons "-C" (cons dir args)) '()))
-      (run-check "git" (list "init" "-q" "-b" "main" dir) '())
-      (g "config" "user.email" "t@t") (g "config" "user.name" "t")
-      (write-file (string-append dir "/manifest.ss") (mf-text name deps))
-      (write-file (string-append dir "/" name ".ss")
-                  (format "#!chezscheme~%(library (~a) (export ~a-ok) (import (chezscheme)) (define ~a-ok #t))~%" name name name))
-      (g "add" "-A") (g "commit" "-q" "-m" "c1")
-      dir))
-
-  (define (mf-text name deps)
-    (let ([op (open-output-string)])
-      (fprintf op "(manifest (format 1) (name ~s) (version \"0.1.0\") (srcdir \".\")" name)
-      (unless (null? deps)
-        (display " (deps" op)
-        (for-each (lambda (d) (fprintf op " (~a (git ~s) (branch \"main\"))" (car d) (cdr d))) deps)
-        (display ")" op))
-      (display ")" op)
-      (get-output-string op)))
-
-  ;; 造 app 项目:root manifest 依赖列表 (name . url)
-  (define (make-app deps)
-    (let ([dir (mktmp)])
-      (write-file (string-append dir "/manifest.ss")
-        (mf-text "app" deps))         ; 复用:app 也是「manifest 有 deps」
-      dir))
 
   (define (names root) (map car (list-deps root)))
 

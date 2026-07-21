@@ -5,37 +5,13 @@
   (export suite)
   (import (chezscheme)
           (chandler test harness)
+          (chandler test fixtures)
           (chandler proc)
-          (chandler layout)
           (chandler fetch)
           (chandler install)
           (chandler runtime))
 
   (define repo-root (current-directory))   ; 跑 run-tests 时 = chandler 仓库根
-
-  (define (mktmp) (let ([r (run-capture "mktemp" '("-d"))]) (trim (proc-result-out r))))
-  (define (write-file p s) (call-with-output-file p (lambda (o) (display s o)) 'truncate))
-  (define (trim s) (let* ([cs (string->list s)] [cs (reverse (lt (reverse (lt cs))))]) (list->string cs)))
-  (define (lt cs) (cond [(null? cs) cs] [(memv (car cs) '(#\space #\tab #\return #\newline)) (lt (cdr cs))] [else cs]))
-
-  (define (make-lib-repo name)
-    (let ([dir (mktmp)])
-      (define (g . args) (run-check "git" (cons "-C" (cons dir args)) '()))
-      (run-check "git" (list "init" "-q" "-b" "main" dir) '())
-      (g "config" "user.email" "t@t") (g "config" "user.name" "t")
-      (write-file (string-append dir "/manifest.ss")
-        (format "(manifest (format 1) (name ~s) (version \"0.1.0\") (srcdir \".\"))" name))
-      (write-file (string-append dir "/" name ".ss")
-        (format "#!chezscheme~%(library (~a) (export ~a-ok) (import (chezscheme)) (define ~a-ok #t))~%" name name name))
-      (g "add" "-A") (g "commit" "-q" "-m" "c1")
-      dir))
-
-  (define (make-app dep-name dep-url)
-    (let ([dir (mktmp)])
-      (write-file (string-append dir "/manifest.ss")
-        (format "(manifest (format 1) (name \"app\") (version \"0.1.0\") (srcdir \".\") (deps (~a (git ~s) (branch \"main\"))))"
-                dep-name dep-url))
-      dir))
 
   (define-suite suite
     ;; ── runtime ──
@@ -60,7 +36,7 @@
     (activate-mounts-and-imports
       (parameterize ([cache-root (mktmp)])
         (let* ([b (make-lib-repo "b")]
-               [app (make-app 'b b)])
+               [app (make-app (list (cons 'b b)))])
           (install app '())
           (write-file (string-append app "/main.ss")
             "(import (chandler)) (activate) (import (b)) (display b-ok)")
