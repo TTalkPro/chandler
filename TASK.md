@@ -125,6 +125,14 @@ install.sh                  薄壳:运行时发现 → chandler install-self
 | M3 | 6-7 | `chandler run app.ss` 激活依赖并运行;完整 CLI |
 | M4 | 8-10 | 全局安装/卸载、bake 排单(mock)、install.sh 自举 |
 
+- [x] **repl 命令**:交互 shell,自动挂库路径(规则见下,与 run/exec/setup 统一)。默认运行时跟随 chandler 当前所在(skiff/chez),`--runtime` 可覆盖。
+
+- [x] **依赖模型改为 Bundler 式(vendor/ + 扁平 lib/ + setup 文件)**:
+  - `chandler install`:git 依赖整仓 checkout 到 **`vendor/<name>/`**,再由 **`bake install`** 装进**扁平 `lib/`**(结构同 `~/.local/share/chez/lib`:`lib/<name>.ss`、`lib/<name>/`、`lib/native/<mt>/`)。故库搜索只挂 `lib/` 一个目录。install 依赖 bake。path 依赖不进 vendor/lib,直挂源目录(live)。
+  - **生成 `chandler-setup.ss`**(Bundler 的 `bundler/setup`):主脚本顶部 `(load)` 它即挂库路径 + 载 native,纯 skiff/scheme 跑无需 chandler。位置无关:依入口脚本(`(command-line)` 首元素)所在目录解析项目根,不硬编码绝对路径(`(load)` 是 cwd 相对、被载文件拿不到自身路径,故用入口脚本路径)。
+  - **run / exec / repl / activate 库搜索规则统一**(install 的 `resolved-libdirs` / `project-mode?`):项目(lock 有依赖)= `lib/` + path 源目录 + 项目库根 + 全局兜底(项目最高优先);非项目 = 全局。
+  - `verify` 改查 vendor/ rev + lib/ 存在;`activate` 挂扁平 lib/。测试全改;`scheme`/`petite`/`skiff` 三运行时 132/132。
+
 ## 进度
 
 **全部 11 个阶段(0–10)完成,M1–M4 全部达成。** 环境:Chez 10.4.1 / ta6le。

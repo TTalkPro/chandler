@@ -40,21 +40,47 @@ bake uninstall  # 据清单干净卸载
 ## 快速上手
 
 ```sh
-chandler init --name=myapp                 # 生成骨架 manifest.ss(lib/ 入 .gitignore)
+chandler init --name=myapp                 # 生成骨架 manifest.ss(vendor/ lib/ setup 入 .gitignore)
 chandler add http https://github.com/x/http --tag v1.2.0
-chandler install                           # 解析 → 写 manifest.lock → 物化到 lib/
+chandler install                           # 解析 → 写 lock → git 依赖到 vendor/ → bake install 到 lib/
 chandler list                              # 看已锁依赖
-chandler verify                            # CI:校验 lib/ 与 lock 一致
-chandler run app.ss                        # 挂依赖库路径 + 载 native 后跑脚本
+chandler verify                            # CI:校验 vendor/ 与 lock 一致
+chandler repl                              # 交互 shell(自动挂库路径)
 ```
 
-应用入口一行激活(脚本顶层):
+## 依赖模型(Bundler 式)
+
+```
+myapp/
+  manifest.ss  manifest.lock
+  vendor/<name>/           ← git 依赖的原始整仓 checkout
+  lib/                     ← bake install 出的扁平 Chez 库目录(结构同 ~/.local/share/chez/lib)
+    <name>.ss  <name>/…  native/<mt>/…
+  chandler-setup.ss        ← 生成的「一行激活」文件(Bundler 的 bundler/setup)
+```
+
+- **`chandler install`**:git 依赖整仓 checkout 到 `vendor/`,再由 **bake install** 装进扁平 `lib/`。故库搜索只挂 `lib/` 一个目录,与全局 `~/.local/share/chez/lib` 结构一致(install 依赖 bake)。
+- **path 依赖** `(path "../x")`:不进 vendor/lib,直挂其源目录(live,改一行立即生效)。
+
+### 一行激活(Bundler 式)
+
+`chandler install` 生成 `chandler-setup.ss`。在主脚本顶部 `(load)` 它,即挂好 `lib/`(+ path 源目录 + 全局)并载 native——之后 `(import (dep))` 即通,**纯 skiff/scheme 跑即可,无需 chandler 在场**:
 
 ```scheme
-(import (chandler))
-(activate)               ; 读 ./manifest.lock:挂所有依赖库路径 + 统一载 native
-(import (http) (json))   ; 在 activate 之后展开,解析成功
+;; 位置无关加载(项目可整体移动、任意 cwd 皆可):
+(load (string-append (let ([d (path-parent (car (command-line)))])
+                       (if (string=? d "") "." d)) "/chandler-setup.ss"))
+(import (http) (json))          ; 已可解析
+(main)
+;; 若总从项目根运行,简写:(load "chandler-setup.ss")
 ```
+
+`chandler-setup.ss` 依**入口脚本(与它同目录)的位置**在运行时解析项目根,不硬编码绝对路径。
+
+### 库搜索规则(run / exec / repl / setup 一致)
+
+- **项目**(有 lock + 依赖):`lib/` + path 源目录 + 项目自身库根 + 全局兜底(项目最高优先)。
+- **非项目**:直接用全局 `~/.local/share/chez/lib`。
 
 ## 命令一览
 
@@ -70,6 +96,7 @@ chandler run app.ss                        # 挂依赖库路径 + 载 native 后
 | `list` / `tree` | 显示已锁依赖 |
 | `run <script.ss> [args…]` | 激活环境后跑脚本 |
 | `exec -- <cmd…>` | 设 `CHEZSCHEMELIBDIRS` 后跑命令 |
+| `repl [--runtime skiff\|chez]` | 交互 shell,自动挂库路径:**项目有 lock+依赖 → 项目 `lib/`(最高优先)+ 全局兜底;否则 → 全局** |
 | `install --global[=dir]` | 装当前项目库到全局 libdir(注册表事务) |
 | `uninstall --global --name=<n>` | 据文件清单干净卸载 |
 | `list --global` / `doctor --global` | 列出/体检全局已装包 |

@@ -40,6 +40,9 @@
 
 与本目录设计的**已知偏差**(TASK.md 有完整记录):
 
+- **依赖布局改为 Bundler 式**(与 [03](03-resolution.md)/[chandler 总设计](../chez-chandler-git-lib-manager-design.md)早期"整仓 checkout 到 `lib/<name>/`"不同):git 依赖整仓 checkout 到 **`vendor/<name>/`**,再由 **`bake install`** 装进**扁平 `lib/`**(结构同 `~/.local/share/chez/lib`);库搜索只挂 `lib/` 一个目录。install 依赖 bake。另生成 **`chandler-setup.ss`**(位置无关的一行激活文件,Bundler `bundler/setup` 式)。run/exec/repl/activate 库搜索规则统一。
+
+
 - **`add`/`remove` 用 datum 级改写**而非 [01](01-cli.md) 倾向的文本级插入——对 `init` 生成的规范清单无损,代价是重排手写格式。
 - **`chandler cache` 子命令未接入 CLI**:[04](04-fetch-cache.md) 的 git 镜像缓存层已实现并在 `install` 路径生效,但 `cache dir/list/clean` 的命令壳待补。
 - 新增两个设计未列的基础库:`(chandler hash)`(纯 Scheme SHA-256,Chez 无内建)与 `(chandler proc)`(子进程封装)。
