@@ -1,11 +1,19 @@
 #!/bin/sh
-# chandler --- 入口 wrapper
-# 定位仓库根(bin/..),把它加进库搜索路径,跑 CLI 程序。
-# 开发期解释执行;安装后 CHANDLER_HOME 指向已装库目录(见 install.sh)。
+# chandler — 开发期入口 wrapper(运行时发现:skiff 优先,其次 Chez scheme)。
+# 定位仓库根(bin/..),加进库搜索路径,跑 CLI 程序。
+# 安装后由 `chandler install-self` 生成的启动器接管(见 chandler/cli/selfinstall.ss)。
 set -eu
 
 here=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 libroot=${CHANDLER_HOME:-$here}
-scheme=${CHANDLER_SCHEME:-scheme}
+export CHANDLER_SRC="$here"
 
-exec "$scheme" -q --libdirs "$libroot" --program "$libroot/chandler/cli/main.sps" "$@"
+for rt in skiff scheme chez chez-scheme chezscheme; do
+  if command -v "${CHANDLER_SCHEME:-$rt}" >/dev/null 2>&1; then
+    exec "${CHANDLER_SCHEME:-$rt}" -q --libdirs "$libroot" \
+      --program "$libroot/chandler/cli/main.sps" "$@"
+  fi
+done
+
+echo "chandler: 未找到 Scheme 运行时(需 skiff 或 Chez Scheme)。" 1>&2
+exit 127

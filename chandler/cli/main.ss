@@ -5,7 +5,8 @@
   (export main)
   (import (chezscheme)
           (chandler cli args)
-          (chandler cli commands))
+          (chandler cli commands)
+          (chandler cli selfinstall))
 
   (define chandler-cli-version "0.1.0-dev")
 
@@ -40,11 +41,26 @@
          [(exec)    (cmd-exec root flags rest)]
          [(uninstall) (cmd-uninstall root flags)]
          [(doctor)  (cmd-doctor root flags)]
+         [(install-self) (cmd-install-self (self-src-root) flags)]
+         [(uninstall-self) (cmd-uninstall-self root flags)]
          [(self-update) (cmd-self-update root flags)]
          [(-T)      (list-tasks) 0]
          [else
           (fprintf (current-error-port) "未知命令:~a(chandler help 看用法)~%" sub)
           64])]))
+
+  ;; install-self 的源根 = chandler 源码 checkout(不是 -C 项目目录)。
+  ;; 优先 CHANDLER_SRC(install.sh 设),否则从程序路径 …/chandler/cli/main.sps 反推。
+  (define (self-src-root)
+    (or (getenv "CHANDLER_SRC")
+        (let ([prog (car (command-line))])
+          (strip-suffix prog "/chandler/cli/main.sps"))
+        (current-directory)))
+
+  (define (strip-suffix s suf)
+    (let ([ls (string-length s)] [lf (string-length suf)])
+      (and (>= ls lf) (string=? suf (substring s (- ls lf) ls))
+           (substring s 0 (- ls lf)))))
 
   ;; self-update:提示走 install.sh(自更新 = 对自身仓库重跑安装事务,designs/08 §2)
   (define (cmd-self-update root flags)
@@ -83,5 +99,7 @@
     (printf "  verify                       校验 lib/ 与 lock 一致(CI 用)~%")
     (printf "  list | tree                  显示已锁依赖~%")
     (printf "  run <script.ss> [args…]      挂依赖库路径 + 载 native 后跑脚本~%")
-    (printf "  exec -- <cmd…>               设 CHEZSCHEMELIBDIRS 后跑命令~%~%")
+    (printf "  exec -- <cmd…>               设 CHEZSCHEMELIBDIRS 后跑命令~%")
+    (printf "  install-self [--prefix D]    自装 chandler 到 ~~/.local(--global=/usr/local)~%")
+    (printf "  uninstall-self [--prefix D]  卸载自装的 chandler~%~%")
     (printf "全局旗标: -C <dir> --offline --production --force --keep-extra --verbose~%")))

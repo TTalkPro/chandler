@@ -18,7 +18,8 @@
         (prefix (chandler test activate) activate:)
         (prefix (chandler test cli) cli:)
         (prefix (chandler test registry) registry:)
-        (prefix (chandler test build) build:))
+        (prefix (chandler test build) build:)
+        (prefix (chandler test selfinstall) selfinstall:))
 
 (define all-suites
   (list
@@ -35,6 +36,7 @@
     (cons 'activate activate:suite)
     (cons 'cli cli:suite)
     (cons 'registry registry:suite)
-    (cons 'build build:suite)))
+    (cons 'build build:suite)
+    (cons 'selfinstall selfinstall:suite)))
 
 (exit (if (run-suites all-suites) 0 1))

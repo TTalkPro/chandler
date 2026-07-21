@@ -1,43 +1,24 @@
 #!/bin/sh
-# install.sh --- Chandler 自举安装(designs/08 §2)
+# install.sh — bootstrap installer for chandler(对齐 bake/install.sh)。
+# 找一个 Scheme 运行时(skiff 优先,其次 Chez scheme),跑 `chandler install-self`,
+# 把额外参数透传过去(如 --prefix DIR / --global / --force)。
 #
-# 打破鸡生蛋:用解释执行的 Chandler(bootstrap.ss)把自己装进用户级 libdir。
-# 安全:推荐先 `git clone` + 审阅本仓再执行本脚本(而非 curl|sh 盲跑)。
+#   ./install.sh                 # 源码安装到 ~/.local
+#   ./install.sh --prefix ~/opt  # 自定义 prefix
+#   ./install.sh --global        # /usr/local(需 root)
 #
-# 用法:  ./install.sh              # 从本仓库就地安装
-#        CHANDLER_SCHEME=/path/scheme ./install.sh
+# 安全:推荐先 git clone + 审阅本仓再执行(而非 curl|sh 盲跑)。
 set -eu
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+export CHANDLER_SRC="$here"
 
-# 1) 定位 scheme,校验版本下界(>=10.0)
-scheme=${CHANDLER_SCHEME:-scheme}
-if ! command -v "$scheme" >/dev/null 2>&1; then
-  echo "错误:未找到 Chez Scheme(scheme)。请先安装 Chez >=10.0,或设 CHANDLER_SCHEME。" >&2
-  exit 1
-fi
-ver=$("$scheme" --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-major=$(echo "$ver" | cut -d. -f1)
-if [ "${major:-0}" -lt 10 ]; then
-  echo "错误:需 Chez >=10.0,当前 $ver。" >&2
-  exit 1
-fi
+for rt in skiff scheme chez chez-scheme chezscheme; do
+  if command -v "$rt" >/dev/null 2>&1; then
+    exec "$rt" -q --libdirs "$here" \
+      --program "$here/chandler/cli/main.sps" install-self "$@"
+  fi
+done
 
-# 2) 仓库根 = 本脚本所在目录
-repo=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-
-# 3) 落点
-libdir=${CHANDLER_LIBDIR:-"${XDG_DATA_HOME:-$HOME/.local/share}/chez/lib"}
-bindir=${CHANDLER_BINDIR:-"$HOME/.local/bin"}
-mkdir -p "$libdir" "$bindir"
-
-echo "install.sh: scheme=$scheme ($ver)"
-echo "install.sh: repo=$repo"
-echo "install.sh: libdir=$libdir  bindir=$bindir"
-
-# 4) 用解释执行的 chandler 给自己走正常安装事务
-"$scheme" -q --libdirs "$repo" --script "$repo/bootstrap.ss" "$repo" "$libdir" "$bindir"
-
-# 5) PATH 提示
-case ":$PATH:" in
-  *":$bindir:"*) : ;;
-  *) echo ""; echo "提示:把 $bindir 加入 PATH,例如:"; echo "  export PATH=\"$bindir:\$PATH\"" ;;
-esac
+echo "install.sh: 未找到 Scheme 运行时(需 skiff 或 Chez Scheme)。" 1>&2
+echo "  请安装 skiff(优先)或 Chez Scheme 后重跑 ./install.sh" 1>&2
+exit 127

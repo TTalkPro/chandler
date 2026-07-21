@@ -12,16 +12,18 @@
 
 ## 安装
 
-需 Chez Scheme ≥ 10.0(自带 `git`)。自举安装到用户级:
+需 skiff(优先)或 Chez Scheme ≥ 10.0(自带 `git`)。安装方式对齐 [bake](../bake):`install.sh` 只做**运行时发现**(skiff → Chez)后委托给工具自身的 `install-self`,默认装到 `~/.local`。
 
 ```sh
 git clone <this-repo> chandler && cd chandler
-./install.sh                      # 装进 ~/.local/share/chez/lib + ~/.local/bin
+./install.sh                      # → ~/.local/share/chez/lib + ~/.local/bin/chandler
+./install.sh --prefix ~/opt       # 自定义 prefix
+./install.sh --global             # /usr/local(需 root)
 export PATH="$HOME/.local/bin:$PATH"
 chandler --version
 ```
 
-开发期无需安装,直接解释执行:`./bin/chandler <命令>`。
+安装生成的 `bin/chandler` 启动器**运行时发现**:优先 `skiff`,回退 `scheme`/`chez`(designs/06 双运行时)。卸载:`chandler uninstall-self`(据 `.chandler-self.files` 清单干净删除)。开发期无需安装,直接 `./bin/chandler <命令>`(同样 skiff 优先)。
 
 ## 快速上手
 
@@ -59,6 +61,8 @@ chandler run app.ss                        # 挂依赖库路径 + 载 native 后
 | `install --global[=dir]` | 装当前项目库到全局 libdir(注册表事务) |
 | `uninstall --global --name=<n>` | 据文件清单干净卸载 |
 | `list --global` / `doctor --global` | 列出/体检全局已装包 |
+| `install-self [--prefix D] [--global]` | 自装 chandler 到 `~/.local`(bake 式,skiff 优先启动器) |
+| `uninstall-self [--prefix D]` | 卸载自装的 chandler |
 | `self-update` | 提示重跑 `install.sh` |
 
 全局旗标:`-C <dir>` `--offline` `--production` `--force` `--keep-extra` `--verbose`。
