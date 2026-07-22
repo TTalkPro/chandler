@@ -27,11 +27,24 @@
       (assert-string= "b" (path-join "" "b"))
       (assert-string= "a" (path-join "a" "")))
 
-    (native-dir-and-path
-      (assert-string= (string-append "lib/sqlite/native/" (current-machine-type))
-                      (native-dir "lib/sqlite"))
-      (assert-string= (string-append "lib/sqlite/native/" (current-machine-type) "/sqlite.so")
-                      (native-path "lib/sqlite" "sqlite")))
+    ;; src/mt 拆分:安装前缀 → (源 . 对象) 对;条目 → --libdirs 串
+    (split-pair-and-args
+      (assert-equal (cons "/pfx/src" (string-append "/pfx/" (current-machine-type)))
+                    (split-pair "/pfx"))
+      (assert-string= (string-append "/pfx/src::/pfx/" (current-machine-type))
+                      (entry->arg (split-pair "/pfx")))
+      (assert-string= "/plain" (entry->arg "/plain"))
+      (assert-string= (string-append "/pfx/src::/pfx/" (current-machine-type) ":/plain")
+                      (libdirs->arg (list (split-pair "/pfx") "/plain"))))
+
+    ;; native 收进所属库:<obj-root>/<lib>/native/<soname>.<ext>
+    (native-under-owning-lib
+      (assert-string= "obj/sqlite/native"
+                      (lib-native-dir "obj" "sqlite"))
+      (assert-string= "obj/sqlite/native/sqlite.so"
+                      (lib-native-path "obj" "sqlite" "sqlite"))
+      (assert-true (native-so? "x/native/foo.so"))
+      (assert-false (native-so? "x/foo.ss")))
 
     (library-name-to-path
       (assert-string= "a/b.ss" (library-name->path '(a b)))
@@ -45,5 +58,5 @@
       (assert-string= "lib/http/src" (srcdir-join "lib/http" "src")))
 
     (lib-root-compose
-      (assert-string= "proj/lib/http" (lib-root "proj" "http" "."))
-      (assert-string= "proj/lib/http/src" (lib-root "proj" "http" "src")))))
+      (assert-string= "proj/lib/src/http" (lib-root "proj" "http" "."))
+      (assert-string= "proj/lib/src/http/src" (lib-root "proj" "http" "src")))))
