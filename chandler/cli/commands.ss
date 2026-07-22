@@ -44,10 +44,12 @@
              (error 'pack (format "--entry must be a library name like '(myapp)', got ~s" s)))
            d)))
 
+  ;; --target(designs/10 §7b):完整性之外再对当前 runtime 跑 verify-target! 矩阵
   (define (cmd-verify-pack root flags pos)
     (let ([target (positional-ref pos 0 #f)])
-      (unless target (error 'verify-pack "usage: chandler verify-pack <dir|pack.manifest>"))
-      (verify-pack (if (string-prefix? "/" target) target (join-paths root target)))))
+      (unless target (error 'verify-pack "usage: chandler verify-pack [--target] <dir|pack.manifest>"))
+      (verify-pack (if (string-prefix? "/" target) target (join-paths root target))
+                   (flag? flags 'target))))
 
   ;; ── init ──
   ;; ── init ──

@@ -105,7 +105,7 @@
     (printf "  update                       ignore the existing lock and re-resolve~%")
     (printf "  build [--allow-build[=a,b]]  compile deps via bake into lib/<machine-type>/~%")
     (printf "  pack [--runtime r]           assemble a source-less, self-contained distribution~%")
-    (printf "  verify-pack <dir>            re-hash a pack against its manifest~%")
+    (printf "  verify-pack [--target] <dir> re-hash a pack; --target also checks the target triple~%")
     (printf "  verify                       check vendor/ against the lock (for CI)~%")
     (printf "  list | tree                  show locked dependencies~%")
     (printf "  run <script.ss> [args...]    run a script with the dependency environment~%")

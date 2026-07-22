@@ -33,6 +33,7 @@
           (chandler lock)
           (chandler install)
           (chandler runtime)
+          (chandler version)
           (chandler hash))
 
   ;; ═══════════════════════════════════════════════════════════════════
@@ -302,23 +303,24 @@
       "$Here = Split-Path -Parent $PSScriptRoot\n"
       "$env:APP_ROOT = $Here\n"))
 
-  ;; skiff 启动器 = pack 规范 §8 的薄 shim:指好 boot、交给 `skiff --app`。
-  ;; SKIFF_BOOT_DIR 是必须的:skiff 按 exe 相对找 boot(<exedir>/../lib/skiff/boot),
-  ;; bin/<mt> + boot/<mt> 对不上它;而 boot 必须在进程有堆之前注册,远早于 --app 被
-  ;; 解析,env 是唯一可用的交接方式。
+  ;; skiff 启动器 = pack 规范 §8 的薄 shim:指好 boot、交给 `skiff --script bootstrap.ss`
+  ;; (designs/10 §6:与 stock 对称;L0 之后 bootstrap.ss 是统一 runtime-aware verifier,
+  ;; skiff pack 不再走 `skiff --app`)。SKIFF_BOOT_DIR 是必须的:skiff 按 exe 相对找
+  ;; boot(<exedir>/../lib/skiff/boot),bin/<mt> + boot/<mt> 对不上它;而 boot 必须在
+  ;; 进程有堆之前注册,远早于 --script 被解析,env 是唯一可用的交接方式。
   (define (launcher-sh-skiff)
     (let ([mt (current-machine-type)])
       (string-append
         (sh-head)
         "export SKIFF_BOOT_DIR=\"$HERE/boot/" mt "\"\n"
-        "exec \"$HERE/bin/" mt "/skiff\" --app \"$HERE/pack.manifest\" \"$@\"\n")))
+        "exec \"$HERE/bin/" mt "/skiff\" --script \"$HERE/bootstrap.ss\" \"$@\"\n")))
 
   (define (launcher-ps1-skiff)
     (let ([mt (current-machine-type)])
       (string-append
         (ps1-head)
         "$env:SKIFF_BOOT_DIR = \"$Here/boot/" mt "\"\n"
-        "& \"$Here/bin/" mt "/skiff.exe\" --app \"$Here/pack.manifest\" @PackArgs\n"
+        "& \"$Here/bin/" mt "/skiff.exe\" --script \"$Here/bootstrap.ss\" @PackArgs\n"
         "exit $LASTEXITCODE\n")))
 
   ;; stock Chez:绝对 -b 链(bake designs/22 机制 C —— 最稳,exe 名任意,相对 -b 不可用)。
@@ -356,7 +358,11 @@
             (run-status "chmod" (list "+x" f))))))
 
   ;; ═══════════════════════════════════════════════════════════════════
-  ;; §6 bootstrap.ss(仅 stock 运行时;skiff 的加载全在 `skiff --app` 里)
+  ;; §6 bootstrap.ss(runtime-aware verifier,designs/10 §3-5)
+  ;;   生成的 bootstrap 在 stock Chez 与 Skiff 上跑**同一份**:先读 pack.manifest,
+  ;;   校验 (format N) 与 target 三元组(按当前 runtime 分派,矩阵见 designs/10 §4),
+  ;;   全部通过才碰 library-directories / native / import。校验失败一律显式
+  ;;   (exit N)(sysexits:65/70/78)+ 单行 s-expr 诊断,不走 Chez error。
   ;; ═══════════════════════════════════════════════════════════════════
 
   ;; 包根从**自身路径**推导 —— bootstrap 由 `--script` 跑,(car (command-line)) 就是
@@ -371,20 +377,204 @@
       "                    (else (loop (- i 1)))))))\n"
       "    (if (string=? d \"\") \".\" d)))\n"))
 
-  ;; 启动即比对目标三元组。运行时是捆进来的,正常永远成立;它抓的是「换掉了
-  ;; bin/<mt>/scheme」或「补丁进了异 ABI 产物」—— 给出清晰错误而非莫名的 fasl 失败。
-  (define (target-check-src ver mt)
+  ;; stderr 诊断:人类可读行 + 单行 s-expr(orchestrator 用 read 收,故 s-expr
+  ;; 恒单行、无换行;designs/10 §5)。
+  (define stderr-diag-src
     (string-append
-      "(let* ((s (scheme-version)) (n (string-length s))\n"
-      "       (v (let loop ((i (- n 1)))\n"
-      "            (cond ((< i 0) s)\n"
-      "                  ((char-whitespace? (string-ref s i)) (substring s (+ i 1) n))\n"
-      "                  (else (loop (- i 1)))))))\n"
-      "  (unless (string=? v \"" ver "\")\n"
-      "    (error 'chandler-pack (string-append \"chez version mismatch: pack built for "
-      ver ", runtime is \" v)))\n"
-      "  (unless (eq? (machine-type) '" mt ")\n"
-      "    (error 'chandler-pack \"machine-type mismatch: pack built for " mt "\")))\n"))
+      "(define (%err msg)\n"
+      "  (fprintf (current-error-port) \"chandler-pack: ~a~n\" msg)\n"
+      "  (flush-output-port (current-error-port)))\n"
+      "(define (%err-sexp s)\n"
+      "  (fprintf (current-error-port) \"~s~n\" s)\n"
+      "  (flush-output-port (current-error-port)))\n"))
+
+  ;; runtime 探测:一字不改照搬 (chandler runtime) skiff-version-string 的守卫
+  ;; (designs/06 §4):skiff-version 可能绑字符串、也可能绑返回字符串的过程
+  ;; (skiff 0.1.1 起为过程),两形都认;取不到即 stock Chez。
+  (define runtime-detect-src
+    (string-append
+      "(define %rt\n"
+      "  (if (and (top-level-bound? 'skiff-version)\n"
+      "           (guard (e [#t #f])\n"
+      "             (let ([v (top-level-value 'skiff-version)])\n"
+      "               (or (string? v) (procedure? v)))))\n"
+      "      'skiff 'chez))\n"
+      "(define (%skiff-ver)\n"
+      "  (guard (e [#t #f])\n"
+      "    (let ([v (top-level-value 'skiff-version)])\n"
+      "      (cond\n"
+      "        [(string? v) v]\n"
+      "        [(procedure? v) (let ([r (v)]) (and (string? r) r))]\n"
+      "        [else #f]))))\n"))
+
+  ;; 内联 (chandler version) 的区间匹配:部署态没有 chandler 可 import,bootstrap
+  ;; 必须自含。支持精确 / "*" / >= <= > < = 操作符与空格合取,与 skiff/app.ss 的
+  ;; version-in-range? 同语义。解析容错(非法分量当 0)+ 整体 guard 兜成 #f:
+  ;; 部署侧宁可按「不匹配」走 78,也不能让畸形版本串把进程抛进 debugger。
+  (define version-match-src
+    (string-append
+      "(define (%ssplit s delims)\n"
+      "  (let loop ([i 0] [start 0] [acc '()])\n"
+      "    (cond\n"
+      "      [(= i (string-length s))\n"
+      "       (reverse (if (> i start) (cons (substring s start i) acc) acc))]\n"
+      "      [(memv (string-ref s i) delims)\n"
+      "       (loop (+ i 1) (+ i 1) (if (> i start) (cons (substring s start i) acc) acc))]\n"
+      "      [else (loop (+ i 1) start acc)])))\n"
+      "(define (%sprefix? p s)\n"
+      "  (let ([n (string-length p)])\n"
+      "    (and (>= (string-length s) n) (string=? p (substring s 0 n)))))\n"
+      "(define (%sdrop s n) (substring s n (string-length s)))\n"
+      "(define (%parse-version s0)\n"
+      "  (let* ([s (if (and (> (string-length s0) 0)\n"
+      "                     (memv (string-ref s0 0) '(#\\v #\\V)))\n"
+      "                (substring s0 1 (string-length s0))\n"
+      "                s0)]\n"
+      "         [core (car (%ssplit s '(#\\- #\\+)))])\n"
+      "    (map (lambda (p)\n"
+      "           (let ([n (string->number p)])\n"
+      "             (if (and n (integer? n) (exact? n) (>= n 0)) n 0)))\n"
+      "         (%ssplit core '(#\\.)))))\n"
+      "(define (%pad-to a b)\n"
+      "  (let ([la (length a)] [lb (length b)])\n"
+      "    (if (>= la lb) a (append a (make-list (- lb la) 0)))))\n"
+      "(define (%version-compare a b)\n"
+      "  (let loop ([a (%pad-to a b)] [b (%pad-to b a)])\n"
+      "    (cond\n"
+      "      [(and (null? a) (null? b)) 0]\n"
+      "      [(< (car a) (car b)) -1]\n"
+      "      [(> (car a) (car b)) 1]\n"
+      "      [else (loop (cdr a) (cdr b))])))\n"
+      "(define (%match-one tok v)\n"
+      "  (cond\n"
+      "    [(string=? tok \"*\") #t]\n"
+      "    [(%sprefix? \">=\" tok) (>= (%version-compare v (%parse-version (%sdrop tok 2))) 0)]\n"
+      "    [(%sprefix? \"<=\" tok) (<= (%version-compare v (%parse-version (%sdrop tok 2))) 0)]\n"
+      "    [(%sprefix? \">\" tok)  (>  (%version-compare v (%parse-version (%sdrop tok 1))) 0)]\n"
+      "    [(%sprefix? \"<\" tok)  (<  (%version-compare v (%parse-version (%sdrop tok 1))) 0)]\n"
+      "    [(%sprefix? \"=\" tok)  (=  (%version-compare v (%parse-version (%sdrop tok 1))) 0)]\n"
+      "    [else (= (%version-compare v (%parse-version tok)) 0)]))\n"
+      "(define (%version-match? constraint ver)\n"
+      "  (guard (e [#t #f])\n"
+      "    (let ([v (%parse-version ver)])\n"
+      "      (for-all (lambda (tok) (%match-one tok v))\n"
+      "               (%ssplit constraint '(#\\space #\\tab))))))\n"))
+
+  ;; 读 pack.manifest:不可读 / 不是 (pack ...) → 65 EX_DATAERR(对齐
+  ;; skiff/app.ss read-manifest)。只定义 %fields / %field1;(target …) 的缺失
+  ;; 由 full-target-check-src 判(先让 (format N) 检查跑,顺序与 skiff --app 一致)。
+  (define manifest-read-src
+    (string-append
+      "(define %manifest-path (string-append %root \"/pack.manifest\"))\n"
+      "(define %manifest\n"
+      "  (guard (e [#t #f])\n"
+      "    (call-with-input-file %manifest-path read)))\n"
+      "(unless (and %manifest (pair? %manifest) (eq? (car %manifest) 'pack))\n"
+      "  (%err (string-append \"manifest missing or invalid: \" %manifest-path))\n"
+      "  (%err-sexp '(chandler-pack-error (manifest-invalid)))\n"
+      "  (exit 65))\n"
+      "(define %fields (cdr %manifest))\n"
+      "(define (%field1 key)\n"
+      "  (let ([c (assq key %fields)])\n"
+      "    (and c (pair? (cdr c)) (cadr c))))\n"))
+
+  ;; (format N) 前向兼容:N > pack-format-supported(=1)→ 70 EX_SOFTWARE;
+  ;; 字段缺省视为 0(对齐 skiff/app.ss verify-format! 的 (or (field1 m 'format) 0))。
+  (define verify-format-src
+    (string-append
+      "(define pack-format-supported 1)\n"
+      "(let ([fmt (or (%field1 'format) 0)])\n"
+      "  (when (and (number? fmt) (> fmt pack-format-supported))\n"
+      "    (%err (format \"pack format ~a is newer than supported (~a)\"\n"
+      "                  fmt pack-format-supported))\n"
+      "    (%err-sexp (list 'chandler-pack-error\n"
+      "                     (list 'format-too-new\n"
+      "                           (list 'pack fmt)\n"
+      "                           (list 'supported pack-format-supported))))\n"
+      "    (exit 70)))\n"))
+
+  ;; runtime-aware verify-target!(designs/10 §4 矩阵全 13 行):
+  ;;   - machine-type / chez-version 永不放宽,不符即 78 EX_CONFIG;
+  ;;   - (skiff-version "X") 精确:runtime 是 skiff 则值比对;是 stock 则必 78
+  ;;     (pack requires skiff, current runtime is stock Chez);
+  ;;   - (skiff-compat "<range>"):runtime 是 skiff 则 %version-match?;是 stock
+  ;;     则必 78;唯独全开 \">=0.0.0\"(stock 包默认)在两种 runtime 上都通过;
+  ;;   - 两者都不声明:不查 skiff;
+  ;;   - SKIFF_ALLOW_VERSION_SKEW=1 只放宽 skiff 维(WARNING + 通过),
+  ;;     machine-type / chez-version 不动;
+  ;;   - 缺 (target …) → 65 EX_DATAERR。
+  ;; 失败先出人读诊断、再出单行 s-expr,显式 (exit N),绝不走 Chez error。
+  (define full-target-check-src
+    (string-append
+      "(define %target\n"
+      "  (or (assq 'target %fields)\n"
+      "      (begin\n"
+      "        (%err \"manifest missing (target ...)\")\n"
+      "        (%err-sexp '(chandler-pack-error (manifest-invalid (target-missing))))\n"
+      "        (exit 65))))\n"
+      "(define (%tfield1 key)\n"
+      "  (let ([c (assq key (cdr %target))])\n"
+      "    (and c (pair? (cdr c)) (cadr c))))\n"
+      "(define %want-mt (%tfield1 'machine-type))\n"
+      "(define %want-chez (%tfield1 'chez-version))\n"
+      "(define %want-skiff (%tfield1 'skiff-version))\n"
+      "(define %want-compat (%tfield1 'skiff-compat))\n"
+      "(define %actual-mt (machine-type))\n"
+      "(define %actual-chez\n"
+      "  (let* ([s (scheme-version)] [n (string-length s)])\n"
+      "    (let loop ([i (- n 1)])\n"
+      "      (cond\n"
+      "        [(< i 0) s]\n"
+      "        [(char-whitespace? (string-ref s i)) (substring s (+ i 1) n)]\n"
+      "        [else (loop (- i 1))]))))\n"
+      "(define %skew-ok? (equal? (getenv \"SKIFF_ALLOW_VERSION_SKEW\") \"1\"))\n"
+      "(define %bad '())\n"
+      "(define (%mismatch! what expected actual advice)\n"
+      "  (set! %bad (cons (list what expected actual advice) %bad)))\n"
+      "(unless (eq? %want-mt %actual-mt)\n"
+      "  (%mismatch! 'machine-type %want-mt %actual-mt\n"
+      "              \"wrong platform pack; fetch the build for this machine-type\"))\n"
+      "(unless (equal? %want-chez %actual-chez)\n"
+      "  (%mismatch! 'chez-version %want-chez %actual-chez\n"
+      "              \"install the matching runtime or re-pack the app\"))\n"
+      "(cond\n"
+      "  [(and %want-skiff (string? %want-skiff))\n"
+      "   (if (eq? %rt 'skiff)\n"
+      "       (let ([actual (%skiff-ver)])\n"
+      "         (unless (equal? actual %want-skiff)\n"
+      "           (if %skew-ok?\n"
+      "               (%err (format \"WARNING: skiff-version skew allowed by SKIFF_ALLOW_VERSION_SKEW=1 (pack ~a, runtime ~a)\" %want-skiff actual))\n"
+      "               (%mismatch! 'skiff-version %want-skiff actual\n"
+      "                           \"install the matching skiff runtime or re-pack the app\"))))\n"
+      "       (%mismatch! 'skiff-version %want-skiff 'stock-chez\n"
+      "                   \"pack requires skiff, current runtime is stock Chez\"))]\n"
+      "  [(and %want-compat (string? %want-compat)\n"
+      "        (not (string=? %want-compat \">=0.0.0\")))\n"
+      "   (if (eq? %rt 'skiff)\n"
+      "       (let ([actual (%skiff-ver)])\n"
+      "         (unless (and actual (%version-match? %want-compat actual))\n"
+      "           (if %skew-ok?\n"
+      "               (%err (format \"WARNING: skiff-version skew allowed by SKIFF_ALLOW_VERSION_SKEW=1 (pack compat ~a, runtime ~a)\" %want-compat actual))\n"
+      "               (%mismatch! 'skiff-version (string-append \"compat \" %want-compat) actual\n"
+      "                           \"install the matching skiff runtime or re-pack the app\"))))\n"
+      "       (%mismatch! 'skiff-version (string-append \"compat \" %want-compat) 'stock-chez\n"
+      "                   \"pack requires skiff, current runtime is stock Chez\"))]\n"
+      "  [else #t])\n"
+      "(unless (null? %bad)\n"
+      "  (%err \"pack target mismatch; refusing to load\")\n"
+      "  (for-each\n"
+      "    (lambda (b)\n"
+      "      (%err (format \"  ~a: expected ~s, actual ~s~n    -> ~a\"\n"
+      "                    (car b) (cadr b) (caddr b) (cadddr b))))\n"
+      "    (reverse %bad))\n"
+      "  (%err-sexp (cons 'chandler-pack-error\n"
+      "                   (list (cons 'target-mismatch\n"
+      "                               (map (lambda (b)\n"
+      "                                      (list (car b)\n"
+      "                                            (list 'expected (cadr b))\n"
+      "                                            (list 'actual (caddr b))))\n"
+      "                                    (reverse %bad))))))\n"
+      "  (exit 78))\n"))
 
   ;; 统一加载 native:**递归**走整棵对象树。这是兜底 —— 生成的 loader 正常先到 ——
   ;; 但一个会静默漏掉一半库的兜底不算兜底(一层扫描找不到 (chez async) 那类)。
@@ -404,11 +594,20 @@
       "                (%load-natives p)))))\n"
       "      (directory-list dir))))\n"))
 
+  ;; 校验全部落在任何状态变更之前(library-directories / %load-natives / import):
+  ;; 失败进程必须是「零副作用 + 明确退出码」的,不留半截加载的堆。
+  ;; ver 形参仅为签名兼容保留:target 三元组现在由 bootstrap 自己从 pack.manifest
+  ;; 读,不再在生成期内联(同一份 bootstrap 服务 stock 与 skiff 两种 runtime)。
   (define (bootstrap-source entry main-proc ver mt)
     (string-append
       ";; generated by chandler pack -- do not edit\n"
       bootstrap-root-src
-      (target-check-src ver mt)
+      stderr-diag-src
+      runtime-detect-src
+      version-match-src
+      manifest-read-src
+      verify-format-src
+      full-target-check-src
       "(define %lib (string-append %root \"/lib/" mt "\"))\n"
       "(compile-imported-libraries #f)\n"       ; 部署态只载入,永不重编
       "(library-directories (list (cons %lib %lib)))\n"
@@ -565,6 +764,10 @@
                            entry e))))
         ;; 2) resources/(约定名)
         (copy-resources! project root)
+        ;; bootstrap 在 runtime 定位之前落盘:内容只依赖 entry/mt(target 三元组由它
+        ;; 自己从 pack.manifest 读),与捆哪份运行时无关;stock 与 skiff 包同一份
+        ;; (designs/10 §3:不再分叉;skiff 启动器在 L2 才换 --script,文件先备好)。
+        (write-text (join-paths root "bootstrap.ss") (bootstrap-source entry mainp #f mt))
         ;; 3) 运行时 + boot + 启动器 + 清单
         (if (eq? rt 'skiff)
             (let* ([exe (skiff-exe-path)]
@@ -583,7 +786,6 @@
               (copy-file (join-paths csv "petite.boot") (join-paths (pack-boot-dir root) "petite.boot"))
               (when (eq? rt 'scheme)
                 (copy-file (join-paths csv "scheme.boot") (join-paths (pack-boot-dir root) "scheme.boot")))
-              (write-text (join-paths root "bootstrap.ss") (bootstrap-source entry mainp ver mt))
               (write-launcher! root name (launcher-sh-stock rt) (launcher-ps1-stock rt))
               (write-pack-manifest! root name version rt entry mainp ver mt #f)))
         (printf "packed ~a ~a -> ~a~%" name version root)
@@ -636,46 +838,174 @@
                                (string-join miss "\n  "))))))))))
 
   ;; ═══════════════════════════════════════════════════════════════════
-  ;; §9 verify-pack:按需完整性校验
-  ;;   重算清单里每个文件的 sha256 + size 并比对。MISSING/CHANGED 致命,EXTRA 只报告。
+  ;; §9 verify-pack:完整性 + (可选)format/target 校验(designs/09 §9, 10 §7)
+  ;;   完整性:重算清单里每个文件的 sha256 + size 并比对;MISSING/CHANGED 致命,
+  ;;   EXTRA 只报告。L1 加两块(designs/10 §7):
+  ;;     verify-format!       (format N) > pack-format-supported(=1)→ 70;
+  ;;     --target             对当前 runtime 跑 designs/10 §4 全矩阵 → 78。
+  ;;   退出码(sysexits):0 全过;65 完整性错(EX_DATAERR,对齐 skiff/app.ss);
+  ;;   70 format 超出(EX_SOFTWARE);78 --target 不符(EX_CONFIG)。
+  ;;   与 bootstrap 共用措辞与单行 s-expr 诊断(那边是自含生成码,这边直调
+  ;;   (chandler runtime)/(chandler version);决策表是同一份)。
   ;; ═══════════════════════════════════════════════════════════════════
 
-  (define (verify-pack path)
-    (let* ([is-mf (string-suffix? "pack.manifest" path)]
-           [root  (if is-mf (parent-dir path) path)]
-           [mf    (if is-mf path (join-paths path "pack.manifest"))])
-      (unless (file-exists? mf)
-        (error 'verify-pack (format "pack.manifest not found at ~a" mf)))
-      (let* ([form  (call-with-input-file mf read)]
-             [files (let ([c (assq 'files (cdr form))]) (if c (cdr c) '()))]
-             [declared '()]
-             [ok 0] [bad 0] [extra 0])
-        (for-each
-          (lambda (e)
-            (let* ([rel (car e)]
-                   [want-h (attr 'sha256 e)]
-                   [want-s (attr 'size e)]
-                   [abs (join-paths root rel)])
-              (set! declared (cons rel declared))
-              (cond
-                [(not (file-exists? abs))
-                 (set! bad (+ bad 1)) (fprintf (current-error-port) "  MISSING ~a~%" rel)]
-                [(and want-h (not (string=? want-h (sha256-file abs))))
-                 (set! bad (+ bad 1)) (fprintf (current-error-port) "  CHANGED ~a (sha256 mismatch)~%" rel)]
-                [(and want-s (not (= want-s (file-size abs))))
-                 (set! bad (+ bad 1)) (fprintf (current-error-port) "  CHANGED ~a (size mismatch)~%" rel)]
-                [else (set! ok (+ ok 1))])))
-          files)
-        ;; pack.manifest 自己从不被声明(最后写),排除掉
-        (for-each
-          (lambda (abs)
-            (let ([rel (strip-prefix abs (string-append root "/"))])
-              (unless (or (string=? rel "pack.manifest") (member rel declared))
-                (set! extra (+ extra 1))
-                (fprintf (current-error-port) "  EXTRA ~a (not in manifest)~%" rel))))
-          (files-under root))
-        (printf "verify ~a: ~a ok, ~a bad, ~a extra~%" root ok bad extra)
-        (if (= bad 0) 0 70))))
+  (define pack-format-supported 1)
+
+  (define (%pack-err msg)
+    (fprintf (current-error-port) "chandler-pack: ~a~%" msg)
+    (flush-output-port (current-error-port)))
+
+  (define (%pack-err-sexp s)
+    (fprintf (current-error-port) "~s~%" s)
+    (flush-output-port (current-error-port)))
+
+  (define (pack-field1 fields key)
+    (let ([c (assq key fields)])
+      (and c (pair? (cdr c)) (cadr c))))
+
+  ;; (format N) 前向兼容:N > pack-format-supported(=1)→ 70 EX_SOFTWARE;
+  ;; 字段缺省视为 0(对齐 bootstrap 的 verify-format-src)。返回 #f(通过)或 70。
+  (define (verify-pack-format! fields)
+    (let ([fmt (or (pack-field1 fields 'format) 0)])
+      (and (number? fmt) (> fmt pack-format-supported)
+           (begin
+             (%pack-err (format "pack format ~a is newer than supported (~a)"
+                                fmt pack-format-supported))
+             (%pack-err-sexp (list 'chandler-pack-error
+                                   (list 'format-too-new
+                                         (list 'pack fmt)
+                                         (list 'supported pack-format-supported))))
+             70))))
+
+  ;; 完整性:MISSING/CHANGED 记 bad,EXTRA 只报告。返回 bad 计数。
+  (define (verify-pack-integrity! root files)
+    (let ([declared '()] [ok 0] [bad 0] [extra 0])
+      (for-each
+        (lambda (e)
+          (let* ([rel (car e)]
+                 [want-h (attr 'sha256 e)]
+                 [want-s (attr 'size e)]
+                 [abs (join-paths root rel)])
+            (set! declared (cons rel declared))
+            (cond
+              [(not (file-exists? abs))
+               (set! bad (+ bad 1)) (fprintf (current-error-port) "  MISSING ~a~%" rel)]
+              [(and want-h (not (string=? want-h (sha256-file abs))))
+               (set! bad (+ bad 1)) (fprintf (current-error-port) "  CHANGED ~a (sha256 mismatch)~%" rel)]
+              [(and want-s (not (= want-s (file-size abs))))
+               (set! bad (+ bad 1)) (fprintf (current-error-port) "  CHANGED ~a (size mismatch)~%" rel)]
+              [else (set! ok (+ ok 1))])))
+        files)
+      ;; pack.manifest 自己从不被声明(最后写),排除掉
+      (for-each
+        (lambda (abs)
+          (let ([rel (strip-prefix abs (string-append root "/"))])
+            (unless (or (string=? rel "pack.manifest") (member rel declared))
+              (set! extra (+ extra 1))
+              (fprintf (current-error-port) "  EXTRA ~a (not in manifest)~%" rel))))
+        (files-under root))
+      (printf "verify ~a: ~a ok, ~a bad, ~a extra~%" root ok bad extra)
+      bad))
+
+  ;; runtime-aware verify-target!(designs/10 §4 矩阵,与 bootstrap 的
+  ;; full-target-check-src 同决策、同措辞):
+  ;;   - machine-type / chez-version 永不放宽,不符即 78 EX_CONFIG;
+  ;;   - (skiff-version "X") 精确:runtime 是 skiff 则值比对;是 stock 则必 78;
+  ;;   - (skiff-compat "<range>") 非全开:runtime 是 skiff 则 version-match?;
+  ;;     是 stock 则必 78;全开 ">=0.0.0"(stock 包默认)在两种 runtime 上都过;
+  ;;   - 两者都不声明:不查 skiff;
+  ;;   - SKIFF_ALLOW_VERSION_SKEW=1 只放宽 skiff 维(WARNING + 通过);
+  ;;   - 缺 (target …) → 65 EX_DATAERR。
+  ;; 全部不符项收集后一次性出人读诊断 + 单行 s-expr。返回 #f(通过)或退出码。
+  (define (verify-pack-target! fields)
+    (let ([target (assq 'target fields)])
+      (cond
+        [(not target)
+         (%pack-err "manifest missing (target ...)")
+         (%pack-err-sexp '(chandler-pack-error (manifest-invalid (target-missing))))
+         65]
+        [else
+         (let* ([tfields (cdr target)]
+                [want-mt (pack-field1 tfields 'machine-type)]
+                [want-chez (pack-field1 tfields 'chez-version)]
+                [want-skiff (pack-field1 tfields 'skiff-version)]
+                [want-compat (pack-field1 tfields 'skiff-compat)]
+                [rt (current-runtime)]
+                [actual-mt (machine-type)]
+                [actual-chez (chez-version-string)]
+                [skew-ok? (equal? (getenv "SKIFF_ALLOW_VERSION_SKEW") "1")]
+                [bad '()]
+                [mismatch! (lambda (what expected actual advice)
+                             (set! bad (cons (list what expected actual advice) bad)))])
+           (unless (eq? want-mt actual-mt)
+             (mismatch! 'machine-type want-mt actual-mt
+                        "wrong platform pack; fetch the build for this machine-type"))
+           (unless (equal? want-chez actual-chez)
+             (mismatch! 'chez-version want-chez actual-chez
+                        "install the matching runtime or re-pack the app"))
+           (cond
+             [(and want-skiff (string? want-skiff))
+              (if (eq? rt 'skiff)
+                  (let ([actual (runtime-version)])
+                    (unless (equal? actual want-skiff)
+                      (if skew-ok?
+                          (%pack-err (format "WARNING: skiff-version skew allowed by SKIFF_ALLOW_VERSION_SKEW=1 (pack ~a, runtime ~a)"
+                                             want-skiff actual))
+                          (mismatch! 'skiff-version want-skiff actual
+                                     "install the matching skiff runtime or re-pack the app"))))
+                  (mismatch! 'skiff-version want-skiff 'stock-chez
+                             "pack requires skiff, current runtime is stock Chez"))]
+             [(and want-compat (string? want-compat)
+                   (not (string=? want-compat ">=0.0.0")))
+              (if (eq? rt 'skiff)
+                  (let ([actual (runtime-version)])
+                    (unless (and actual (version-match? want-compat actual))
+                      (if skew-ok?
+                          (%pack-err (format "WARNING: skiff-version skew allowed by SKIFF_ALLOW_VERSION_SKEW=1 (pack compat ~a, runtime ~a)"
+                                             want-compat actual))
+                          (mismatch! 'skiff-version (string-append "compat " want-compat) actual
+                                     "install the matching skiff runtime or re-pack the app"))))
+                  (mismatch! 'skiff-version (string-append "compat " want-compat) 'stock-chez
+                             "pack requires skiff, current runtime is stock Chez"))]
+             [else #t])
+           (if (null? bad)
+               #f
+               (begin
+                 (%pack-err "pack target mismatch; refusing to load")
+                 (for-each
+                   (lambda (b)
+                     (%pack-err (format "  ~a: expected ~s, actual ~s~%    -> ~a"
+                                        (car b) (cadr b) (caddr b) (cadddr b))))
+                   (reverse bad))
+                 (%pack-err-sexp
+                   (cons 'chandler-pack-error
+                         (list (cons 'target-mismatch
+                                     (map (lambda (b)
+                                            (list (car b)
+                                                  (list 'expected (cadr b))
+                                                  (list 'actual (caddr b))))
+                                          (reverse bad))))))
+                 78)))])))
+
+  ;; verify-pack path [target?] → 退出码。顺序:format → 完整性 → --target
+  ;; (format 太新时清单结构不可信,先于一切;--target 是「这包能不能在本机跑」
+  ;; 的附加检查,只在完整性过关后有意义)。
+  (define (verify-pack path . maybe-target?)
+    (let ([target? (and (pair? maybe-target?) (car maybe-target?))])
+      (let* ([is-mf (string-suffix? "pack.manifest" path)]
+             [root  (if is-mf (parent-dir path) path)]
+             [mf    (if is-mf path (join-paths path "pack.manifest"))])
+        (unless (file-exists? mf)
+          (error 'verify-pack (format "pack.manifest not found at ~a" mf)))
+        (let* ([form  (call-with-input-file mf read)]
+               [fields (cdr form)]
+               [files (let ([c (assq 'files fields)]) (if c (cdr c) '()))])
+          (or (verify-pack-format! fields)
+              (let ([bad (verify-pack-integrity! root files)])
+                (cond
+                  [(> bad 0) 65]
+                  [target? (or (verify-pack-target! fields) 0)]
+                  [else 0])))))))
 
   (define (attr key e)
     (let ([c (assq key (cdr e))]) (and c (cadr c)))))
