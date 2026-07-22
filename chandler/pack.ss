@@ -506,6 +506,45 @@
   ;; §8 主入口
   ;; ═══════════════════════════════════════════════════════════════════
 
+  ;; 库名 (a b c) → 对象树里的相对路径 "a/b/c.so"
+  (define (entry-so-rel entry)
+    (string-append (string-join (map symbol->string entry) "/") ".so"))
+
+  ;; 顶层 umbrella 库 = 应用编译树根下的 <name>.so(排除子库目录里的)
+  (define (top-level-umbrellas bdir)
+    (if (file-directory? bdir)
+        (list-sort string<?
+          (map (lambda (f) (substring f 0 (- (string-length f) 3)))
+               (filter (lambda (f)
+                         (and (string-suffix? ".so" f)
+                              (not (file-directory? (join-paths bdir f)))))
+                       (dir-entries bdir))))
+        '()))
+
+  ;; 缺省入口库。manifest 的 `name` 是**包名**,不等于入口库名(skiff-demo 的包名
+  ;; 是 skiff-demo,入口库是 (mdserver))—— 所以只有 (<name>) 真的编出来了才用它;
+  ;; 否则看应用编译树里有没有**唯一**的顶层 umbrella,有就用它并说明;再不然就
+  ;; 列出候选让人显式选。绝不猜到一半打出个坏包。
+  ;; 只有 manifest 没声明 (app (entry …)) 时才走推断。
+  (define (infer-entry project name)
+    (let* ([bdir (join-paths project "_build" (current-machine-type))]
+           [named (string->symbol name)]
+           [ums  (top-level-umbrellas bdir)])
+      (cond
+        [(member name ums) (list named)]
+        [(= 1 (length ums))
+         (let ([e (string->symbol (car ums))])
+           (printf "pack: entry library (~a) inferred (the only one in ~a)~%" e bdir)
+           (printf "      declare it in manifest.ss to be explicit: (app (entry (~a)))~%" e)
+           (list e))]
+        [(null? ums)
+         (error 'pack
+                (format "no compiled library found in ~a -- run `bake build` first" bdir))]
+        [else
+         (error 'pack
+                (format "cannot tell which library is the entry point; pass --entry '(<lib>)'~%  candidates in ~a: ~a"
+                        bdir (string-join ums ", ")))])))
+
   ;; opts: (mode . modules|boot) (runtime . skiff|scheme|petite) (out . dir)
   ;;       (name . s) (version . s) (entry . lib-ref) (main . sym)
   (define (pack project opts)
@@ -514,8 +553,13 @@
            [name  (or (alist-ref opts 'name) (and mf (manifest-name mf))
                       (error 'pack "cannot determine app name (no manifest.ss; pass --name)"))]
            [version (or (alist-ref opts 'version) (and mf (manifest-version mf)) "0.0.0")]
-           [entry (or (alist-ref opts 'entry) (list (string->symbol name)))]
-           [mainp (or (alist-ref opts 'main) 'main)]
+           ;; 优先级:--entry > manifest 的 (app (entry …)) > 推断。
+           ;; 声明胜过推断 —— 一个要分发的应用,入口是它自己的属性,该写在 manifest 里。
+           [mapp  (and mf (manifest-app mf))]
+           [entry (or (alist-ref opts 'entry)
+                      (and mapp (app-entry mapp))
+                      (infer-entry project name))]
+           [mainp (or (alist-ref opts 'main) (and mapp (app-main mapp)) 'main)]
            [mode  (or (alist-ref opts 'mode) 'modules)]
            [rt    (or (alist-ref opts 'runtime) (default-runtime mf))]
            [out   (or (alist-ref opts 'out) "dist")]
@@ -540,6 +584,14 @@
         (let ([deps (project-obj-dir project)])
           (when (file-directory? deps) (copy-dep-trees! deps objdir locked)))
         (copy-obj-tree! (join-paths project "_build" mt) objdir)
+        ;; 入口库必须真的在包里 —— 否则打出的包一路正常,到启动 import 才报
+        ;; "library (x) not found"。这一步把那个失败提前到打包期。
+        (let ([e (join-paths objdir (entry-so-rel entry))])
+          (unless (file-exists? e)
+            (rm-rf root)
+            (error 'pack
+                   (format "entry library ~a has no compiled object at ~a~%  (pass --entry '(<lib>)', or run `bake build` if it is simply not built)"
+                           entry e))))
         ;; 2) resources/(约定名)
         (copy-resources! project root)
         ;; 3) 运行时 + boot + 启动器 + 清单

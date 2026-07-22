@@ -10,6 +10,7 @@
           manifest-chez manifest-skiff manifest-srcdir
           manifest-deps manifest-dev-deps manifest-native
           manifest-overrides manifest-scripts
+          manifest-app app? app-entry app-main
           dep? dep-name dep-source-kind dep-source-loc
           dep-pin-kind dep-pin-val dep-srcdir
           native? native-name native-source-kind native-source-loc
@@ -24,7 +25,14 @@
   ;; ── records ──
   (define-record-type manifest
     (fields format name version chez skiff srcdir
-            deps dev-deps native overrides scripts))
+            deps dev-deps native overrides scripts app))
+
+  ;; app:这个包是**可分发的应用**时声明入口(designs/09 §CLI)。
+  ;;   (app (entry (mdserver)) (main main))
+  ;; `name` 是**包名**,未必等于入口库名 —— skiff-demo 的包名是 skiff-demo,入口库
+  ;; 是 (mdserver)。声明了就不必每次 `chandler pack --entry …`,也不必靠推断。
+  (define-record-type app
+    (fields entry main))
 
   ;; dep:source-kind ∈ {git,path};pin-kind ∈ {tag,rev,branch,version,#f}
   (define-record-type dep
@@ -51,7 +59,18 @@
         (parse-deps (field-ref* body 'dev-deps))
         (map parse-native (field-ref* body 'native))
         (parse-overrides (field-ref* body 'overrides))
-        (field-ref* body 'scripts))))
+        (field-ref* body 'scripts)
+        (parse-app (field-ref* body 'app)))))
+
+  ;; (app (entry (a b)) (main main)) → app record;缺省 main = `main`
+  (define (parse-app body)
+    (and (pair? body)
+         (let ([entry (let ([c (assq 'entry body)]) (and c (cadr c)))]
+               [main  (let ([c (assq 'main body)]) (and c (cadr c)))])
+           (unless (and (pair? entry) (for-all symbol? entry))
+             (error 'parse-manifest
+                    "(app …) needs (entry (<lib> …)) naming the entry library" entry))
+           (make-app entry (or main 'main)))))
 
   ;; deps body = ((name source pin? opt*) ...)
   (define (parse-deps items)

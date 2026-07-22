@@ -150,6 +150,35 @@
         (assert-raises
           (lambda () (pack app '((name . "myapp") (version . "1.0") (runtime . guile)))))))
 
+    ;; ── 入口库:必须在**打包期**校验,不能等到启动 ──
+    ;; 曾经的 bug:`chandler pack` 把 manifest 的 `name`(包名)当入口库名,而 skiff-demo
+    ;; 的包名是 skiff-demo、入口库是 (mdserver) —— 打包"成功",跑起来才
+    ;; `library (skiff-demo) not found`。
+    (pack-wrong-entry-fails-at-pack-time
+      (let ([app (make-app '())])
+        (fake-build! app "myapp")
+        (assert-raises
+          (lambda () (pack app '((name . "myapp") (version . "1.0") (runtime . petite)
+                                 (entry . (nosuch))))))
+        ;; 半成品包不许留下
+        (assert-false (file-exists? (pack-out app "myapp" "1.0")))))
+
+    ;; 包名 ≠ 入口库名:编译树里只有一个顶层 umbrella 时按它推断
+    (pack-entry-inferred-when-name-differs
+      (let ([app (make-app '())])
+        (fake-build! app "notthename")
+        (pack-until-runtime app '((name . "myapp") (version . "1.0") (runtime . petite)))
+        (assert-true
+          (file-exists? (join-paths (pack-out app "myapp" "1.0") "lib" mt "notthename.so")))))
+
+    ;; 多个候选 → 不猜,列出来让人显式选
+    (pack-ambiguous-entry-refuses-to-guess
+      (let ([app (make-app '())])
+        (fake-build! app "one")
+        (fake-build! app "two")
+        (assert-raises
+          (lambda () (pack app '((name . "myapp") (version . "1.0") (runtime . petite)))))))
+
     ;; ── verify-pack:清单缺失即报错(完整路径由端到端覆盖)──
     (verify-pack-needs-a-manifest
       (assert-raises (lambda () (verify-pack (mktmp)))))))

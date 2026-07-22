@@ -76,7 +76,23 @@ chandler pack [--mode modules|boot] [--runtime skiff|scheme|petite]
 chandler verify-pack <dir|pack.manifest>
 ```
 
-缺省取自 `manifest.ss`:`name`/`version` 直接来;`--runtime` 由 [06](06-runtime-compat.md) 的运行时门推导(manifest 声明 `(skiff …)` → skiff);`--entry` 缺省 `(<name>)`;`--mode` 缺省 `modules`;`--out` 缺省 `dist`。
+缺省取自 `manifest.ss`:`name`/`version` 直接来;`--runtime` 由 [06](06-runtime-compat.md) 的运行时门推导(manifest 声明 `(skiff …)` → skiff);`--mode` 缺省 `modules`;`--out` 缺省 `dist`。
+
+**入口在 `manifest.ss` 里声明**,不靠推断:
+
+```scheme
+(app (entry (mdserver)) (main main))    ; main 缺省为 `main`
+```
+
+manifest 的 `name` 是**包名**,未必等于入口库名 —— skiff-demo 的包名是 `skiff-demo`,入口库却是 `(mdserver)`。一个要分发的应用,入口是它自己的属性,该写在自己的清单里。
+
+优先级 `--entry` > `(app (entry …))` > 推断。**推断只是没声明时的兜底**:
+
+1. `(<name>)` 在应用编译树里真的编出来了 → 用它;
+2. 否则编译树根下**恰好一个**顶层 umbrella → 用它,并提示写进 manifest;
+3. 一个都没有 → 报「先跑 `bake build`」;多个 → **不猜**,列出候选要求显式 `--entry`。
+
+**并且入口库的对象必须真的进了包**——组装后校验 `lib/<mt>/<entry-path>.so` 存在,不存在就删掉半成品包并报错。这条是回归钉:早期版本把包名当入口库名,打包"成功"、跑起来才 `library (skiff-demo) not found`。**打包期能发现的错,绝不留到启动期。**
 
 **前置校验**(沿用 [07 §4](07-bake-integration.md)):lock 每项在 `lib/<mt>/` 有产物,缺 → 报「先跑 `chandler build`」;应用自身 `_build/<mt>/` 缺 → 报「先跑 `bake build`」。**pack 只组装,不构建** —— native 尤其无法在此现编。
 
@@ -101,6 +117,8 @@ boot 模式要「生成入口 stub → `compile-file` → 对整棵 `.so` 闭包
 - `(resources "resources")` **删除** —— 名字约定死,存在与否看包里有没有那个目录。
 - `(native …)` 段改由 **lock 的 `(natives)`** 生成而非扫目录 —— 精确,且缺项能报出是哪个依赖缺。
 
+> 运行时门顺带解决一件事:应用若真需要 skiff,`manifest.ss` 就该声明 `(skiff ">=…")`。不声明则 `--runtime` 推成 stock petite,打出的包一跑就 `library (skiff) not found` —— 这不是 pack 的 bug,是 manifest 漏了声明,而运行时门本来就是干这个的。
+
 ## 实现顺序
 
 | # | 内容 |
@@ -109,8 +127,8 @@ boot 模式要「生成入口 stub → `compile-file` → 对整棵 `.so` 闭包
 | K1 ✅ | modules 模式 + skiff 运行时(主力路径):对象树搬运 · 运行时/boot 捆绑 · sh 启动器 · `pack.manifest` |
 | K2 ✅ | stock scheme/petite 运行时:`bootstrap.ss` 生成(包根从自身路径推导)· 绝对 `-b` 链 |
 | K3 ✅ | `.ps1` 启动器 + `chandler verify-pack` |
-| K4 | boot 模式(排单 bake `boot-task`,含 bake 侧 `(bases …)` 子句) |
-| K5 | ~~`resources/`~~ ✅ + ~~env 收敛为单个 `APP_ROOT`~~ ✅(bake 侧已同步);待做:`chandler-setup.ss` 在 dev 态也设 `APP_ROOT`,使应用四态读同一个东西 |
-| K6 | 从 bake 删除 `pack.ss` / `pack-task` / V 系列 / P9–P10 / Z7 · Z7b,designs/21 §二 改为「已移交」 |
+| ~~K4~~ | **作废** —— boot 模式已随 pack 一并取消(不是移交):`make-boot-file` 只拼 Chez fasl,C 库进不去 `.boot`,带 native 的 boot 包照样要在旁边摆 native 树;实测启动/体积与 modules 无差;且从未兑现设计表记的跨模块 WPO。故 bake 侧那个 `(bases …)` 子句也不必加了。 |
+| K5 | ~~`resources/`~~ ✅ + ~~env 收敛为单个 `APP_ROOT`~~ ✅(bake 侧已同步);+ `chandler-setup.ss` 在 dev 态也设 `APP_ROOT`(已有值不覆盖)✅ —— 应用四态读同一个东西 |
+| K6 ✅ | 已从 bake 删除 `pack.ss` / `pack-task` / `--verify-pack` / `tests/v-pack/` / V 系列 / P9–P10 / Z7 · Z7b;`bake init` 模板与 `--help` 改指向 `chandler pack`;bake designs/21 §二 改为移交记录 |
 
 验收对齐 bake 现有的 V1–V23(71 断言)+ Z7/Z7b,移植进 `tests/`;新增闭包不完整时的报错路径。

@@ -116,3 +116,17 @@ overrides 只在**根项目** manifest 生效(传递依赖的 overrides 忽略�
 
 - [03-resolution.md](03-resolution.md) — lock 如何生成(解析算法)
 - [07-bake-integration.md](07-bake-integration.md) — `natives` 快照如何被 bake 消费
+
+
+## `(app …)`:可分发应用的入口(2026-07-22,designs/09)
+
+```scheme
+(app (entry (mdserver))    ; 入口库名;必填(声明了 app 就必须给)
+     (main main))          ; 入口过程,缺省 `main`
+```
+
+包**是不是应用**由有没有这一段决定;库包不写。`chandler pack` 据此确定入口,无需每次传 `--entry`。
+
+**为什么不复用 `name`**:`name` 是**包名**,未必等于入口库名 —— skiff-demo 的包名是 `skiff-demo`,入口库是 `(mdserver)`。早期把两者当同一个,结果是打包"成功"、跑起来才 `library (skiff-demo) not found`(pack 现已在打包期硬校验入口对象,见 [09](09-pack.md))。
+
+`main` 的契约见 [09](09-pack.md):stock 启动器调 `(main <args-list>)`,`skiff --app` 零参调 `(main)`(args 走 `command-line-arguments`);两者通吃的库导出 case-lambda。

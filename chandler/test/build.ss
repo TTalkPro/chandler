@@ -7,6 +7,7 @@
           (chandler test harness)
           (chandler test fixtures)
           (chandler fetch)
+          (chandler fs)
           (chandler install)
           (chandler build))
 
@@ -40,6 +41,26 @@
               (let ([l (read-file log)])
                 (assert-true (substr? l "-f"))
                 (assert-true (substr? l "library-task"))))))))
+
+    ;; 编的是依赖树里的**每一个库**,不只 umbrella 闭包。
+    ;; 回归钉:曾经只发 (library-task 'c-<dep> '(<dep>)),于是 umbrella 从不 import 的
+    ;; 子库(chez-markding 的 extensions/ 全是选择性启用的)一个都没编 —— 装出来的
+    ;; lib/<mt>/ 残缺(实测 107 源码库只出 49 个对象),而消费方的 bake 会退回从
+    ;; lib/src/ 现编进应用自己的 _build/,把同一个依赖劈成两棵对象树。
+    (build-enumerates-every-library-not-just-the-umbrella
+      (let ([tree (mktmp)])
+        (write-file (string-append tree "/b.ss")
+                    "(library (b) (export b-ok) (import (chezscheme)) (define b-ok #t))")
+        ;; umbrella 不 import 它 —— 只有消费方会直接 import
+        (ensure-dir (string-append tree "/b"))
+        (write-file (string-append tree "/b/opt.sls")
+                    "(library (b opt) (export opt-ok) (import (chezscheme)) (define opt-ok #t))")
+        ;; 不是库的文件(测试脚本)必须被跳过,否则 bake 会当 program 编
+        (write-file (string-append tree "/b/run-tests.ss") "(display \"not a library\")(newline)")
+        (let ([files (tree-library-files tree "b")])
+          (assert-true  (find (lambda (f) (substr? f "b/opt.sls")) files))
+          (assert-true  (find (lambda (f) (substr? f "b.ss")) files))
+          (assert-false (find (lambda (f) (substr? f "run-tests.ss")) files)))))
 
     ;; 有 native 的依赖:无授权 → 报错(pending)
     (build-native-needs-auth
