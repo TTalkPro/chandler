@@ -1,10 +1,12 @@
 #!chezscheme
-;;; chandler/install.ss --- vendor/ 物化 + bake install → 扁平 lib/ + 生成 setup(designs/01)
+;;; chandler/install.ss --- vendor/ 物化 + bake install → lib/{src,<mt>} + 生成 setup(designs/01)
 ;;;
-;;; 依赖模型(Bundler 式):
+;;; 依赖模型(Bundler 式,2026-07-22 对齐 bake install 的 src/mt 拆分):
 ;;;   git 依赖整仓 checkout → vendor/<name>/;再由 **bake install** 从 vendor 装进 lib/,
-;;;   lib/ 成为一个扁平 Chez 库目录(结构同 ~/.local/share/chez/lib:lib/<name>.ss、
-;;;   lib/<name>/…、lib/native/<mt>/…)。故库搜索只需挂 lib/ 一个目录。
+;;;   lib/ 成为一个 Chez 库目录**前缀**,内含 src/mt 拆分(结构同 ~/.local/share/chez):
+;;;     lib/src/          ← 源码(umbrella <name>.ss + <name>/… 各依赖并存)
+;;;     lib/<mt>/         ← 平台绑定产物(编译 .so + native/<lib>/…),chandler build 后填充
+;;;   故库搜索挂**一对** (lib/src . lib/<mt>);消费方一条 pair 同时解析源码与对象。
 ;;;   path 依赖不进 vendor/lib,activate/run 时直挂其源目录(live)。
 ;;;   install 生成 chandler-setup.ss:app 主脚本顶部 (load) 它即自动激活(每次执行)。
 ;;;   install 依赖 bake 可用。
@@ -13,7 +15,8 @@
   (export install verify sync-status list-deps
           vendor-dir lib-dir project-lock-path project-manifest-path
           library-search-dirs native-load-paths write-setup-file
-          project-libdir global-libdir path-dep-source-dirs
+          project-libdir project-lib-pair project-obj-dir
+          global-prefix global-libdir path-dep-source-dirs
           project-mode? resolved-libdirs)
   (import (chezscheme)
           (chandler util)
@@ -30,7 +33,10 @@
   (define (project-lock-path root) (join-paths root "manifest.lock"))
   (define (vendor-dir root name) (join-paths (join-paths root "vendor") (symbol->string name)))
   (define (lib-dir root name) (vendor-dir root name))   ; 兼容:依赖源码树现居 vendor/
-  (define (project-libdir root) (join-paths root "lib"))
+  ;; ── 项目本地安装前缀 lib/ 的 src/mt 拆分 ──
+  (define (project-libdir root) (join-paths root "lib"))                 ; 安装前缀(base)
+  (define (project-lib-pair root) (split-pair (project-libdir root)))    ; (lib/src . lib/<mt>)
+  (define (project-obj-dir root) (join-paths (project-libdir root) (current-machine-type))) ; lib/<mt>
   (define (setup-path root) (join-paths root "chandler-setup.ss"))
   (define (bake-command) (or (getenv* "CHANDLER_BAKE") "bake"))
 
@@ -52,12 +58,14 @@
           ;; 1) git 依赖整仓 → vendor/<name>
           (for-each (lambda (d) (sync-dep root d opts)) git-deps)
           (clean-orphans root lk opts)
-          ;; 2) bake install:从 vendor 装进扁平 lib/(先清空 lib/ 重建)
+          ;; 2) bake install:从 vendor 装进 lib/{src,<mt>}(先清空 lib/ 重建)。
+          ;;    install 只发源码(vendor 是干净 checkout,无 _build);编译产物由
+          ;;    `chandler build` 补进 lib/<mt>/。
           (rm-rf (project-libdir root))
           (bake-install-deps root git-deps)
           ;; 3) 生成 chandler-setup.ss(一行激活文件)
           (write-setup-file root)
-          (printf "install 完成:~a 个依赖 → vendor/,已 bake install 到 lib/;生成 chandler-setup.ss~%"
+          (printf "install 完成:~a 个依赖 → vendor/,已 bake install 到 lib/{src,<mt>};生成 chandler-setup.ss~%"
                   (length git-deps))
           0))))
 
@@ -96,7 +104,7 @@
          (unless (has-rev? url rev) (update-mirror url))
          (checkout-detach dir rev)])))
 
-  ;; ── bake install:生成一份含所有 git 依赖 install-task 的 recipe,一次 bake 装进 lib/ ──
+  ;; ── bake install:生成一份含所有 git 依赖 install-task 的 recipe,一次 bake 装进 lib/{src,<mt>} ──
   (define (bake-install-deps root git-deps)
     (when (pair? git-deps)
       (let ([recipe (join-paths root ".chandler-install.ss")])
@@ -160,9 +168,9 @@
                    (fprintf (current-error-port) "有改动:vendor/~a~%" (locked-dep-name d))]))))
           (lock-deps lk))
         (unless (or (null? (filter (lambda (d) (eq? 'git (locked-dep-source-kind d))) (lock-deps lk)))
-                    (file-directory? (project-libdir root)))
+                    (file-directory? (car (project-lib-pair root))))   ; lib/src 存在
           (set! ok #f)
-          (fprintf (current-error-port) "缺失:lib/(跑 chandler install 重建)~%"))
+          (fprintf (current-error-port) "缺失:lib/src(跑 chandler install 重建)~%"))
         ok)))
 
   ;; sync-status:list/tree 用
@@ -177,10 +185,13 @@
 
   (define (list-deps root) (sync-status root))
 
-  ;; ── 库搜索路径(新模型:扁平 lib/ 一个目录 + path 依赖源目录)──
+  ;; ── 库搜索路径(src/mt 拆分:lib/ 一对 (src . obj) + path 依赖源目录)──
+  ;; 全局安装前缀(bake user target 落点):~/.local/share/chez;下含 src/ 与 <mt>/。
+  (define (global-prefix) (string-append (home-dir) "/.local/share/chez"))
+  ;; 全局库目录条目:一对 (~/.local/share/chez/src . ~/.local/share/chez/<mt>)。
   (define global-libdir
     (case-lambda
-      [() (string-append (home-dir) "/.local/share/chez/lib")]))
+      [() (split-pair (global-prefix))]))
 
   ;; path 依赖的源目录(相对 root 拼成路径),供 live 挂载
   (define (path-dep-source-dirs root)
@@ -192,10 +203,10 @@
                          (append (manifest-deps mf) (manifest-dev-deps mf)))))
           '())))
 
-  ;; run/exec/activate 用:lib/(若在)+ path 依赖源目录
+  ;; run/exec/activate 用:lib/ 对 (src . obj)(若 lib/ 在)+ path 依赖源目录
   (define (library-search-dirs root)
     (append
-      (if (file-directory? (project-libdir root)) (list (project-libdir root)) '())
+      (if (file-directory? (project-libdir root)) (list (project-lib-pair root)) '())
       (path-dep-source-dirs root)))
 
   ;; ── 统一库搜索规则(run / exec / repl / activate 共用)──
@@ -217,49 +228,82 @@
     (let ([mp (project-manifest-path root)])
       (if (file-exists? mp) (manifest-srcdir (read-manifest mp)) ".")))
 
-  ;; native .so:扁平 lib/native/<mt>/*.so
+  ;; native .so:src/mt 拆分下,native 收进所属库 → lib/<mt>/<lib>/native/*.so。
+  ;; 扫描对象树 lib/<mt>/,取所有位于 native/ 子目录、扩展名匹配的动态库。
   (define (native-load-paths root)
-    (let ([nd (native-dir (project-libdir root))])   ; lib/native/<mt>
-      (if (file-directory? nd)
-          (filter (lambda (f) (string-suffix? (string-append "." (so-ext)) f))
-                  (files-under nd))
-          '())))
+    (native-sos-under (project-obj-dir root)))
 
-  ;; ── 生成 chandler-setup.ss(位置无关:依入口脚本目录解析 root)──
+  ;; 扫 obj 树:凡父目录名为 "native" 且扩展名匹配的文件即 native 动态库
+  ;; (与该库的编译 Scheme .so 区分:后者不在 native/ 子目录里)。
+  (define (native-sos-under obj-dir)
+    (if (file-directory? obj-dir)
+        (filter (lambda (f)
+                  (and (native-so? f)
+                       (string=? "native" (base-name (parent-dir f)))))
+                (files-under obj-dir))
+        '()))
+
+  ;; ── 生成 chandler-setup.ss(位置无关:依入口脚本目录解析 root;src/mt 拆分)──
+  ;;   纯 Chez(无 (chandler) 依赖):挂 lib/ 一对(源.对象)+ path 源目录 + 全局兜底一对,
+  ;;   并**运行时扫描** lib/<mt>/**/native/ 载动态库(故 install 后再 build 亦生效)。
   (define (write-setup-file root)
-    (let* ([path-rels (relativize root (path-dep-source-dirs root))]
-           [native-rels (relativize root (native-load-paths root))])
+    (let ([path-rels (relativize root (path-dep-source-dirs root))])
       (call-with-output-file (setup-path root)
-        (lambda (p) (emit-setup p path-rels native-rels))
+        (lambda (p) (emit-setup p path-rels))
         'truncate)))
 
   (define (relativize root paths)
     (let ([pre (string-append root "/")])
       (map (lambda (x) (strip-prefix x pre)) paths)))
 
-  (define (emit-setup p path-rels native-rels)
+  (define (emit-setup p path-rels)
     (put-string p ";;; chandler-setup.ss --- 由 chandler 生成;于主脚本顶部 (load) 它(勿手改)。\n")
     (put-string p ";;; 依入口脚本(与本文件同目录)位置解析项目根,故项目可整体移动、任意 cwd 皆可。\n")
+    (put-string p ";;; 库搜索用 Chez (源目录 . 对象目录) 对:lib/src::lib/<mt>(src/mt 拆分)。\n")
     (put-string p ";;; 主脚本顶部推荐写(位置无关加载):\n")
     (put-string p ";;;   (load (string-append (let ([d (path-parent (car (command-line)))])\n")
     (put-string p ";;;                          (if (string=? d \"\") \".\" d)) \"/chandler-setup.ss\"))\n")
     (put-string p ";;; 若总从项目根运行,简写即可:  (load \"chandler-setup.ss\")\n")
-    (put-string p "(let* ([argv (command-line)]\n")
-    (put-string p "       [script (if (pair? argv) (car argv) \".\")]\n")
-    (put-string p "       [root (let loop ([i (- (string-length script) 1)])\n")
-    (put-string p "               (cond [(< i 0) \".\"]\n")
-    (put-string p "                     [(char=? #\\/ (string-ref script i)) (substring script 0 i)]\n")
-    (put-string p "                     [else (loop (- i 1))]))]\n")
-    (put-string p "       [J (lambda (rel) (string-append root \"/\" rel))]\n")
-    (put-string p "       [global (string-append (or (getenv \"HOME\") \".\") \"/.local/share/chez/lib\")])\n")
-    (put-string p "  (library-directories\n")
-    (put-string p "    (append (map J '")
-    (write (cons "lib" path-rels) p)
-    (put-string p ") (list global) (library-directories)))\n")
-    (put-string p "  (for-each (lambda (rel) (let ([so (J rel)]) (when (file-exists? so) (load-shared-object so))))\n")
-    (put-string p "    '")
-    (write native-rels p)
-    (put-string p "))\n"))
+    (pretty-print (setup-datum path-rels) p))
+
+  ;; 构造 setup 主体为数据(避免手工字符串转义);machine-type 于**加载期**求值,
+  ;; 故项目跨机亦对(对象目录随 mt 走)。
+  (define (setup-datum path-rels)
+    `(let* ([argv (command-line)]
+            [script (if (pair? argv) (car argv) ".")]
+            [root (let loop ([i (- (string-length script) 1)])
+                    (cond [(< i 0) "."]
+                          [(char=? #\/ (string-ref script i)) (substring script 0 i)]
+                          [else (loop (- i 1))]))]
+            [mt (symbol->string (machine-type))]
+            [J (lambda (rel) (string-append root "/" rel))]
+            [gpfx (string-append (or (getenv "HOME") ".") "/.local/share/chez")]
+            [bn (lambda (d)
+                  (let loop ([i (- (string-length d) 1)])
+                    (cond [(< i 0) d]
+                          [(char=? #\/ (string-ref d i)) (substring d (+ i 1) (string-length d))]
+                          [else (loop (- i 1))])))]
+            [ends? (lambda (s suf)
+                     (let ([ls (string-length s)] [lu (string-length suf)])
+                       (and (>= ls lu) (string=? suf (substring s (- ls lu) ls)))))]
+            [nativeso? (lambda (q) (or (ends? q ".so") (ends? q ".dylib") (ends? q ".dll")))])
+       ;; 库搜索:项目 lib/ 一对 + path 依赖源目录 + 全局兜底一对(项目最高优先)
+       (library-directories
+         (append (list (cons (J "lib/src") (J (string-append "lib/" mt))))
+                 (map J ',path-rels)
+                 (list (cons (string-append gpfx "/src") (string-append gpfx "/" mt)))
+                 (library-directories)))
+       ;; native:扫 lib/<mt>/**/native/*.{so,dylib,dll} 逐个 load-shared-object
+       (let walk ([dir (J (string-append "lib/" mt))])
+         (when (file-directory? dir)
+           (for-each
+             (lambda (e)
+               (unless (or (string=? e ".") (string=? e ".."))
+                 (let ([q (string-append dir "/" e)])
+                   (cond [(file-directory? q) (walk q)]
+                         [(and (string=? "native" (bn dir)) (nativeso? q))
+                          (load-shared-object q)]))))
+             (directory-list dir))))))
 
   ;; ── 工具 ──
   (define (opt opts k default) (alist-ref opts k default))

@@ -27,9 +27,9 @@
           ;; git 依赖 checkout 到 vendor/
           (assert-true (file-exists? (string-append (vendor-dir app 'a) "/a.ss")))
           (assert-true (file-exists? (string-append (vendor-dir app 'b) "/b.ss")))
-          ;; bake install 到扁平 lib/(结构同全局 lib dir)
-          (assert-true (file-exists? (string-append (project-libdir app) "/a.ss")))
-          (assert-true (file-exists? (string-append (project-libdir app) "/b.ss")))
+          ;; bake install 到 lib/{src,<mt>}:源码落 lib/src/(结构同全局前缀 <prefix>/src)
+          (assert-true (file-exists? (string-append (car (project-lib-pair app)) "/a.ss")))
+          (assert-true (file-exists? (string-append (car (project-lib-pair app)) "/b.ss")))
           ;; 生成 setup + verify 通过
           (assert-true (file-exists? (join-paths app "chandler-setup.ss")))
           (assert-true (verify app)))))
@@ -45,7 +45,7 @@
             (assert-true (verify app))))))
 
     (activate-and-import
-      ;; 挂扁平 lib/(一个目录)即可 import 所有依赖
+      ;; 挂 lib/ 一对 (src::obj) 即可 import 所有依赖(源码在 lib/src,Chez 按需编译)
       (parameterize ([cache-root (mktmp)])
         (let* ([b (make-lib-repo "b" '())]
                [app (make-app (list (cons 'b b)))])
@@ -53,7 +53,8 @@
           (let ([script (string-append app "/probe.ss")])
             (write-file script "(import (b)) (display b-ok)")
             (let ([r (run-capture "scheme"
-                       (list "-q" "--libdirs" (project-libdir app) "--script" script))])
+                       (list "-q" "--libdirs" (libdirs->arg (list (project-lib-pair app)))
+                             "--script" script))])
               (assert-string= "#t" (trim (proc-result-out r))))))))
 
     (activate-and-import-via-setup
