@@ -133,11 +133,19 @@ install.sh                  薄壳:运行时发现 → chandler install-self
   - **run / exec / repl / activate 库搜索规则统一**(install 的 `resolved-libdirs` / `project-mode?`):项目(lock 有依赖)= `lib/` + path 源目录 + 项目库根 + 全局兜底(项目最高优先);非项目 = 全局。
   - `verify` 改查 vendor/ rev + lib/ 存在;`activate` 挂扁平 lib/。测试全改;`scheme`/`petite`/`skiff` 三运行时 132/132。
 
+- [x] **对齐 bake install 的 src/mt 拆分(2026-07-22)**:bake install 落点由扁平 `lib/` 改为 **src/mt 拆分**——源码 → `<prefix>/src/`、平台绑定产物(编译 `.so` + native)整棵 `_build/<mt>/` → `<prefix>/<mt>/`;native 收进所属库 `<prefix>/<mt>/<lib>/native/`。chandler 全线跟进:
+  - **消费模型改「一对」**:库搜索条目可为 Chez 库目录**对** `(源 . 对象)`;`(chandler layout)` 新增 `split-pair`/`entry->arg`/`libdirs->arg`(pair → `src::obj`)/`native-so?`/`lib-native-*`。run/exec/repl/activate/setup 统一用「条目」(pair 或字符串)。
+  - **项目本地** `lib/` 成 src/mt 前缀:`install` 装进 `lib/{src,<mt>}`(只发源码),挂一对 `lib/src::lib/<mt>`;`native-load-paths` 改扫 `lib/<mt>/**/native/`;`chandler-setup.ss` 改挂 pair + **运行时扫描** native(故 install 后再 build 亦生效)。
+  - **`chandler build` 重构为驱动真实 bake**:bake 无 `compile-tree`/`native` 子命令——改为于项目根生成 recipe(`define-lib-roots "lib/src"` + 逐依赖 `library-task` + 授权的 `native-task (lib …)`),跑 `bake -f … build-all`,再拷 `_build/<mt>/` → `lib/<mt>/`。见 [07](designs/07-bake-integration.md)。
+  - **全局注册表迁 src/mt**([05](designs/05-install-registry.md)):`install --global` 落 `<prefix>/{src,<mt>}`(源 → `src/`、`_build/<mt>/` → `<mt>/`),注册表 `<prefix>/.chandler/registry/`,与 bake install 同一全局前缀。默认前缀 `~/.local/share/chez`(对齐 bake,去 `/lib` 去 XDG)。
+  - **自安装 + 启动器**:落 `<prefix>/{src,<mt>}`,启动器挂 `<prefix>/src::<prefix>/<mt>` 跑 `<prefix>/src/chandler/cli/main.sps`;`recipe.ss` 的 install-task 加 `(needs build)`(bake 恒装编译内容)。
+  - **验证**:全套 **133 用例三运行时(scheme/petite/skiff)全绿**;真实 bake 端到端(纯 Scheme 跨依赖 import + native `--allow-build`)跑通:`install → build → run` 用编译产物解析,native 经 setup 扫描自载。
+
 ## 进度
 
 **全部 11 个阶段(0–10)完成,M1–M4 全部达成。** 环境:Chez 10.4.1 / ta6le。
 
-- 测试:`tests/run-tests.sps` **132 用例全绿**(17 个 suite:util/fs/sexp/layout/version/manifest/lock/proc/fetch/resolve/install/activate/cli/registry/build/selfinstall)。**`scheme`、`petite`、已部署的 `skiff` 三运行时均 132/132**——chandler 自身即跑在 skiff 上(启动器能力探测通过后优先 skiff)。
+- 测试:`tests/run-tests.sps` **133 用例全绿**(16 个 suite:util/fs/sexp/layout/version/manifest/lock/proc/fetch/resolve/install/activate/cli/registry/build/selfinstall)。**`scheme`、`petite`、已部署的 `skiff` 三运行时均 133/133**——chandler 自身即跑在 skiff 上(启动器能力探测通过后优先 skiff)。src/mt 拆分对齐见本节顶部 2026-07-22 条目。
 - **skiff 端到端验证**:skiff 应用(manifest 声明 `(skiff …)`)经 chandler-on-skiff 走 `init→add→install→verify→run` 全通;`chandler run` 依 manifest 自动选运行时(skiff-only→skiff、chez→chez),应用运行期自证落在正确运行时。
 - 端到端验证:`init→add→install→verify→list→tree→run→exec` 经二进制跑通;`(activate)` 真实挂载并 import 依赖;全局 `install/uninstall/list/doctor`;`build` 排单经 mock bake + 授权哈希绑定;`install-self` 装 `~/.local` + 自卸载自洽(启动器 skiff 优先运行时发现)。
 - 实现的库:`(chandler)` umbrella + 底座 `util/fs/hash/proc` + `sexp/layout/version/manifest/lock/fetch/resolve/install/registry/runtime/activate/build/cli.{args,commands,main,selfinstall}`;测试夹具 `(chandler test fixtures)`。

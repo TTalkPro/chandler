@@ -10,10 +10,10 @@
 ## 需求回顾
 
 1. 基于 git,类似 rebar3。
-2. 可安装到:
-   - `/usr/local/share/chez/lib`(系统级,需 root)
-   - `~/.local/share/chez/lib`(用户级)
-   - 视情况直接装进项目自己的 lib 目录
+2. 可安装到(2026-07-22 起为 **src/mt 拆分**前缀:源 → `<prefix>/src/`、平台产物 → `<prefix>/<mt>/`,消费方挂一对 `<prefix>/src::<prefix>/<mt>`):
+   - `/usr/local/share/chez`(系统级,需 root)
+   - `~/.local/share/chez`(用户级)
+   - 视情况直接装进项目自己的 `lib/`(同样 src/mt 拆分)
 3. 若下载的项目带 Makefile,则执行 Makefile,并且能通过环境变量替换目标路径。
 
 ## 名字
@@ -99,7 +99,7 @@ git-first 下**首要 pin 手段是 git 的 `tag`/`rev`/`branch`**;版本区间�
 
 ### 机制三件套
 
-1. **`(chandler)` 库全局预装**(用户级 `~/.local/share/chez/lib`)——类比"rubygems 预装",保证 `(import (chandler))` 永远可解析,解决"要用 Chandler 却得先装 Chandler"的鸡生蛋。
+1. **`(chandler)` 库全局预装**(用户级前缀 `~/.local/share/chez`,src/mt 拆分)——类比"rubygems 预装",保证 `(import (chandler))` 永远可解析,解决"要用 Chandler 却得先装 Chandler"的鸡生蛋。
 2. **`(activate)`** 读 `./manifest.lock`,做两件事:(a) 把 `./lib` 下每个依赖的库根 **prepend 到 `(library-directories)`**;(b) **一次性自动加载所有依赖声明的 native `.so`**(见下)。
 3. **native 由 activate 统一加载,不是每个 lib 自己 load**。理由:库不该知道自己的 `.so` 装在哪——那是 machine-type/安装布局的事,只有 Chandler 知道。所以各依赖在其 `manifest.ss` 的 `native` 字段**声明**要哪些原生库,`activate` 按依赖序把它们全部 `load-shared-object`;之后**任何** lib 的 `foreign-procedure` 都能解析到符号(Chez 的 `foreign-procedure` 对所有已载入 shared object 全局查找)。`(load-native …)` 仅作**边缘/显式控制**的公开函数保留(如动态加载未声明的库),常规路径无需调用。
 
@@ -212,7 +212,7 @@ Chandler 与它们的差异点:**git-first + Makefile 感知 + 可装系统全�
 ## 实现难点与缺陷
 
 ### 1. 全局安装 vs rebar3 模型 —— 最大的设计张力
-rebar3 的精髓恰恰是**不装全局**:每个项目有独立 `_build/`,依赖隔离、版本各管各。而"装进 `/usr/local/share/chez/lib` 或 `~/.local/share/chez/lib`"是**全局共享**,方向相反。后果:
+rebar3 的精髓恰恰是**不装全局**:每个项目有独立 `_build/`,依赖隔离、版本各管各。而"装进 `/usr/local/share/chez` 或 `~/.local/share/chez`"是**全局共享**,方向相反。后果:
 
 - 项目 A 要 `foo@1.2`、项目 B 要 `foo@2.0`,全局只能一份 → **版本冲突无解**。
 - 卸载困难:文件散进共享目录,没有"已安装文件清单"就清不干净。

@@ -50,18 +50,19 @@ myproj/                        ← 仓库根 = 搜索根(加进 CHEZSCHEMELIBDIR
 bake 承担 chez-markding 里 `Makefile` 的角色并泛化,处理**本项目自身**的构建与安装(依赖获取归 Chandler):
 
 - **`bake`(build,默认)**:遍历 `<name>.ss` + `<name>/**/*.ss`,`compile-library` 逐个出 `.so`,编译时 `CHEZSCHEMELIBDIRS` 含仓库根;产物按 `build/<machine-type>/` 隔离(见 bake 文档难点 5)。
-- **`bake install`**:把 `<name>.ss` + `<name>/` 树 + `native/<mt>/*.so` 复制到目标库目录,**保持"仓库根=搜索根"结构**:
-  - 用户级 `~/.local/share/chez/lib/`(默认)→ 落 `<libdir>/<name>.ss` 与 `<libdir>/<name>/`
-  - 系统级 `/usr/local/share/chez/lib/`(`bake install --global`,需 root)
+- **`bake install`**(> **2026-07-22 src/mt 分裂**):把源码(`<name>.ss` + `<name>/` 树)与平台绑定产物(编译 `.so` + native,即 `_build/<mt>/` 整棵)**分裂**落到**前缀**下的 `src/` 与 `<mt>/` 两支,源侧仍**保持"仓库根=搜索根"结构**:
+  - 用户级 `~/.local/share/chez`(默认)→ 源→`<prefix>/src/<name>.ss` 与 `<prefix>/src/<name>/`;编译 `.so` + native→`<prefix>/<mt>/`,native 嵌于归属库下 `<prefix>/<mt>/<lib>/native/`
+  - 系统级 `/usr/local/share/chez`(`bake install --global`,需 root)同构
+  - 消费方挂**一对** `<prefix>/src::<prefix>/<mt>`,源码与产物同时可解析
   - 记录**已装文件清单**以支持干净卸载(见 Chandler 难点 1)。
-  - 发源码还是带 `.so` 取决于 ABI 取舍(bake 文档难点 4);默认发源码,消费方首次编译。
+  - **现总是同时发**源码与编译产物(src/mt 分裂),不再"发源码还是带 `.so`"二选一。
 - **`bake test` / `bake clean`**:同 chez-markding Makefile(跑 `tests/`、删 `.so`)。
 
 详见 **bake 项目**(独立仓库)。
 
 ## Chandler:消费(与本规范咬合)
 
-因为"搜索根 = 仓库根",[Chandler](chez-chandler-git-lib-manager-design.md) 把依赖**整仓 checkout** 到 `lib/<name>/`,`activate` 把 **`lib/<name>/` 本身**(即 `srcdir "."`,本规范的默认)prepend 到 `library-directories`,`(import (<name> ...))` 即通。`native/<mt>/*.so` 由 `activate` **统一自动加载**(读各依赖 `manifest.ss` 的 `native` 声明,一次性 `load-shared-object`),库自身只写 `foreign-procedure`,不必各自 load。
+因为"搜索根 = 仓库根"(在 src 侧成立),[Chandler](chez-chandler-git-lib-manager-design.md) 走 Bundler 模型:把依赖**整仓 checkout** 到 `vendor/<name>/`,再 `bake install` 进项目本地的 `lib/{src,<mt>}`,把**一对** `lib/src::lib/<mt>` prepend 到 `library-directories`(源树的根仍是 src 侧的搜索根),`(import (<name> ...))` 即通。native 由扫描 `lib/<mt>/**/native/` **统一自动加载**(一次性 `load-shared-object`),库自身只写 `foreign-procedure`,不必各自 load。
 
 > `manifest.ss` 的 `srcdir` 默认 `"."`(本规范:搜索根=仓库根)。仅当某上游库把库根放在 `src/` 等子目录(不遵循本规范)时,才需为它显式声明 `srcdir "src"`。
 
