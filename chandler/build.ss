@@ -1,8 +1,16 @@
 #!chezscheme
-;;; chandler/build.ss --- 排单 → bake(designs/07 §2-3, 08 §3)
+;;; chandler/build.ss --- 排单 → 真实 bake(designs/07 §2-3, 08 §3;2026-07-22 对齐 bake 能力)
 ;;;
-;;; 职责分工:chandler 排单(读 lock、定拓扑序、授权),bake 执行(compile-tree / native)。
+;;; 职责分工:chandler 排单(读 lock、授权、生成 recipe),bake 执行(library-task / native-task)。
 ;;; chandler 不编译、不 import bake;只子进程调 `bake`(命令由 CHANDLER_BAKE 覆盖,便于 mock)。
+;;;
+;;; **协作面对齐真实 bake**(bake 无 compile-tree/native 子命令,只有 recipe 任务):
+;;;   install 已把各依赖源码摊平进 lib/src/;build 于**项目根**生成一份 .chandler-build.ss:
+;;;     (define-lib-roots "lib/src")            ← 单根即含全部依赖源,跨依赖 import 自然解析
+;;;     (library-task 'c-<dep> '(<dep>)) …      ← 逐依赖编译(bake DAG 自排依赖序)
+;;;     (native-task '<soname> (lib <dep>) (dir "vendor/<dep>/native/<soname>") (build <后端>)) …
+;;;   跑 `bake -f .chandler-build.ss build-all`(cwd=根)→ 产物落 _build/<mt>/;
+;;;   chandler 再把 _build/<mt>/ 整棵拷进 lib/<mt>/(排除 .bake-manifest/*.wpo),补齐 src/mt 对。
 ;;; 安全:依赖的 native 构建 = 别人的代码 = RCE,须 --allow-build 授权,且授权绑「构建描述哈希」
 ;;; 写入 .chandler-approvals —— 描述变了(脚本掉包)则授权失效重提示。
 
@@ -12,6 +20,7 @@
           dep-native-spec)
   (import (chezscheme)
           (chandler util)
+          (chandler fs)
           (chandler proc)
           (chandler layout)
           (chandler sexp)
@@ -28,6 +37,8 @@
     (let* ([lpath (project-lock-path root)])
       (unless (file-exists? lpath)
         (error 'build "无 manifest.lock,先跑 chandler install" root))
+      (unless (file-directory? (car (project-lib-pair root)))   ; lib/src 需在(install 已摊平各依赖源)
+        (error 'build "lib/src 缺失,先跑 chandler install" root))
       (let* ([lk (read-lock lpath)]
              [order (topo-order lk)]
              [allow (alist-ref opts 'allow-build)]
@@ -51,36 +62,77 @@
             (error 'build
                    (format "以下依赖需构建原生库(= 执行其构建脚本 = 信任其代码),请授权:~%  --allow-build~a~%  涉及:~a"
                            "" (reverse pending))))
-          ;; 2) 排单执行:被依赖先
-          (for-each
-            (lambda (d)
-              (let ([name (symbol->string (locked-dep-name d))])
-                (unless (null? (locked-dep-natives d))
-                  (bake-native root name (dep-native-spec root name)))
-                (bake-compile-tree root name (locked-dep-srcdir d))))
-            order)
-          ;; 3) 落授权(描述哈希绑定)
+          ;; 2) 生成项目根 recipe(单根 lib/src)+ 跑真实 bake 编译全部依赖 → _build/<mt>/
+          (bake-build-deps root order)
+          ;; 3) 拷 _build/<mt>/ → lib/<mt>/,补齐 src/mt 对(排除构建内部物)
+          (sync-obj-tree root)
+          ;; 4) 落授权(描述哈希绑定)
           (unless (null? to-record)
             (write-approvals approvals-path
                              (merge-approvals approvals (reverse to-record))))
-          (printf "build 完成:~a 个依赖已编译~%" (length order))
+          (printf "build 完成:~a 个依赖已编译 → lib/<mt>/~%" (length order))
           0))))
 
-  ;; ── bake 子进程调用(porcelain)──
-  (define (bake-native root name spec)
-    (let ([pkg (lib-dir root (string->symbol name))])
-      (run-check (bake-command)
-                 (list "native" "--pkg" pkg "--spec" (canonical-inline spec) "--porcelain")
-                 '())))
+  ;; ── 生成项目根 recipe → `bake -f … build-all`(cwd=根)──
+  (define (bake-build-deps root order)
+    (let ([recipe (join-paths root ".chandler-build.ss")])
+      (call-with-output-file recipe
+        (lambda (p) (emit-build-recipe p root order))
+        'truncate)
+      (guard (e [#t (delete-if-exists recipe) (raise e)])
+        (run-check (bake-command) (list "-f" recipe "build-all") (list (cons 'cwd root)))
+        (delete-if-exists recipe))))
 
-  (define (bake-compile-tree root name srcdir)
-    (let* ([pkg (lib-dir root (string->symbol name))]
-           [dir (srcdir-join pkg srcdir)]
-           [dest (join-paths root (join-paths "build" (join-paths (current-machine-type)
-                                                                  (join-paths "lib" name))))])
-      (run-check (bake-command)
-                 (list "compile-tree" "--dir" dir "--dest" dest "--porcelain")
-                 '())))
+  (define (emit-build-recipe p root order)
+    (put-string p ";;; .chandler-build.ss --- 由 chandler build 生成(勿手改);单根 lib/src 编译各依赖。\n")
+    (put-string p "(define-lib-roots \"lib/src\")\n")
+    (let ([tasks '()])
+      (for-each
+        (lambda (d)
+          (let ([name (symbol->string (locked-dep-name d))])
+            ;; native-task(每个 native 项;已授权。源在 vendor/<dep>/<path>,收进所属库 <dep>)
+            (unless (null? (locked-dep-natives d))
+              (for-each
+                (lambda (item)
+                  (let ([soname (symbol->string (native-item-soname item))])
+                    (fprintf p "(native-task '~a (lib ~a) (dir ~s) (build ~a))~%"
+                             soname name
+                             (join-paths (join-paths "vendor" name) (native-item-path item))
+                             (canonical-inline (native-item-backend item)))
+                    (set! tasks (cons soname tasks))))
+                (native-items (dep-native-spec root name))))
+            ;; library-task:编译该依赖 umbrella + 其 import 闭包
+            (fprintf p "(library-task 'c-~a '(~a))~%" name name)
+            (set! tasks (cons (string-append "c-" name) tasks))))
+        order)
+      (fprintf p "(task 'build-all '(~a) (lambda () (void)))~%"
+               (string-join (reverse tasks) " "))
+      (put-string p "(default-task 'build-all)\n")))
+
+  ;; ── 拷编译产物 _build/<mt>/ → lib/<mt>/(排除 .bake-manifest 指纹缓存 / *.wpo 中间物)──
+  (define (sync-obj-tree root)
+    (let ([bdir (join-paths root "_build" (current-machine-type))]
+          [obj  (project-obj-dir root)])
+      (when (file-directory? bdir)
+        (rm-rf obj)
+        (for-each
+          (lambda (abs)
+            (let ([rel (strip-prefix abs (string-append bdir "/"))])
+              (unless (or (string=? (base-name rel) ".bake-manifest")
+                          (string-suffix? ".wpo" rel))
+                (let ([dst (join-paths obj rel)])
+                  (ensure-parent dst) (copy-file abs dst)))))
+          (files-under bdir)))))
+
+  ;; ── native 项解析(manifest native 字段:(native (<soname> (path …) (build <后端>) …) …))──
+  (define (native-items spec)                ; spec = (native item…) 或 (native)
+    (if (and (pair? spec) (eq? (car spec) 'native)) (cdr spec) '()))
+  (define (native-item-soname item) (car item))
+  (define (native-item-path item)
+    (let ([c (assq 'path (cdr item))])
+      (if c (cadr c) (string-append "native/" (symbol->string (native-item-soname item))))))
+  (define (native-item-backend item)
+    (let ([c (assq 'build (cdr item))]) (if c (cadr c) 'make)))
 
   ;; ── native 构建描述:读依赖 lib/<name>/manifest.ss 的 native 项 ──
   (define (dep-native-spec root name)
@@ -122,6 +174,8 @@
       [else #f]))
 
   ;; ── 工具 ──
+  (define (delete-if-exists p) (when (file-exists? p) (delete-file p)))
+
   (define (canonical-inline datum)
     ;; 单行 canonical 串(哈希/透传给 bake --spec 用);复用 write 到 string
     (let ([op (open-output-string)]) (write datum op) (get-output-string op))))

@@ -36,8 +36,10 @@
           (with-mock log
             (lambda ()
               (assert-equal 0 (build app '()))
-              ;; mock 收到 compile-tree 调用
-              (assert-true (substr? (read-file log) "compile-tree")))))))
+              ;; mock 收到生成的 recipe:含 library-task(真实 bake 任务)
+              (let ([l (read-file log)])
+                (assert-true (substr? l "-f"))
+                (assert-true (substr? l "library-task"))))))))
 
     ;; 有 native 的依赖:无授权 → 报错(pending)
     (build-native-needs-auth
@@ -61,8 +63,8 @@
             (lambda ()
               (assert-equal 0 (build app (list (cons 'allow-build #t))))
               (let ([l (read-file log)])
-                (assert-true (substr? l "native"))
-                (assert-true (substr? l "compile-tree")))
+                (assert-true (substr? l "native-task"))
+                (assert-true (substr? l "library-task")))
               ;; approvals 落盘
               (assert-true (file-exists? (string-append app "/.chandler-approvals")))
               ;; 再 build 无需 --allow-build(已授权且描述未变)
