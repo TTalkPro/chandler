@@ -14,17 +14,53 @@
 
 ## 安装
 
-需 skiff(优先)或 Chez Scheme ≥ 10.0(自带 `git`),以及生态里的构建工具 **bake**——**chandler 的自安装基于 `bake install`**:库树由 bake 装进 Chez 库前缀(读本仓 `recipe.ss`,src/mt 拆分),`install.sh` 再补一个运行时发现启动器。
+### 前置环境
+
+| 需要 | 说明 |
+|------|------|
+| **Scheme 运行时** | **skiff**(优先)或 **Chez Scheme ≥ 10.0**。二者装一个即可;都在则默认用 skiff。**Petite 不够**——它没有编译器,而 `bake install` 要编译库树。 |
+| **git** | 依赖获取靠它(`git` 需在 PATH 上)。 |
+| **bake** | 生态里的构建工具。**chandler 的自安装基于 `bake install`**:库树由 bake 装进 Chez 库前缀(读本仓 `recipe.ss`),本仓的安装脚本只补一个运行时发现启动器。**须先装好 bake。** |
+| PowerShell | **仅 Windows 需要**(启动器与安装脚本是 `.ps1`)。Windows 10/11 自带;或 `mise use powershell`。 |
+
+装 bake 前若尚无运行时,先装 skiff 或 Chez;`mise` 用户可 `mise use chezscheme`。
+
+### POSIX(Linux / macOS)
 
 ```sh
 git clone <this-repo> chandler && cd chandler
-./install.sh                      # 库经 bake → ~/.local/share/chez/{src,<mt>},启动器 → ~/.local/bin/chandler
-./install.sh --global             # /usr/local(需 root)
-export PATH="$HOME/.local/bin:$PATH"
+./install.sh                      # 库经 bake → ~/.local/share/chez/{src,<mt>};启动器 → ~/.local/bin/chandler
+./install.sh --global             # 装到 /usr/local(需 root)
+
+export PATH="$HOME/.local/bin:$PATH"   # 若尚未在 PATH 上(脚本会提示这行)
+chandler --version                     # → chandler 0.1.3 (skiff 0.1.1) (chez 10.4.1)
+```
+
+### Windows(PowerShell)
+
+```powershell
+git clone <this-repo> chandler; cd chandler
+./install.ps1                     # 启动器 → %USERPROFILE%\.local\bin\chandler.ps1
+./install.ps1 --global            # 系统级(需管理员)
+
+$env:PATH = "$HOME\.local\bin;$env:PATH"
 chandler --version
 ```
 
-安装生成的启动器做**运行时发现**:优先 `skiff`,回退 `scheme`/`chez`(designs/06 双运行时),并挂 `<prefix>/src::<prefix>/<mt>` 一对跑 `<prefix>/src/chandler/cli/main.sps`。**POSIX 为 `chandler`(sh),Windows 为 `chandler.ps1`(PowerShell)**——PATH 上的 `.ps1` 可裸名 `chandler` 调用,两平台接口一致。卸载:`chandler uninstall-self`(据 bake 的 `<prefix>/.bake-install/chandler.files` 清单删库 + 删启动器,不依赖源码)。开发期无需安装,直接 `./bin/chandler <命令>`(同样 skiff 优先)。
+> PATH 上的 `.ps1` 可**裸名** `chandler` 调用,故两平台命令写法完全一致。
+> 若 PowerShell 报「running scripts is disabled」,是执行策略为 Restricted,二选一:
+> `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`(一次性),或
+> `pwsh -ExecutionPolicy Bypass -File ./install.ps1`(仅本次)。
+
+### 装完之后
+
+安装出的启动器做**运行时发现**:优先 `skiff`,回退 `scheme`/`chez`(designs/06 双运行时),并挂 `<prefix>/src::<prefix>/<mt>` 一对跑 `<prefix>/src/chandler/cli/main.sps`。POSIX 是 `chandler`(sh),Windows 是 `chandler.ps1`(PowerShell)。
+
+想固定用某个运行时,见下面[「指定运行时」](#指定运行时skiff--chez)——安装脚本与启动器认同一套变量。
+
+**卸载**:`chandler uninstall-self`(据 bake 的 `<prefix>/.bake-install/chandler.files` 清单删库 + 删启动器,**不依赖源码**,装完把仓库删了也能卸干净)。
+
+**开发期不必安装**:仓库里直接 `./bin/chandler <命令>`(同样 skiff 优先)。
 
 ### 用 bake 构建/安装(生态闭环)
 
@@ -128,7 +164,7 @@ bake 会为每个带 native 的库生成 `(<lib> native-loader)`(产物 `lib/<mt
 | `CHANDLER_SCHEME=<exe>` | Chez 的可执行文件(名或路径) |
 | `CHANDLER_BAKE=<exe>` | bake 的可执行文件(install/build 委托它) |
 
-**优先级**(`run` / `exec` / `repl` 与**启动器**共用一套):
+**优先级**(`run` / `exec` / `repl`、**启动器**、**安装脚本**共用一套):
 
 ```
 --runtime 旗标  >  CHANDLER_RUNTIME  >  manifest 声明(仅 (skiff …) → skiff)  >  默认
@@ -141,16 +177,27 @@ chandler run --runtime=chez app.ss                # 旗标最高优先
 CHANDLER_RUNTIME=chez CHANDLER_SCHEME=/opt/chez/bin/scheme chandler run app.ss
 ```
 
-`chandler --version` 会报出**所在运行时**,可用来确认选中的是哪个:
+**安装期也认**(用哪个运行时跑安装本身):
+
+```sh
+CHANDLER_RUNTIME=chez ./install.sh                # POSIX
+```
+```powershell
+$env:CHANDLER_RUNTIME='chez'; ./install.ps1       # Windows
+```
+
+**确认当前用的是哪个** —— `--version` 报出所在运行时(skiff 自 0.1.1 起以内置 `(skiff-version)` 自证版本):
 
 ```sh
 $ chandler --version
-chandler 0.1.2 (skiff 0.1.1) (chez 10.4.1)   # 跑在 skiff 上
+chandler 0.1.3 (skiff 0.1.1) (chez 10.4.1)   # 跑在 skiff 上
 $ CHANDLER_RUNTIME=chez chandler --version
-chandler 0.1.2 (chez 10.4.1)                 # 跑在标准 Chez 上
+chandler 0.1.3 (chez 10.4.1)                 # 跑在标准 Chez 上
 ```
 
 > **显式覆盖照单执行**:指定了 `CHANDLER_SKIFF`/`CHANDLER_SCHEME` 就只用它——找不到即失败(退出码 127),**不**静默回退到别的运行时(静默回退等于否定了覆盖)。同理,显式指定的运行时不再跑能力探测。
+>
+> **自动发现时**则相反:名为 `skiff` 的候选须通过能力探测——真跑一段 R6RS 程序、且它以 `(skiff-version)` **自证是 skiff**,才会被选中。故一个能跑程序但并非 skiff 的同名可执行文件会被正确跳过,回退到 Chez。
 
 ## 安全模型(designs/08)
 

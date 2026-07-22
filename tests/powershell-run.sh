@@ -121,6 +121,22 @@ else
   assert_contains "P9 arguments pass through" "$OUT" "git-first library manager"
 fi
 
+# ---- install.ps1 (the Windows bootstrap) ----------------------------------
+# Only syntax + the cheap error paths: a full run does a real `bake install`,
+# which the Scheme-side selfinstall roundtrip already covers.
+OUT=$("$PWSH" -NoProfile -Command "
+  \$e=\$null; \$t=\$null
+  [System.Management.Automation.Language.Parser]::ParseFile('$ROOT/install.ps1',[ref]\$t,[ref]\$e) > \$null
+  if (\$e -and \$e.Count) { \$e | ForEach-Object { 'ERR: ' + \$_.Message } } else { 'parse-ok' }" 2>&1)
+assert_contains "P10 install.ps1 parses as PowerShell" "$OUT" "parse-ok"
+
+HOME_TMP="$W/insthome"; mkdir -p "$HOME_TMP"
+HOME="$HOME_TMP" CHANDLER_RUNTIME=bogus "$PWSH" -NoProfile -File "$ROOT/install.ps1" >/dev/null 2>&1
+assert_eq "P11 install.ps1 rejects invalid CHANDLER_RUNTIME (64)" "$?" "64"
+
+OUT=$(HOME="$HOME_TMP" CHANDLER_BAKE=/nonexistent-bake "$PWSH" -NoProfile -File "$ROOT/install.ps1" 2>&1)
+assert_contains "P12 install.ps1 requires bake" "$OUT" "bake not found"
+
 echo
 printf 'powershell-run: %d passed, %d failed\n' "$PASS" "$FAIL"
 [ "$FAIL" -eq 0 ]

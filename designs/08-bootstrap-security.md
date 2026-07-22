@@ -43,6 +43,9 @@ git clone + ./install.sh [--global | --force]:
 ```
 
 - **落点与 bake target 对齐**:bake `(target user)` = `$HOME/.local/share/chez`、`(target global)` = `/usr/local/share/chez`——恰是 chandler 的前缀。`recipe.ss` 提供 `install`/`install-global`(及对应 uninstall)两组 install-task 供 install-self 选调。源码落 `<prefix>/src`(Chez 库搜索根)、编译 `.so` + native 落 `<prefix>/<mt>`,消费方挂 `<prefix>/src::<prefix>/<mt>` 对,`(import (chandler))` 可解析——兑现「机制三件套」之一。
+- **自举入口两平台各一**:`install.sh`(POSIX)与 `install.ps1`(Windows PowerShell),语义一致——检查前置 `bake`、
+  发现运行时(同一套探测判据)、认 `CHANDLER_RUNTIME`/`CHANDLER_SKIFF`/`CHANDLER_SCHEME`,再 exec `chandler install-self`。
+  两脚本各自内嵌一份探测程序文本(自举期 chandler 尚未安装,无法 import),故注明与 `self-probe-src` 保持同步。
 - **启动器 = 运行时发现 + 能力探测**(两平台同语义:POSIX 出 `chandler` sh 脚本,**Windows 出 `chandler.ps1`**——
   PowerShell 已取代 cmd,且 PATH 上的 `.ps1` 可裸名 `chandler` 调用;正斜杠 + `[System.IO.Path]::PathSeparator`
   使同一份脚本在 Windows 正确、在 Linux 的 pwsh 下也能实跑,`tests/powershell-run.sh` 即据此端到端验证):

@@ -43,7 +43,7 @@ tests/
   powershell-run.sh         Windows(.ps1)启动器验收:渲染后用 pwsh 实跑
 manifest.ss  manifest.lock  Chandler 自身依赖清单(自举:零外部依赖)
 recipe.ss                   bake 构建描述(另仓 bake 消费)
-install.sh                  薄壳:运行时发现 → chandler install-self
+install.sh / install.ps1    薄壳:运行时发现 → chandler install-self(POSIX / Windows)
 ```
 
 ---
@@ -164,6 +164,12 @@ install.sh                  薄壳:运行时发现 → chandler install-self
   - **`chandler --version` 报告所在运行时**(与 bake 同款):`chandler 0.1.2 (skiff 0.1.1) (chez 10.4.1)`。PowerShell 验收据此把 P4/P5 从「能启动」升级为**校验选中的确实是哪个运行时**,13 断言全绿。
   - **pack 侧结论**:`pack.manifest` 的 `(target … (skiff-version …))` 由 **bake** 探测并写入、由 `skiff --app` 校验,bake 用的正是同款反射 + 过程/字符串双容忍,故**不受影响、chandler 无需改动**;chandler 侧的关联只在 `manifest.ss` 的 `(skiff …)` 门(已归位)。
   - **138 用例三运行时全绿** + PowerShell 13/13。
+
+- [x] **安装路径补齐 Windows + 文档化(2026-07-22 之五)**:
+  - **新增 `install.ps1`**(install.sh 的 PowerShell 对应物,对齐 bake):此前只有 POSIX 的 `install.sh`,而启动器已是 `.ps1` —— Windows 无自举入口。两者语义一致:检查前置 bake、能力探测发现运行时、认 `CHANDLER_RUNTIME`/`CHANDLER_SKIFF`/`CHANDLER_SCHEME`、非法值 64 / 无运行时 127。
+  - **`install.sh` 同步收敛**:它原先自带一份**旧判据**的探测副本(只验口令),已随启动器升级为「口令 + 自证版本」,并补上强制运行时分支;输出改英文。两处副本都注明与 `self-probe-src` 保持同步(自举脚本无法 import chandler,重复不可避免)。
+  - **README 重写安装章**:前置环境表(运行时 / git / bake / Windows 的 PowerShell,并点明 **Petite 不够**——无编译器而 `bake install` 要编译)、POSIX 与 Windows 两套步骤、执行策略提示、卸载与开发期用法;「指定运行时」章补安装期用法与 `--version` 自证。
+  - 端到端实跑二者(install → 启动器 → 卸载零残留);PowerShell 验收增 P10–P12(install.ps1 语法 / 非法运行时 / 缺 bake),**16 断言全绿**。
 
 ## 进度
 
