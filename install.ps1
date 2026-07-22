@@ -11,6 +11,11 @@
 #
 #   ./install.ps1                  # install to ~/.local (libraries via bake)
 #   ./install.ps1 --global         # system-wide (needs admin)
+#   ./install.ps1 --uninstall [--global]
+#                                  # remove a self-install; works even when the
+#                                  # library is broken (no need for chandler to
+#                                  # be runnable — handles the bootstrap deadlock
+#                                  # where `chandler uninstall-self` can't load)
 #
 # Runtime selection (same contract as the installed launcher and run/exec/repl):
 #   $env:CHANDLER_RUNTIME = 'skiff'|'chez'   force WHICH runtime; a forced runtime
@@ -33,6 +38,69 @@ $InstallArgs = $args
 $Here = $PSScriptRoot
 $env:CHANDLER_SRC = $Here
 $Program = "$Here/chandler/cli/main.sps"
+
+# ── --uninstall:remove a self-install WITHOUT needing chandler to be runnable ──
+# Mirror of cmd-uninstall-self in chandler/cli/selfinstall.ss, kept here so a
+# broken install (library deleted but launcher still present — exactly the state
+# where `chandler uninstall-self` self-deadlocks) still has a recovery path.
+if ($InstallArgs.Count -gt 0 -and $InstallArgs[0] -in @('--uninstall', '--uninstall-self')) {
+  $Rest = if ($InstallArgs.Count -gt 1) { $InstallArgs[1..($InstallArgs.Count-1)] } else { @() }
+  $Prefix = "$HOME/.local/share/chez"
+  $Bindir = "$HOME/.local/bin"
+  foreach ($a in $Rest) {
+    switch ($a) {
+      '--global' { $Prefix = '/usr/local/share/chez'; $Bindir = '/usr/local/bin' }
+      default { [Console]::Error.WriteLine("install.ps1 --uninstall: unknown arg: $a"); exit 64 }
+    }
+  }
+  # 1) bake manifest (precise):兼容新 src/mt 与旧 lib/ 布局
+  $Mf = $null
+  foreach ($cand in @("$Prefix/.bake-install/chandler.files", "$Prefix/lib/.bake-install/chandler.files")) {
+    if (Test-Path -LiteralPath $cand) { $Mf = $cand; break }
+  }
+  if ($Mf) {
+    Get-Content -LiteralPath $Mf | ForEach-Object {
+      if ($_ -and (Test-Path -LiteralPath $_)) {
+        Remove-Item -LiteralPath $_ -Force -ErrorAction SilentlyContinue
+        # sweep empty parents up to Prefix
+        $d = Split-Path -Parent $_
+        while ($d -and $d -ne $Prefix -and (Test-Path -LiteralPath $d) -and -not (Get-ChildItem -LiteralPath $d -Force)) {
+          Remove-Item -LiteralPath $d -Force -ErrorAction SilentlyContinue
+          $parent = Split-Path -Parent $d
+          if ($parent -eq $d) { break }
+          $d = $parent
+        }
+      }
+    }
+    Remove-Item -LiteralPath $Mf -Force -ErrorAction SilentlyContinue
+    $bakeDir = Split-Path -Parent $Mf
+    if ((Test-Path -LiteralPath $bakeDir) -and -not (Get-ChildItem -LiteralPath $bakeDir -Force -ErrorAction SilentlyContinue)) {
+      Remove-Item -LiteralPath $bakeDir -Force -ErrorAction SilentlyContinue
+    }
+  } else {
+    # 2) best-effort scan:清单不在(库已被部分删除等损坏态)
+    foreach ($p in @("$Prefix/src/chandler", "$Prefix/lib/chandler")) {
+      if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue }
+    }
+    foreach ($p in @("$Prefix/src/chandler.ss", "$Prefix/lib/chandler.ss")) {
+      if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }
+    }
+    Get-ChildItem -LiteralPath $Prefix -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+      if ($_.Name -notin @('src', 'lib', '.bake-install')) {
+        foreach ($p in @("$($_.FullName)/chandler.so", "$($_.FullName)/chandler")) {
+          if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force -ErrorAction SilentlyContinue }
+        }
+      }
+    }
+  }
+  # 3) launcher(sh + ps1)
+  foreach ($p in @("$Bindir/chandler", "$Bindir/chandler.ps1")) {
+    if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Force -ErrorAction SilentlyContinue }
+  }
+  Write-Output "uninstalled chandler from $Prefix"
+  exit 0
+}
+
 $Token = 'CHANDLER_RT_OK'
 
 # Prerequisite: bake must be available (self-install delegates the library tree to it).

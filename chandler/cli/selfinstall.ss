@@ -139,6 +139,17 @@
       "CHANDLER_PREFIX=\"" prefix "\"\n"
       "CHANDLER_MT=\"" (current-machine-type) "\"\n"
       "export CHANDLER_PREFIX CHANDLER_MT\n"
+      ;; 安装完整性前置检查:库文件不在时,**先于运行时探测**给出有用错误。
+      ;; 否则用户看到的是 Chez 抛的「Exception in load-program」——无指引、无修复路径。
+      ;; 这正是 uninstall-self 自举死锁的另一面:库没了,启动器就该当场说明,别让人
+      ;; 对着裸异常猜。退出码 70 = EX_SOFTWARE(本机软件配置问题)。
+      "_main=\"$CHANDLER_PREFIX/src/chandler/cli/main.sps\"\n"
+      "if [ ! -f \"$_main\" ]; then\n"
+      "  echo \"chandler: install is broken — $_main is missing.\" 1>&2\n"
+      "  echo \"  Reinstall from source:  ./install.sh\" 1>&2\n"
+      "  echo \"  Or remove this orphan launcher:  rm \\\"$0\\\"\" 1>&2\n"
+      "  exit 70\n"
+      "fi\n"
       ;; 非 Chez 候选(即 skiff)须**自证身份**:口令 + 一个数字打头的版本。
       ;; 比原先「只要口令」更严:不绑 skiff-version 的 demo stub 一并被挡掉。
       "_prog_ok() {\n"
@@ -161,7 +172,7 @@
       "    esac\n"
       "  fi\n"
       "  exec \"$rt\" -q --libdirs \"$CHANDLER_PREFIX/src::$CHANDLER_PREFIX/$CHANDLER_MT\" \\\n"
-      "    --program \"$CHANDLER_PREFIX/src/chandler/cli/main.sps\" \"$@\"\n"
+      "    --program \"$_main\" \"$@\"\n"
       "done\n"
       "echo \"chandler: no program-capable Scheme runtime found (need skiff or Chez Scheme).\" 1>&2\n"
       "exit 127\n"))
@@ -203,6 +214,14 @@
       "$Sep = [System.IO.Path]::PathSeparator\n"
       "$LibDirs = \"$Prefix/src$Sep$Sep$Prefix/$Mt\"\n"
       "$Program = \"$Prefix/src/chandler/cli/main.sps\"\n"
+      ;; 安装完整性前置检查(同 sh 版):库不在 → 当场给有用错误,不要让 Chez 抛裸
+      ;; load-program 异常。退出码 70 = EX_SOFTWARE。
+      "if (-not (Test-Path -LiteralPath $Program)) {\n"
+      "  [Console]::Error.WriteLine(\"chandler: install is broken — $Program is missing.\")\n"
+      "  [Console]::Error.WriteLine(\"  Reinstall from source:  ./install.ps1\")\n"
+      "  [Console]::Error.WriteLine(\"  Or remove this orphan launcher:  Remove-Item \\\"\\\"$PSCommandPath\\\"\\\"\")\n"
+      "  exit 70\n"
+      "}\n"
       "\n"
       "function Test-ChandlerRuntime([string]$Exe, [string]$Probe) {\n"
       "  if (-not $Probe) { return $true }\n"

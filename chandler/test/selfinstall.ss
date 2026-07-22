@@ -48,6 +48,24 @@
         (assert-true (substr? sh "exit 64"))   (assert-true (substr? ps "exit 64"))
         (assert-true (substr? sh "exit 127"))  (assert-true (substr? ps "exit 127"))))
 
+    ;; ── 损坏态:库 main.sps 缺失时,启动器先报有用错误再退出 70 ──
+    ;; 这是 uninstall-self 自举死锁的另一面:库没了,启动器要当场说明并给修复路径,
+    ;; 而不是让 Chez 抛裸的 "Exception in load-program"。
+    (launcher-sh-broken-install-hint
+      (let ([sh (launcher-sh "/pfx")])
+        (assert-true (substr? sh "install is broken"))
+        (assert-true (substr? sh "exit 70"))
+        (assert-true (substr? sh "main.sps"))
+        ;; 修复指引必须包含 reinstall 命令
+        (assert-true (substr? sh "install.sh"))))
+
+    (launcher-ps1-broken-install-hint
+      (let ([ps (launcher-ps1 "/pfx")])
+        (assert-true (substr? ps "install is broken"))
+        (assert-true (substr? ps "exit 70"))
+        (assert-true (substr? ps "main.sps"))
+        (assert-true (substr? ps "install.ps1"))))
+
     ;; ── 探测程序:一次调用同时验「能跑程序」与「是不是 skiff、版本几何」──
     (probe-src-shape
       (let ([p self-probe-src])

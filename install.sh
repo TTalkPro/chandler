@@ -11,6 +11,11 @@
 #
 #   ./install.sh                 # install to ~/.local (libraries via bake)
 #   ./install.sh --global        # /usr/local (needs root)
+#   ./install.sh --uninstall [--global]
+#                                # remove a self-install; works even when the
+#                                # library is broken (no need for chandler to
+#                                # be runnable — handles the bootstrap deadlock
+#                                # where `chandler uninstall-self` can't load)
 #
 # Runtime selection (same contract as the installed launcher and run/exec/repl):
 #   CHANDLER_RUNTIME=skiff|chez   force WHICH runtime; a forced runtime is used
@@ -22,6 +27,68 @@
 set -eu
 here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 export CHANDLER_SRC="$here"
+
+# ── --uninstall:remove a self-install WITHOUT needing chandler to be runnable ──
+# Mirror of cmd-uninstall-self in chandler/cli/selfinstall.ss, kept here so a
+# broken install (library deleted but launcher still present — exactly the state
+# where `chandler uninstall-self` self-deadlocks) still has a recovery path.
+case "${1:-}" in
+  --uninstall|--uninstall-self)
+    shift
+    _prefix="$HOME/.local/share/chez"
+    _bindir="$HOME/.local/bin"
+    for _a in "$@"; do
+      case "$_a" in
+        --global) _prefix="/usr/local/share/chez"; _bindir="/usr/local/bin" ;;
+        *) echo "install.sh --uninstall: unknown arg: $_a" 1>&2; exit 64 ;;
+      esac
+    done
+    # 1) bake manifest (precise):逐行删清单上的文件 + 清空父目录
+    #    兼容两种布局:新 src/mt 拆分(manifest 在 <prefix>/.bake-install/)与
+    #    旧扁平 lib/(manifest 在 <prefix>/lib/.bake-install/)。
+    _mf=""
+    for _candidate in "$_prefix/.bake-install/chandler.files" "$_prefix/lib/.bake-install/chandler.files"; do
+      [ -f "$_candidate" ] && _mf="$_candidate" && break
+    done
+    if [ -n "$_mf" ]; then
+      while IFS= read -r _f || [ -n "$_f" ]; do
+        [ -n "$_f" ] || continue
+        rm -f "$_f" 2>/dev/null || true
+        # sweep empty parents up to _prefix
+        _d=$(dirname -- "$_f")
+        while [ "$_d" != "$_prefix" ] && [ "$_d" != "/" ] && [ -d "$_d" ] && [ -z "$(ls -A "$_d" 2>/dev/null)" ]; do
+          rmdir "$_d" 2>/dev/null || break
+          _d=$(dirname -- "$_d")
+        done
+      done < "$_mf"
+      rm -f "$_mf"
+      # sweep 从 manifest 父目录(.bake-install)一路向上直至 _prefix,
+      # 否则旧布局的 <prefix>/lib/.bake-install 删后 <prefix>/lib/ 仍残留。
+      _d=$(dirname -- "$_mf")
+      while [ "$_d" != "$_prefix" ] && [ "$_d" != "/" ] && [ -d "$_d" ] && [ -z "$(ls -A "$_d" 2>/dev/null)" ]; do
+        rmdir "$_d" 2>/dev/null || break
+        _d=$(dirname -- "$_d")
+      done
+    else
+      # 2) best-effort scan:清单不在(库已被部分删除等损坏态)
+      #    新布局:src/chandler/ + src/chandler.ss + 各 <mt>/chandler*
+      #    旧布局:lib/chandler/ + lib/chandler.ss
+      rm -rf "$_prefix/src/chandler" "$_prefix/lib/chandler" 2>/dev/null || true
+      rm -f  "$_prefix/src/chandler.ss" "$_prefix/lib/chandler.ss" 2>/dev/null || true
+      for _mt_dir in "$_prefix"/*/; do
+        [ -d "$_mt_dir" ] || continue
+        _mt=$(basename -- "$_mt_dir")
+        case "$_mt" in src|lib|.bake-install) continue ;; esac
+        rm -f  "$_mt_dir/chandler.so" 2>/dev/null || true
+        rm -rf "$_mt_dir/chandler" 2>/dev/null || true
+      done
+    fi
+    # 3) launcher(sh + ps1)
+    rm -f "$_bindir/chandler" "$_bindir/chandler.ps1" 2>/dev/null || true
+    echo "uninstalled chandler from $_prefix"
+    exit 0
+    ;;
+esac
 
 # Prerequisite: bake must be available (self-install delegates the library tree to it).
 if ! command -v "${CHANDLER_BAKE:-bake}" >/dev/null 2>&1; then
