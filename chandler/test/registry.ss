@@ -10,14 +10,15 @@
           (chandler layout)
           (chandler registry))
 
-  ;; 造一个布局规范库源目录:name.ss + name/x.ss + native/<mt>/n.so
+  ;; 造一个布局规范库源目录 + 假编译产物:
+  ;;   name.ss + name/core.ss(源)+ _build/<mt>/name/core.so(编译产物,测 <mt>/ 映射)
   (define (make-lib-src name)
     (let ([dir (mktmp)])
       (write-text (string-append dir "/" name ".ss")
         (format "#!chezscheme~%(library (~a) (export ok) (import (chezscheme)) (define ok #t))~%" name))
       (write-text (string-append dir "/" name "/core.ss")
         (format "#!chezscheme~%(library (~a core) (export c) (import (chezscheme)) (define c 1))~%" name))
-      (write-text (string-append dir "/native/" (current-machine-type) "/" name ".so") "FAKESO")
+      (write-text (string-append dir "/_build/" (current-machine-type) "/" name "/core.so") "FAKESO")
       dir))
 
   (define (mk-meta name) (list name "1.0.0" `(git ,(string-append "https://h/" name))
@@ -28,10 +29,10 @@
       (let* ([libdir (mktmp)]
              [src (make-lib-src "greet")])
         (install-global src libdir (mk-meta "greet") '())
-        ;; 文件落位
-        (assert-true (file-exists? (join-paths libdir "greet.ss")))
-        (assert-true (file-exists? (join-paths libdir "greet/core.ss")))
-        (assert-true (file-exists? (join-paths libdir (string-append "native/" (current-machine-type) "/greet.so"))))
+        ;; 文件落位:源 → src/,编译产物 → <mt>/(src/mt 拆分)
+        (assert-true (file-exists? (join-paths libdir "src/greet.ss")))
+        (assert-true (file-exists? (join-paths libdir "src/greet/core.ss")))
+        (assert-true (file-exists? (join-paths libdir (string-append (current-machine-type) "/greet/core.so"))))
         ;; registry 写入
         (assert-true (file-exists? (registry-file libdir "greet")))
         ;; list
@@ -57,11 +58,11 @@
       (let* ([libdir (mktmp)]
              [src (make-lib-src "gone")])
         (install-global src libdir (mk-meta "gone") '())
-        (assert-true (file-exists? (join-paths libdir "gone.ss")))
+        (assert-true (file-exists? (join-paths libdir "src/gone.ss")))
         (uninstall-global "gone" libdir '())
         ;; 文件与 registry 皆删
-        (assert-false (file-exists? (join-paths libdir "gone.ss")))
-        (assert-false (file-exists? (join-paths libdir "gone/core.ss")))
+        (assert-false (file-exists? (join-paths libdir "src/gone.ss")))
+        (assert-false (file-exists? (join-paths libdir "src/gone/core.ss")))
         (assert-false (file-exists? (registry-file libdir "gone")))
         ;; list 空
         (assert-equal '() (list-global libdir))))
@@ -70,15 +71,15 @@
       (let* ([libdir (mktmp)]
              [src (make-lib-src "up")])
         (install-global src libdir (mk-meta "up") '())
-        (assert-true (file-exists? (join-paths libdir "up/core.ss")))
+        (assert-true (file-exists? (join-paths libdir "src/up/core.ss")))
         ;; 新版本删掉 up/core.ss,加 up/new.ss
         (delete-file (string-append src "/up/core.ss"))
         (write-file (string-append src "/up/new.ss")
           "#!chezscheme\n(library (up new) (export n) (import (chezscheme)) (define n 2))")
         (install-global src libdir (list "up" "2.0.0" '(git "u") "t" 'chandler) '())
         ;; 孤儿 core.ss 被清,new.ss 到位
-        (assert-false (file-exists? (join-paths libdir "up/core.ss")))
-        (assert-true (file-exists? (join-paths libdir "up/new.ss")))
+        (assert-false (file-exists? (join-paths libdir "src/up/core.ss")))
+        (assert-true (file-exists? (join-paths libdir "src/up/new.ss")))
         (assert-string= "2.0.0" (cadar (list-global libdir)))))
 
     (doctor-detects-drift
@@ -88,10 +89,10 @@
         ;; 无问题
         (assert-equal '() (doctor-global libdir))
         ;; 篡改一个已装文件 → drift
-        (write-file (join-paths libdir "doc.ss") "TAMPERED")
+        (write-file (join-paths libdir "src/doc.ss") "TAMPERED")
         (let ([issues (doctor-global libdir)])
           (assert-true (> (length issues) 0))
           (assert-equal 'drift (caar issues)))
         ;; 删一个文件 → missing
-        (delete-file (join-paths libdir "doc/core.ss"))
+        (delete-file (join-paths libdir "src/doc/core.ss"))
         (assert-true (memp (lambda (i) (eq? (car i) 'missing)) (doctor-global libdir)))))))

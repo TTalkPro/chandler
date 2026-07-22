@@ -1,9 +1,14 @@
 #!chezscheme
-;;; chandler/registry.ss --- 全局安装文件清单事务(designs/05)
+;;; chandler/registry.ss --- 全局安装文件清单事务(designs/05;src/mt 拆分)
 ;;;
-;;; 让 --global 安装可审计、可干净卸载、可检测冲突。注册表 = <libdir>/.chandler/registry/<name>.ss,
+;;; 让 --global 安装可审计、可干净卸载、可检测冲突。注册表 = <prefix>/.chandler/registry/<name>.ss,
 ;;; 记已装文件 + sha256。安装事务:冲突检测 → staging → 进位 → 登记(registry 最后写 = 弱事务)。
 ;;; bake install 复用本库(designs/07 §5),故导出干净、不 import 上层。
+;;;
+;;; 2026-07-22 对齐 bake install 的 src/mt 拆分:目标是库**前缀**(~/.local/share/chez),
+;;; 源码落 <prefix>/src/、编译产物整棵 _build/<mt>/ 落 <prefix>/<mt>/(与 bake install
+;;; 同一全局库目录,消费方一条 <prefix>/src::<prefix>/<mt> 解析二者)。注册记录的相对
+;;; 路径已含 src//<mt>/ 前缀,故冲突检测/卸载/doctor 逻辑不变,只是相对路径带了命名空间。
 
 (library (chandler registry)
   (export default-user-libdir default-system-libdir
@@ -16,10 +21,9 @@
           (chandler sexp)
           (chandler hash))
 
-  (define (default-user-libdir)
-    (join-paths (or (getenv "XDG_DATA_HOME") (join-paths (home-dir) ".local/share"))
-                "chez/lib"))
-  (define (default-system-libdir) "/usr/local/share/chez/lib")
+  ;; 库前缀(下含 src/ 与 <mt>/);与 bake install 的 user/global target 落点一致(不走 XDG,对齐 bake)。
+  (define (default-user-libdir) (string-append (home-dir) "/.local/share/chez"))
+  (define (default-system-libdir) "/usr/local/share/chez")
 
   (define (registry-dir libdir) (join-paths libdir ".chandler/registry"))
   (define (registry-file libdir name) (join-paths (registry-dir libdir) (string-append name ".ss")))
@@ -30,20 +34,21 @@
   ;; opts: (adopt . #t) (force . #t)
   (define (install-global src libdir meta opts)
     (let* ([name (car meta)]
-           [files (enumerate-lib src name)])       ; 相对 src 的文件清单
-      (when (null? files)
+           [entries (enumerate-lib src name)]      ; ((dest-rel . src-abs) …);dest-rel 已带 src//<mt>/ 命名空间
+           [files (map car entries)])              ; 相对 <prefix> 的目标路径清单
+      (when (null? entries)
         (error 'install-global "源目录不含可安装库文件(缺 <name>.ss 与 <name>/)" src name))
       (let ([old (and (file-exists? (registry-file libdir name))
                       (installed-files (read-registry libdir name)))])
         (check-conflicts files libdir name opts)
         (let ([staging (staging-dir libdir name)])
           (rm-rf staging)
-          ;; 1) 拷到 staging
-          (for-each (lambda (rel)
-                      (let ([s (join-paths src rel)] [d (join-paths staging rel)])
+          ;; 1) 拷到 staging(源 src-abs → staging/dest-rel)
+          (for-each (lambda (e)
+                      (let ([s (cdr e)] [d (join-paths staging (car e))])
                         (ensure-parent d) (copy-file s d)))
-                    files)
-          ;; 2) 进位:staging → libdir
+                    entries)
+          ;; 2) 进位:staging → libdir(按 dest-rel)
           (for-each (lambda (rel)
                       (let ([s (join-paths staging rel)] [d (join-paths libdir rel)])
                         (ensure-parent d) (move-file s d)))
@@ -174,13 +179,35 @@
                (filter (lambda (e) (string-suffix? ".ss" e)) (dir-entries rd)))
           '())))
 
-  ;; ── 库文件枚举:<name>.ss + <name>/** + native/**(相对 src 路径)──
+  ;; ── 库文件枚举 → ((dest-rel . src-abs) …);dest-rel 相对 <prefix>,已含 src//<mt>/ 命名空间──
+  ;;   源码 <name>.ss + <name>/**            → src/<...>
+  ;;   编译产物整棵 _build/<mt>/**(若在)   → <mt>/<...>(编译 .so + native;排除构建内部物)
   (define (enumerate-lib src name)
     (append
-      (if (file-exists? (join-paths src (string-append name ".ss")))
-          (list (string-append name ".ss")) '())
-      (rel-files-under src name)
-      (rel-files-under src "native")))
+      ;; 源码 → src/
+      (let ([srcs (append
+                    (if (file-exists? (join-paths src (string-append name ".ss")))
+                        (list (string-append name ".ss")) '())
+                    (rel-files-under src name))])
+        (map (lambda (rel) (cons (join-paths "src" rel) (join-paths src rel))) srcs))
+      ;; 编译产物 _build/<mt>/ → <mt>/(排除 .bake-manifest 指纹缓存与 *.wpo 中间物)
+      (let ([bdir (join-paths src "_build" (current-machine-type))])
+        (if (file-directory? bdir)
+            (filter-map
+              (lambda (abs)
+                (let ([rel (strip-prefix abs (string-append bdir "/"))])
+                  (and (deliverable? rel)
+                       (cons (join-paths (current-machine-type) rel) abs))))
+              (files-under bdir))
+            '()))))
+
+  (define (filter-map f xs)
+    (fold-right (lambda (x acc) (let ([r (f x)]) (if r (cons r acc) acc))) '() xs))
+
+  ;; 构建内部非交付物:.bake-manifest(指纹缓存)、*.wpo(WPO 中间物)不装
+  (define (deliverable? rel)
+    (not (or (string=? (base-name rel) ".bake-manifest")
+             (string-suffix? ".wpo" rel))))
 
   ;; <src>/<sub> 下所有文件,返回相对 src 的路径(通用 FS 来自 (chandler fs))
   (define (rel-files-under src sub)
