@@ -52,7 +52,7 @@
     (pack-layout-mt-partitioned
       (let* ([app (make-app '())]
              [_ (fake-build! app "myapp")])
-        (pack-until-runtime app '((name . "myapp") (version . "1.0") (runtime . petite)))
+        (pack-until-runtime app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . petite)))
         (let ([d (pack-out app "myapp" "1.0")])
           (assert-true (file-exists? (join-paths d "lib" mt "myapp.so")))
           (assert-true (file-exists? (join-paths d "lib" mt "myapp" "core.so")))
@@ -71,7 +71,7 @@
           (fake-dep-objs! app "b")
           ;; lib/<mt>/ 里塞一份**同名的陈旧应用产物**:必须被新的覆盖,而不是反过来
           (put! (join-paths app "lib" mt "myapp.so") "STALE")
-          (pack-until-runtime app '((name . "myapp") (version . "1.0") (runtime . petite)))
+          (pack-until-runtime app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . petite)))
           (let ([d (pack-out app "myapp" "1.0")])
             (assert-string= "app-umbrella" (read-file (join-paths d "lib" mt "myapp.so")))
             (assert-true (file-exists? (join-paths d "lib" mt "b.so")))
@@ -86,7 +86,7 @@
           (fake-build! app "myapp")
           (fake-dep-objs! app "b")
           (put! (join-paths app "lib" mt "ghost.so") "leftover")
-          (pack-until-runtime app '((name . "myapp") (version . "1.0") (runtime . petite)))
+          (pack-until-runtime app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . petite)))
           (assert-false
             (file-exists? (join-paths (pack-out app "myapp" "1.0") "lib" mt "ghost.so"))))))
 
@@ -96,7 +96,7 @@
         (fake-build! app "myapp")
         (put! (join-paths app "resources" "greeting.txt") "res-hello")
         (put! (join-paths app "resources" "sub" "nested.txt") "nested")
-        (pack-until-runtime app '((name . "myapp") (version . "1.0") (runtime . petite)))
+        (pack-until-runtime app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . petite)))
         (let ([d (pack-out app "myapp" "1.0")])
           (assert-string= "res-hello" (read-file (join-paths d "resources" "greeting.txt")))
           (assert-true (file-exists? (join-paths d "resources" "sub" "nested.txt")))
@@ -106,14 +106,14 @@
     (pack-no-resources-dir-is-fine
       (let* ([app (make-app '())])
         (fake-build! app "myapp")
-        (pack-until-runtime app '((name . "myapp") (version . "1.0") (runtime . petite)))
+        (pack-until-runtime app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . petite)))
         (assert-false (file-exists? (join-paths (pack-out app "myapp" "1.0") "resources")))))
 
     ;; ── 前置校验:pack 只组装,缺件必须当场说清该跑哪个命令 ──
     (pack-requires-app-build
       (let ([app (make-app '())])                 ; 没有 _build/<mt>/
         (assert-raises
-          (lambda () (pack app '((name . "myapp") (version . "1.0") (runtime . petite)))))))
+          (lambda () (pack app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . petite)))))))
 
     (pack-requires-dep-objects
       (parameterize ([cache-root (mktmp)])
@@ -123,7 +123,7 @@
           (fake-build! app "myapp")
           (rm-rf (join-paths app "lib" mt))       ; 依赖没编译 → 该跑 chandler build
           (assert-raises
-            (lambda () (pack app '((name . "myapp") (version . "1.0") (runtime . petite))))))))
+            (lambda () (pack app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . petite))))))))
 
     ;; 依赖声明了 native 却不在树里:native 无法在消费方现编,故必须当场停 ——
     ;; 否则打出的包一路正常,直到第一次 foreign call 才炸。
@@ -135,20 +135,13 @@
           (fake-build! app "myapp")
           (fake-dep-objs! app "n")                ; 有对象,但没有 n/native/libn.<ext>
           (assert-raises
-            (lambda () (pack app '((name . "myapp") (version . "1.0") (runtime . petite))))))))
-
-    ;; ── 不支持的配置在**配置期**报,别让人跑完组装才发现 ──
-    (pack-boot-mode-not-implemented
-      (let ([app (make-app '())])
-        (fake-build! app "myapp")
-        (assert-raises
-          (lambda () (pack app '((name . "myapp") (version . "1.0") (mode . boot)))))))
+            (lambda () (pack app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . petite))))))))
 
     (pack-unknown-runtime-rejected
       (let ([app (make-app '())])
         (fake-build! app "myapp")
         (assert-raises
-          (lambda () (pack app '((name . "myapp") (version . "1.0") (runtime . guile)))))))
+          (lambda () (pack app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . guile)))))))
 
     ;; ── 入口库:必须在**打包期**校验,不能等到启动 ──
     ;; 曾经的 bug:`chandler pack` 把 manifest 的 `name`(包名)当入口库名,而 skiff-demo
@@ -163,19 +156,18 @@
         ;; 半成品包不许留下
         (assert-false (file-exists? (pack-out app "myapp" "1.0")))))
 
-    ;; 包名 ≠ 入口库名:编译树里只有一个顶层 umbrella 时按它推断
-    (pack-entry-inferred-when-name-differs
+    ;; 包名 ≠ 入口库名:--entry 显式覆盖 manifest 默认;入口库的对象必须真的进包
+    (pack-entry-from-explicit-flag
       (let ([app (make-app '())])
         (fake-build! app "notthename")
-        (pack-until-runtime app '((name . "myapp") (version . "1.0") (runtime . petite)))
+        (pack-until-runtime app '((name . "myapp") (version . "1.0") (entry . (notthename)) (runtime . petite)))
         (assert-true
           (file-exists? (join-paths (pack-out app "myapp" "1.0") "lib" mt "notthename.so")))))
 
-    ;; 多个候选 → 不猜,列出来让人显式选
-    (pack-ambiguous-entry-refuses-to-guess
+    ;; 无 (app ...) 声明 + 未传 --entry → 拒绝(防止 lib 被悄声打成 app 包)
+    (pack-rejects-lib-without-entry
       (let ([app (make-app '())])
-        (fake-build! app "one")
-        (fake-build! app "two")
+        (fake-build! app "myapp")
         (assert-raises
           (lambda () (pack app '((name . "myapp") (version . "1.0") (runtime . petite)))))))
 

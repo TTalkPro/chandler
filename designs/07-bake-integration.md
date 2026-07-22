@@ -58,7 +58,7 @@ chandler build [--allow-build] [--production]:
 chandler install               ; 闭包锁定+物化 → lib/{src,<mt>}(只发源码)
 chandler build --allow-build   ; 依赖闭包编译 + native(生成 recipe,真实 bake 执行)→ lib/<mt>/
 bake build                     ; 应用自身编译(recipe.ss)
-bake pack --mode modules       ; 组装:应用 _build/<mt>/ + 依赖 lib/<mt>/(含各库 native/)
+bake pack                       ; 组装:应用 _build/<mt>/ + 依赖 lib/<mt>/(含各库 native/)
                                ;      + skiff 运行时 + pack.manifest
 ```
 

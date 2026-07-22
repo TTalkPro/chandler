@@ -125,7 +125,12 @@ overrides 只在**根项目** manifest 生效(传递依赖的 overrides 忽略�
      (main main))          ; 入口过程,缺省 `main`
 ```
 
-包**是不是应用**由有没有这一段决定;库包不写。`chandler pack` 据此确定入口,无需每次传 `--entry`。
+包**是不是应用**由有没有这一段决定;库包不写。`chandler pack` 据此确定入口,无需每次传 `--entry`。两条写入路径:
+
+- `chandler init --app [--entry='(<lib>')] [--main=<sym>]` —— 初始化时选定(默认 entry 取 `name`)
+- 手写到 `manifest.ss` —— 任何时候都可以;lib → app 的演化只此一步
+
+声明了 app 的包才能 `chandler pack`;没声明(默认 lib 形态)的包 pack 会**显式拒绝**,错误消息指引:`(app …)` 声明、`--entry` 临时覆盖、或改走 `chandler add` 分发。详见 [09 §CLI](09-pack.md)。
 
 **为什么不复用 `name`**:`name` 是**包名**,未必等于入口库名 —— skiff-demo 的包名是 `skiff-demo`,入口库是 `(mdserver)`。早期把两者当同一个,结果是打包"成功"、跑起来才 `library (skiff-demo) not found`(pack 现已在打包期硬校验入口对象,见 [09](09-pack.md))。
 

@@ -433,7 +433,6 @@
         "(pack\n"
         "  (format 1)\n"
         "  (app \"" app "\") (version \"" version "\")\n"
-        "  (mode modules)\n"
         "  (target (chez-version \"" ver "\") (machine-type " mt ")"
         ;; skiff 的 verify-target! 精确匹配 skiff-version,故只有捆了 skiff 的包才钉它;
         ;; stock 包不带任何 skiff API 依赖,声明一个全开区间 → 同一个 stock 包在
@@ -510,42 +509,7 @@
   (define (entry-so-rel entry)
     (string-append (string-join (map symbol->string entry) "/") ".so"))
 
-  ;; 顶层 umbrella 库 = 应用编译树根下的 <name>.so(排除子库目录里的)
-  (define (top-level-umbrellas bdir)
-    (if (file-directory? bdir)
-        (list-sort string<?
-          (map (lambda (f) (substring f 0 (- (string-length f) 3)))
-               (filter (lambda (f)
-                         (and (string-suffix? ".so" f)
-                              (not (file-directory? (join-paths bdir f)))))
-                       (dir-entries bdir))))
-        '()))
-
-  ;; 缺省入口库。manifest 的 `name` 是**包名**,不等于入口库名(skiff-demo 的包名
-  ;; 是 skiff-demo,入口库是 (mdserver))—— 所以只有 (<name>) 真的编出来了才用它;
-  ;; 否则看应用编译树里有没有**唯一**的顶层 umbrella,有就用它并说明;再不然就
-  ;; 列出候选让人显式选。绝不猜到一半打出个坏包。
-  ;; 只有 manifest 没声明 (app (entry …)) 时才走推断。
-  (define (infer-entry project name)
-    (let* ([bdir (join-paths project "_build" (current-machine-type))]
-           [named (string->symbol name)]
-           [ums  (top-level-umbrellas bdir)])
-      (cond
-        [(member name ums) (list named)]
-        [(= 1 (length ums))
-         (let ([e (string->symbol (car ums))])
-           (printf "pack: entry library (~a) inferred (the only one in ~a)~%" e bdir)
-           (printf "      declare it in manifest.ss to be explicit: (app (entry (~a)))~%" e)
-           (list e))]
-        [(null? ums)
-         (error 'pack
-                (format "no compiled library found in ~a -- run `bake build` first" bdir))]
-        [else
-         (error 'pack
-                (format "cannot tell which library is the entry point; pass --entry '(<lib>)'~%  candidates in ~a: ~a"
-                        bdir (string-join ums ", ")))])))
-
-  ;; opts: (mode . modules|boot) (runtime . skiff|scheme|petite) (out . dir)
+  ;; opts: (runtime . skiff|scheme|petite) (out . dir)
   ;;       (name . s) (version . s) (entry . lib-ref) (main . sym)
   (define (pack project opts)
     (let* ([mpath (project-manifest-path project)]
@@ -553,24 +517,31 @@
            [name  (or (alist-ref opts 'name) (and mf (manifest-name mf))
                       (error 'pack "cannot determine app name (no manifest.ss; pass --name)"))]
            [version (or (alist-ref opts 'version) (and mf (manifest-version mf)) "0.0.0")]
-           ;; 优先级:--entry > manifest 的 (app (entry …)) > 推断。
-           ;; 声明胜过推断 —— 一个要分发的应用,入口是它自己的属性,该写在 manifest 里。
            [mapp  (and mf (manifest-app mf))]
-           [entry (or (alist-ref opts 'entry)
-                      (and mapp (app-entry mapp))
-                      (infer-entry project name))]
+           [entry (or (alist-ref opts 'entry) (and mapp (app-entry mapp)))]
            [mainp (or (alist-ref opts 'main) (and mapp (app-main mapp)) 'main)]
-           [mode  (or (alist-ref opts 'mode) 'modules)]
            [rt    (or (alist-ref opts 'runtime) (default-runtime mf))]
            [out   (or (alist-ref opts 'out) "dist")]
            [mt    (current-machine-type)])
+      ;; pack 服务于**应用**:必须有显式入口。库(manifest 没声明 (app …))不该被打成
+      ;; 可执行分发包 —— 它的天然分发形态是 git,消费方 `chandler add` 即可。允许用
+      ;; `--entry` 显式覆盖,以便临时打包或 lib→app 演化期;但缺省情况(manifest 没声明
+      ;; 且命令行也没传)就直接拒绝,而不是**猜**一个顶层 umbrella。
+      ;;
+      ;; 这取代了早先的 infer-entry:它把"包名"和"入口库名"混为一谈(skiff-demo 的包名
+      ;; 是 skiff-demo、入口库却是 (mdserver)),让 lib 也能被悄无声息地打成 app 包 ——
+      ;; 产出一堆无意义的 bin/boot/runtime。
+      (unless entry
+        (error 'pack
+               (string-append
+                 "no entry library declared; this looks like a library, not an application.\n"
+                 "  `chandler pack` ships runnable applications. For a library, push to git\n"
+                 "  and let consumers `chandler add <name> <url>` instead.\n"
+                 "  If this is actually an app, declare it in manifest.ss:\n"
+                 "    (app (entry (<lib>)) (main main))\n"
+                 "  or pass --entry '(<lib>)' on the command line.")))
       (unless (memq rt '(skiff scheme petite))
         (error 'pack (format "runtime ~s not supported (skiff | scheme | petite)" rt)))
-      (unless (eq? mode 'modules)
-        ;; K4:boot 模式要「生成入口 stub → compile-file → 拓扑排序 → make-boot-file」,
-        ;; 编译动作归 bake(designs/07 §1),故走「生成 recipe 跑 bake boot-task」,同
-        ;; `chandler build`。尚未实现 —— 配置期就报,别让人跑完才发现。
-        (error 'pack (format "mode ~s not implemented yet (only `modules`; see designs/09 K4)" mode)))
       (let* ([locked (project-locked-deps project)]
              [root (join-paths project out (pack-dir-name name version))]
              [objdir (pack-lib-dir root)])

@@ -29,8 +29,7 @@
   ;; 缺件一律在前置校验里停下并说清该跑哪个命令 —— native 尤其无法在消费方现编。
   (define (cmd-pack root flags)
     (pack root
-          (list (cons 'mode    (and (flag flags 'mode) (string->symbol (flag flags 'mode))))
-                (cons 'runtime (and (flag flags 'runtime) (string->symbol (flag flags 'runtime))))
+          (list (cons 'runtime (and (flag flags 'runtime) (string->symbol (flag flags 'runtime))))
                 (cons 'out     (flag flags 'out))
                 (cons 'name    (flag flags 'name))
                 (cons 'version (flag flags 'version))
@@ -52,19 +51,39 @@
 
   ;; ── init ──
   ;; ── init ──
+  ;; --lib:  显式声明这是 lib(顺带按[库布局规范]出目录骨架)
+  ;; --app:  显式声明这是 app(写 (app (entry …)) 到 manifest);默认 entry = (name),--entry 覆盖
+  ;; --lib / --app 互斥;都不传 = 默认 lib(无 (app …))
   (define (cmd-init root flags)
     (let* ([name (or (flag flags 'name) (basename root))]
-           [mpath (join-paths root "manifest.ss")])
+           [mpath (join-paths root "manifest.ss")]
+           [lib?  (flag? flags 'lib)]
+           [app?  (flag? flags 'app)]
+           [entry (or (parse-entry (flag flags 'entry))
+                      (and app? (list (string->symbol name))))]
+           [main  (or (and (flag flags 'main) (string->symbol (flag flags 'main))) 'main)])
+      (when (and lib? app?)
+        (error 'init "--lib and --app are mutually exclusive"))
       (when (and (file-exists? mpath) (not (flag? flags 'force)))
         (error 'init "manifest.ss already exists; use --force to overwrite" mpath))
-      (write-canonical-file mpath (skeleton-manifest-datum name))
+      (write-canonical-file mpath
+        (if app?
+            (skeleton-app-manifest-datum name entry main)
+            (skeleton-manifest-datum name)))
       (ensure-gitignore-lib root)
-      (when (flag? flags 'lib) (scaffold-lib root name))
+      (when lib? (scaffold-lib root name))
       (printf "wrote ~a~%" mpath)
       0))
 
   (define (skeleton-manifest-datum name)
     `(manifest (format 1) (name ,name) (version "0.1.0") (chez ">=10.0") (srcdir ".") (deps)))
+
+  ;; app 形态:多一个 (app (entry …) (main …)) 字段。entry 是 symbol list(库名),
+  ;; main 是 symbol(入口过程名)。这两个就是 pack 的入口契约 —— 声明了就能 pack,
+  ;; 没声明(走 skeleton-manifest-datum)就是 lib,pack 会拒绝。
+  (define (skeleton-app-manifest-datum name entry main)
+    `(manifest (format 1) (name ,name) (version "0.1.0") (chez ">=10.0") (srcdir ".") (deps)
+       (app (entry ,entry) (main ,main))))
 
   ;; ── install / update ──
   ;; --global:装当前项目库树到全局 libdir(注册表事务,designs/05)

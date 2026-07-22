@@ -17,7 +17,7 @@ Chandler 全部状态就四块,每条命令声明自己读/写哪块:
 
 | 命令 | 读 | 写 | 网络 | 说明 |
 |------|----|----|------|------|
-| `chandler init [name]` | — | manifest | 否 | 生成骨架 `manifest.ss`(可选 `--lib` 顺带按[库布局规范](../chez-skiff-library-layout.md)出目录骨架) |
+| `chandler init [name]` | — | manifest | 否 | 生成骨架 `manifest.ss`。可选 `--lib`(显式 lib + 顺带按[库布局规范](../chez-skiff-library-layout.md)出目录骨架)/ `--app`(写 `(app (entry (name)))`,可 pack;`--entry`/`--main` 覆盖);都不传 = 默认 lib |
 | `chandler add <name> <git-url> [--tag/--rev/--branch/--path]` | manifest | manifest | 否 | 往 `deps` 追加一项(保留手写格式:整文件 `read` → 修改 → `pretty-print` 回写,或文本级追加,见下) |
 | `chandler remove <name>` | manifest | manifest | 否 | 删除依赖项;`lib/<name>/` 下次 `install` 时清理 |
 | `chandler install` | manifest, lock | lock, lib/ | 按需 | **主命令**:有 lock 且与 manifest 一致 → 按 lock 物化 `lib/`;无 lock 或 manifest 变了 → 解析([03](03-resolution.md))→ 写 lock → 物化 |

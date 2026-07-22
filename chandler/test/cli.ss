@@ -8,6 +8,7 @@
           (chandler test fixtures)
           (chandler fetch)
           (chandler install)
+          (chandler manifest)
           (chandler cli args)
           (chandler cli main))
 
@@ -53,6 +54,38 @@
 
     (main-help-no-args
       (assert-equal 0 (main '())))
+
+    ;; ── init:lib / app / 默认 ──
+    ;; 默认(无 flag)= lib 形态 manifest,无 (app ...)
+    (init-default-is-lib
+      (let ([app (mktmp)])
+        (assert-equal 0 (main (list "-C" app "init" "--name=foo")))
+        (let ([mf (read-manifest (string-append app "/manifest.ss"))])
+          (assert-false (manifest-app mf)))))           ; 默认无 (app ...)
+
+    ;; --app:写 (app (entry (name)) (main main)),entry 默认取 name
+    (init-app-writes-app-declaration
+      (let ([app (mktmp)])
+        (assert-equal 0 (main (list "-C" app "init" "--app" "--name=foo")))
+        (let ([mf (read-manifest (string-append app "/manifest.ss"))])
+          (assert-true (manifest-app mf))
+          (assert-equal '(foo) (app-entry (manifest-app mf)))
+          (assert-equal 'main (app-main (manifest-app mf))))))
+
+    ;; --app + --entry + --main:显式覆盖
+    (init-app-custom-entry-and-main
+      (let ([app (mktmp)])
+        (assert-equal 0 (main (list "-C" app "init" "--app" "--name=foo"
+                                    "--entry=(bar baz)" "--main=start")))
+        (let ([mf (read-manifest (string-append app "/manifest.ss"))])
+          (assert-equal '(bar baz) (app-entry (manifest-app mf)))
+          (assert-equal 'start (app-main (manifest-app mf))))))
+
+    ;; --lib / --app 互斥:配置期就报
+    (init-lib-and-app-mutually-exclusive
+      (let ([app (mktmp)])
+        (assert-raises
+          (lambda () (main (list "-C" app "init" "--lib" "--app" "--name=foo"))))))
 
     ;; ── 端到端:init→add→install→verify→list 全经 main ──
     (main-full-workflow

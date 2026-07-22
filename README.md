@@ -2,7 +2,7 @@
 
 > git-first 的 Chez Scheme 库管理器,**Skiff** 运行时生态里的包供应商(船具商)。读 `manifest.ss`,把 git 仓库里的 R6RS 库装进项目 `lib/`,一行 `(activate)` 挂载整个依赖环境。标准 Chez 与 Skiff **双运行时**皆可用。
 
-设计文档见 [designs/](designs/);实现任务与进度见 [TASK.md](TASK.md)。
+**中文 | [English](README.en.md)** — 设计文档见 [designs/](designs/);实现任务与进度见 [TASK.md](TASK.md)。
 
 ## 定位
 
@@ -33,7 +33,7 @@ git clone <this-repo> chandler && cd chandler
 ./install.sh --global             # 装到 /usr/local(需 root)
 
 export PATH="$HOME/.local/bin:$PATH"   # 若尚未在 PATH 上(脚本会提示这行)
-chandler --version                     # → chandler 0.1.3 (skiff 0.1.1) (chez 10.4.1)
+chandler --version                     # → chandler 0.1.4 (skiff 0.1.1) (chez 10.4.1)
 ```
 
 ### Windows(PowerShell)
@@ -133,7 +133,7 @@ bake 会为每个带 native 的库生成 `(<lib> native-loader)`(产物 `lib/<mt
 
 | 命令 | 作用 |
 |------|------|
-| `init [--lib] [--name=N]` | 生成骨架 `manifest.ss` |
+| `init [--lib\|--app] [--name=N]` | 生成骨架 `manifest.ss`(默认 lib;`--app` 写 `(app …)` 使其可 pack) |
 | `add <name> <url> [--tag/--rev/--branch/--path]` | 添加依赖 |
 | `remove <name>` | 移除依赖 |
 | `install [--production] [--offline] [--force]` | 解析并物化到 `lib/{src,<mt>}` |
@@ -190,9 +190,9 @@ $env:CHANDLER_RUNTIME='chez'; ./install.ps1       # Windows
 
 ```sh
 $ chandler --version
-chandler 0.1.3 (skiff 0.1.1) (chez 10.4.1)   # 跑在 skiff 上
+chandler 0.1.4 (skiff 0.1.1) (chez 10.4.1)   # 跑在 skiff 上
 $ CHANDLER_RUNTIME=chez chandler --version
-chandler 0.1.3 (chez 10.4.1)                 # 跑在标准 Chez 上
+chandler 0.1.4 (chez 10.4.1)                 # 跑在标准 Chez 上
 ```
 
 > **显式覆盖照单执行**:指定了 `CHANDLER_SKIFF`/`CHANDLER_SCHEME` 就只用它——找不到即失败(退出码 127),**不**静默回退到别的运行时(静默回退等于否定了覆盖)。同理,显式指定的运行时不再跑能力探测。

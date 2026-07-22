@@ -10,7 +10,7 @@
           (chandler cli commands)
           (chandler cli selfinstall))
 
-  (define chandler-cli-version "0.1.3")
+  (define chandler-cli-version "0.1.4")
 
   ;; main:argv(不含程序名)→ 退出码
   (define (main argv)
@@ -98,13 +98,13 @@
     (printf "chandler -- git-first library manager for Chez Scheme (Skiff ecosystem)~%~%")
     (printf "Usage: chandler <command> [args] [flags]~%~%")
     (printf "Commands:~%")
-    (printf "  init [--lib] [--name=N]      scaffold a manifest.ss~%")
+    (printf "  init [--lib|--app] [--name=N]  scaffold a manifest.ss (lib by default)~%")
     (printf "  add <name> <url> [--tag T]   add a dependency (--tag/--rev/--branch/--path)~%")
     (printf "  remove <name>                remove a dependency~%")
     (printf "  install [--production]       resolve manifest/lock, vendor deps, install to lib/~%")
     (printf "  update                       ignore the existing lock and re-resolve~%")
     (printf "  build [--allow-build[=a,b]]  compile deps via bake into lib/<machine-type>/~%")
-    (printf "  pack [--mode m] [--runtime r] assemble a source-less, self-contained distribution~%")
+    (printf "  pack [--runtime r]           assemble a source-less, self-contained distribution~%")
     (printf "  verify-pack <dir>            re-hash a pack against its manifest~%")
     (printf "  verify                       check vendor/ against the lock (for CI)~%")
     (printf "  list | tree                  show locked dependencies~%")
