@@ -126,7 +126,7 @@
       (make-lock
         1
         #f                                  ; manifest-sha256 由 install 层填(它有文件路径)
-        "0.1.0"
+        "0.1.3"
         (map entry->locked entries))))
 
   (define (entry->locked e)

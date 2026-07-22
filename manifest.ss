@@ -4,6 +4,6 @@
 (manifest
   (format 1)
   (name    "chandler")
-  (version "0.1.0")
+  (version "0.1.3")
   (chez    ">=10.0")            ; 标准 Chez 即可,不要求 Skiff
   (srcdir  "."))               ; 搜索根 = 仓库根(库布局规范默认)
