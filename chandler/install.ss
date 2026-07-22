@@ -287,6 +287,15 @@
     (put-string p ";;; is only a fallback for third-party libraries built WITHOUT bake (no\n")
     (put-string p ";;; generated loader), so it skips any library shipping a native-loader.so.\n")
     (put-string p ";;;\n")
+    (put-string p ";;;\n")
+    (put-string p ";;; APP_ROOT is set to the project root when the environment does not already\n")
+    (put-string p ";;; carry one. It is the single variable a `chandler pack` launcher exports, and\n")
+    (put-string p ";;; everything else in a distribution hangs off it at a convention-fixed path\n")
+    (put-string p ";;; (resources/, lib/<mt>/<lib>/native/). Setting it here means application code\n")
+    (put-string p ";;; reads ONE thing in every state -- source checkout, install, pack -- instead\n")
+    (put-string p ";;; of branching on whether it happens to be deployed. An already-set value wins:\n")
+    (put-string p ";;; inside a pack the launcher got there first and is authoritative.\n")
+    (put-string p ";;;\n")
     (put-string p ";;; Recommended (location-independent) at the top of your main script:\n")
     (put-string p ";;;   (load (string-append (let ([d (path-parent (car (command-line)))])\n")
     (put-string p ";;;                          (if (string=? d \"\") \".\" d)) \"/chandler-setup.ss\"))\n")
@@ -304,6 +313,9 @@
                           [else (loop (- i 1))]))]
             [mt (symbol->string (machine-type))]
             [J (lambda (rel) (string-append root "/" rel))]
+            [_approot (let ([cur (getenv "APP_ROOT")])
+                        (when (or (not cur) (string=? cur ""))
+                          (putenv "APP_ROOT" root)))]
             [gpfx (string-append (or (getenv "HOME") ".") "/.local/share/chez")]
             [bn (lambda (d)
                   (let loop ([i (- (string-length d) 1)])

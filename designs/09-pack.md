@@ -1,6 +1,6 @@
 # 09 — `chandler pack`:无源码分发包
 
-> 状态:**设计,待实现(2026-07-22)**。
+> 状态:**K0–K3 已实现(2026-07-22)**,`chandler pack` / `chandler verify-pack` 可用(modules 模式 · skiff/scheme/petite 运行时 · sh + `.ps1` 启动器);K4(boot 模式)配置期 bail 待做,K5–K6 见下。`chandler/test/pack.ss` 11 用例,合计 **149 全绿**;skiff-demo 端到端实跑(clean-env 起服务、重定位、verify-pack 80 ok/0 bad)。
 > 前置:[05](05-install-registry.md)(`{src,<mt>}` 落点)· [06](06-runtime-compat.md)(双运行时)· [07](07-bake-integration.md)(与 bake 的协作接口)。
 > 上游规范:[chez-skiff-pack-spec.md](../../skiff/chez-skiff-pack-spec.md)(`skiff --app` 契约)· bake [designs/21 §二](../../bake/designs/21-install-and-pack.md)(**搬运基线**——现行实现在 bake 里,71 断言绿,本文照它实现后再从 bake 删除)。
 
@@ -49,13 +49,21 @@ myapp-1.0-<mt>/
 
 ## env:去两个,留一个,换中性前缀
 
-| 变量 | 决定 | 理由 |
-|---|---|---|
-| `BAKE_PACK_ROOT` | **取消** | `--script` 下 `(car (command-line))` 就是 bootstrap 自身路径,dirname 即包根。`chandler-setup.ss` 现在就是这么做的,同一招复用即可。 |
-| `BAKE_RESOURCES` | **取消** | `resources/` 名字钉死,包根一定它就完全确定,没有可传的信息量。 |
-| `BAKE_NATIVE_<LIB>` | **保留,改 `APP_NATIVE_<LIB>`** | 不是可选约定,是 [bake designs/24 §约束 3](../../bake/designs/24-native-loader-codegen.md) 实验钉死的 **boot 态唯一出路**:boot 里 loader 在库 invoke 期执行,早于一切 stub 代码,运行期 `library-directories` 不可依赖;env 在 exec 前由启动器设好,时序天然正确。modules/skiff 态里它确实冗余(对象目录候选本来就命中),但 boot 态没有替代品。 |
+**只留一个:`APP_ROOT`(部署根)。** 包内其余一切都在它下面的**约定路径**上:
 
-改中性前缀的理由:设置方从此有两个(pack 启动器、`chandler-setup.ss` 的 dev 态),`BAKE_` 名不副实。**两个消费者时改代价最小。** 需同步改:bake 生成 loader 的 `native-env-var`、bake 的四处启动器与 fixture 断言、`chandler-setup.ss`。
+| 旧变量 | 决定 | 现在怎么定位 |
+|---|---|---|
+| `BAKE_PACK_ROOT` | 改名 **`APP_ROOT`** | 唯一无法推导的信息就是「这个包被解到哪儿了」 |
+| `BAKE_RESOURCES` | **取消** | `$APP_ROOT/resources/` —— 名字钉死 |
+| `BAKE_NATIVE_<LIB>`(每库一个,按库名大写造名) | **整族取消** | `$APP_ROOT/lib/<mt>/<libpath>/native/` —— 生成的 loader 自己拼 |
+
+**实现期修正的一处论证。** 起初的理由是「`resources/` 名字钉死 ⇒ 包根一定它就完全确定 ⇒ 不必传」——漏了一步:**应用自己不知道包根**。`bootstrap.ss` 能从 `(car (command-line))` 推,`skiff --app` 能从 manifest 路径推,但编译成 `.so` 的应用库两者都没有。所以「部署根」这一个信息必须传。
+
+顺着这个漏洞反而得到更简的结论:既然布局已经全面 `<mt>` 分层、路径完全由约定决定,那么 **一个 `APP_ROOT` 足以定位包内任何东西**,per-library 的 native 变量整族可以删掉 —— 那一族当初存在,正是因为布局还不够统一、推不出路径。而且 `$APP_ROOT/lib/<mt>/<libpath>/native/` 与 loader 早就有的 dev 兜底 `_build/<mt>/<libpath>/native/` 是同一个形状:**一条约定,两个根**。
+
+`APP_ROOT` 仍然是**必需**的,理由不变([bake designs/24 §约束 3](../../bake/designs/24-native-loader-codegen.md)):boot 里 loader 在库 invoke 期执行,早于一切 stub 代码,运行期 `library-directories` 不可依赖;env 在 exec 前设好,时序天然正确。
+
+已同步落地:bake 的 `native-loader` 生成器(候选 1 改为 `$APP_ROOT/lib/<mt>/…`)、bake 四处启动器、bake 的 V/Z/P 系列断言、chandler pack 启动器。启动器因此从 5 行降到 3 行。
 
 > `SKIFF_BOOT_DIR` 不在此列 —— 那是 skiff 自己文档化的覆盖,本布局(`bin/<mt>` + `boot/<mt>`)对不上它的 exe 相对发现,必须显式给;且 boot 须在进程有堆之前注册,远早于 `--app` 被解析,env 是唯一交接方式。
 
@@ -97,12 +105,12 @@ boot 模式要「生成入口 stub → `compile-file` → 对整棵 `.so` 闭包
 
 | # | 内容 |
 |---|---|
-| K0 | `(chandler pack)` 模块骨架 + `chandler pack` CLI + 前置校验(闭包完整性) |
-| K1 | modules 模式 + skiff 运行时(主力路径):对象树搬运 · 运行时/boot 捆绑 · sh 启动器 · `pack.manifest` |
-| K2 | stock scheme/petite 运行时:`bootstrap.ss` 生成(包根从自身路径推导)· 绝对 `-b` 链 |
-| K3 | `.ps1` 启动器 + `chandler verify-pack` |
+| K0 ✅ | `(chandler pack)` 模块骨架 + `chandler pack` CLI + 前置校验(闭包完整性) |
+| K1 ✅ | modules 模式 + skiff 运行时(主力路径):对象树搬运 · 运行时/boot 捆绑 · sh 启动器 · `pack.manifest` |
+| K2 ✅ | stock scheme/petite 运行时:`bootstrap.ss` 生成(包根从自身路径推导)· 绝对 `-b` 链 |
+| K3 ✅ | `.ps1` 启动器 + `chandler verify-pack` |
 | K4 | boot 模式(排单 bake `boot-task`,含 bake 侧 `(bases …)` 子句) |
-| K5 | `resources/` + `APP_NATIVE_<LIB>` 改名(bake / chandler-setup 同步) |
+| K5 | ~~`resources/`~~ ✅ + ~~env 收敛为单个 `APP_ROOT`~~ ✅(bake 侧已同步);待做:`chandler-setup.ss` 在 dev 态也设 `APP_ROOT`,使应用四态读同一个东西 |
 | K6 | 从 bake 删除 `pack.ss` / `pack-task` / V 系列 / P9–P10 / Z7 · Z7b,designs/21 §二 改为「已移交」 |
 
 验收对齐 bake 现有的 V1–V23(71 断言)+ Z7/Z7b,移植进 `tests/`;新增闭包不完整时的报错路径。

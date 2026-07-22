@@ -7,7 +7,7 @@
 (library (chandler cli commands)
   (export cmd-init cmd-install cmd-update cmd-verify cmd-list cmd-tree
           cmd-add cmd-remove cmd-run cmd-exec cmd-repl
-          cmd-uninstall cmd-doctor cmd-build
+          cmd-uninstall cmd-doctor cmd-build cmd-pack cmd-verify-pack
           ensure-gitignore-lib skeleton-manifest-datum)
   (import (chezscheme)
           (chandler util)
@@ -21,8 +21,36 @@
           (chandler registry)
           (chandler runtime)
           (chandler build)
+          (chandler pack)
           (chandler cli args))
 
+  ;; ── pack / verify-pack(designs/09)──
+  ;; pack 只**组装**:应用编译树(bake build)+ 依赖闭包(chandler build)+ 随包运行时。
+  ;; 缺件一律在前置校验里停下并说清该跑哪个命令 —— native 尤其无法在消费方现编。
+  (define (cmd-pack root flags)
+    (pack root
+          (list (cons 'mode    (and (flag flags 'mode) (string->symbol (flag flags 'mode))))
+                (cons 'runtime (and (flag flags 'runtime) (string->symbol (flag flags 'runtime))))
+                (cons 'out     (flag flags 'out))
+                (cons 'name    (flag flags 'name))
+                (cons 'version (flag flags 'version))
+                (cons 'entry   (parse-entry (flag flags 'entry)))
+                (cons 'main    (and (flag flags 'main) (string->symbol (flag flags 'main)))))))
+
+  ;; --entry '(myapp core)' —— 库名 s-表达式;缺省由 pack 取 (<manifest name>)
+  (define (parse-entry s)
+    (and s
+         (let ([d (with-input-from-string s read)])
+           (unless (and (pair? d) (for-all symbol? d))
+             (error 'pack (format "--entry must be a library name like '(myapp)', got ~s" s)))
+           d)))
+
+  (define (cmd-verify-pack root flags pos)
+    (let ([target (positional-ref pos 0 #f)])
+      (unless target (error 'verify-pack "usage: chandler verify-pack <dir|pack.manifest>"))
+      (verify-pack (if (string-prefix? "/" target) target (join-paths root target)))))
+
+  ;; ── init ──
   ;; ── init ──
   (define (cmd-init root flags)
     (let* ([name (or (flag flags 'name) (basename root))]

@@ -20,6 +20,7 @@
         (prefix (chandler test cli) cli:)
         (prefix (chandler test registry) registry:)
         (prefix (chandler test build) build:)
+        (prefix (chandler test pack) pack:)
         (prefix (chandler test selfinstall) selfinstall:))
 
 (define all-suites
@@ -39,6 +40,7 @@
     (cons 'cli cli:suite)
     (cons 'registry registry:suite)
     (cons 'build build:suite)
+    (cons 'pack pack:suite)
     (cons 'selfinstall selfinstall:suite)))
 
 (exit (if (run-suites all-suites) 0 1))

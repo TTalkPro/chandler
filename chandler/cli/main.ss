@@ -34,6 +34,8 @@
          [(install) (cmd-install root flags)]
          [(update)  (cmd-update root flags)]
          [(build)   (cmd-build root flags)]
+         [(pack)    (cmd-pack root flags)]
+         [(verify-pack) (cmd-verify-pack root flags pos)]
          [(verify)  (cmd-verify root flags)]
          [(list)    (cmd-list root flags)]
          [(tree)    (cmd-tree root flags)]
@@ -90,7 +92,7 @@
     (printf " (chez ~a)~%" (chez-version-string)))
 
   (define (list-tasks)
-    (printf "commands: init add remove install update build verify list tree run exec repl version~%"))
+    (printf "commands: init add remove install update build pack verify verify-pack list tree run exec repl version~%"))
 
   (define (usage)
     (printf "chandler -- git-first library manager for Chez Scheme (Skiff ecosystem)~%~%")
@@ -102,6 +104,8 @@
     (printf "  install [--production]       resolve manifest/lock, vendor deps, install to lib/~%")
     (printf "  update                       ignore the existing lock and re-resolve~%")
     (printf "  build [--allow-build[=a,b]]  compile deps via bake into lib/<machine-type>/~%")
+    (printf "  pack [--mode m] [--runtime r] assemble a source-less, self-contained distribution~%")
+    (printf "  verify-pack <dir>            re-hash a pack against its manifest~%")
     (printf "  verify                       check vendor/ against the lock (for CI)~%")
     (printf "  list | tree                  show locked dependencies~%")
     (printf "  run <script.ss> [args...]    run a script with the dependency environment~%")
