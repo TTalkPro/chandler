@@ -59,9 +59,10 @@
                       [else (set! pending (cons name pending))])))))
             order)
           (unless (null? pending)
-            (error 'build
-                   (format "these dependencies need native library builds (running their build scripts means trusting their code); authorize with:~%  --allow-build~a~%  affected: ~a"
-                           "" (reverse pending))))
+            (let ([names (reverse pending)])
+              (error 'build
+                     (format "these dependencies need native library builds (running their build scripts means trusting their code): ~a~%  authorize with: --allow-build (all) or --allow-build=~a (these only)"
+                             (string-join names ", ") (string-join names ",")))))
           ;; 2) 生成项目根 recipe(单根 lib/src)+ 跑真实 bake 编译全部依赖 → _build/<mt>/
           (bake-build-deps root order)
           ;; 3) 拷 _build/<mt>/ → lib/<mt>/,补齐 src/mt 对(排除构建内部物)
@@ -70,8 +71,9 @@
           (unless (null? to-record)
             (write-approvals approvals-path
                              (merge-approvals approvals (reverse to-record))))
-          (printf "build: ~a ~a compiled to lib/<mt>/~%"
-                  (length order) (plural (length order) "dependency" "dependencies"))
+          (printf "build: ~a ~a compiled to lib/~a/~%"
+                  (length order) (plural (length order) "dependency" "dependencies")
+                  (current-machine-type))
           0))))
 
   ;; ── 生成项目根 recipe → `bake -f … build-all`(cwd=根)──

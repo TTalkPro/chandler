@@ -14,6 +14,7 @@
 | [06-runtime-compat.md](06-runtime-compat.md) | **标准 Chez 与 Skiff 双运行时兼容** | — |
 | [07-bake-integration.md](07-bake-integration.md) | **与 bake 的协作接口**(依赖编译闭包/native) | 难点 4、5 |
 | [08-bootstrap-security.md](08-bootstrap-security.md) | 自举、分发与信任模型 | 难点 5、8 |
+| [09-pack.md](09-pack.md) | **`chandler pack`**:无源码分发包(自 bake 移交)。包布局、三条约定、env 去留、boot 模式排单给 bake。 | 难点 4(延伸) |
 
 ## 定位回顾(一句话版)
 
@@ -37,7 +38,7 @@
 
 ## 实现状态
 
-**全部 8 篇设计已落地实现**(纯 Chez,113 个测试全绿;见仓库根 [README.md](../README.md)、[TASK.md](../TASK.md))。已实现命令:`init/add/remove/install/update/build/verify/list/tree/run/exec` + `install --global`/`uninstall`/`doctor` + `install-self`/`uninstall-self`。
+**01–08 全部落地实现**(纯 Chez,113 个测试全绿;见仓库根 [README.md](../README.md)、[TASK.md](../TASK.md))。已实现命令:`init/add/remove/install/update/build/verify/list/tree/run/exec` + `install --global`/`uninstall`/`doctor` + `install-self`/`uninstall-self`。**09(pack)设计完成、待实现** —— pack 自 bake 移交,迁移期 bake 侧冻结待删。
 
 与本目录设计的**已知偏差**(TASK.md 有完整记录):
 

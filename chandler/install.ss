@@ -65,8 +65,9 @@
           (bake-install-deps root git-deps)
           ;; 3) 生成 chandler-setup.ss(一行激活文件)
           (write-setup-file root)
-          (printf "install: ~a ~a vendored, installed to lib/{src,<mt>}; wrote chandler-setup.ss~%"
-                  (length git-deps) (plural (length git-deps) "dependency" "dependencies"))
+          (printf "install: ~a ~a vendored, installed to lib/{src,~a}; wrote chandler-setup.ss~%"
+                  (length git-deps) (plural (length git-deps) "dependency" "dependencies")
+                  (current-machine-type))
           0))))
 
   ;; 取 lock:新鲜则用旧;否则解析 + 写(填 manifest-sha256)
