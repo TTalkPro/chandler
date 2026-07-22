@@ -18,7 +18,7 @@ chandler/                        ; 本仓库
 
 | 形态 | 启动 | 场景 |
 |------|------|------|
-| 解释执行 | wrapper 里 `scheme --libdirs <安装根> --program …` | 自举第一步、开发期 |
+| 解释执行 | wrapper 里 `scheme --libdirs <prefix>/src::<prefix>/<mt> --program <prefix>/src/chandler/cli/main.sps …` | 自举第一步、开发期 |
 | 编译 `.so` 树 | 同上,命中已编译产物 | 正常安装态(bake 编的) |
 | whole-program boot | `scheme --boot chandler.boot` | 可选优化,`bake exe` 出 |
 
@@ -36,16 +36,16 @@ git clone + ./install.sh [--global | --force]:
     3. exec <rt> --libdirs <repo> --program <repo>/chandler/cli/main.sps install-self "$@"
        (设 CHANDLER_SRC=<repo> 供 install-self 定位源根)
   chandler install-self(chandler/cli/selfinstall.ss):
-    4. libdir = --global ? /usr/local/share/chez/lib : $HOME/.local/share/chez/lib(与 bake target 对齐)
+    4. prefix = --global ? /usr/local/share/chez : $HOME/.local/share/chez(与 bake target 对齐,含 src/ 与 <mt>/)
     5. 库树 → 委托 `bake install`(或 `bake install-global`),cwd=源码 checkout,读其 recipe.ss
-       bake 拷 chandler.ss + chandler/** → libdir,并写 <libdir>/.bake-install/chandler.files 清单
+       bake 把源码(chandler.ss + chandler/**)拷到 <prefix>/src/、编译 `.so` + native 拷到 <prefix>/<mt>/,并写 <prefix>/.bake-install/chandler.files 清单
     6. 写运行时发现启动器 → <bindir>/chandler(skiff 优先);PATH 提示
 ```
 
-- **落点与 bake target 对齐**:bake `(target user)` = `$HOME/.local/share/chez/lib`、`(target global)` = `/usr/local/share/chez/lib`——恰是 chandler 的 libdir。`recipe.ss` 提供 `install`/`install-global`(及对应 uninstall)两组 install-task 供 install-self 选调。库树落 `share/chez/lib`(Chez 库搜索根),`(import (chandler))` 可解析——兑现「机制三件套」之一。
-- **启动器 = 运行时发现 + 能力探测**:生成的 `bin/chandler`(及开发期 `bin/chandler`、`install.sh`)按 `skiff scheme chez chez-scheme chezscheme` 逐个 `command -v`;Chez 各名已知可运行程序直接用,**非 Chez 运行时(skiff 等)须先过能力探测**——喂一段打印独特 token 的 R6RS 程序,输出含 token 才算「能跑程序」。命中即 `exec <rt> --libdirs <home> --program <home>/chandler/cli/main.sps "$@"`;皆无 → exit 127。
+- **落点与 bake target 对齐**:bake `(target user)` = `$HOME/.local/share/chez`、`(target global)` = `/usr/local/share/chez`——恰是 chandler 的前缀。`recipe.ss` 提供 `install`/`install-global`(及对应 uninstall)两组 install-task 供 install-self 选调。源码落 `<prefix>/src`(Chez 库搜索根)、编译 `.so` + native 落 `<prefix>/<mt>`,消费方挂 `<prefix>/src::<prefix>/<mt>` 对,`(import (chandler))` 可解析——兑现「机制三件套」之一。
+- **启动器 = 运行时发现 + 能力探测**:生成的 `bin/chandler`(及开发期 `bin/chandler`、`install.sh`)按 `skiff scheme chez chez-scheme chezscheme` 逐个 `command -v`;Chez 各名已知可运行程序直接用,**非 Chez 运行时(skiff 等)须先过能力探测**——喂一段打印独特 token 的 R6RS 程序,输出含 token 才算「能跑程序」。命中即 `exec <rt> --libdirs <prefix>/src::<prefix>/<mt> --program <prefix>/src/chandler/cli/main.sps "$@"`;皆无 → exit 127。
   - **为何要探测**:早期 skiff(如 `0.0.0-dev`)是 demo stub——吞掉旗标、只打印 banner、退出码仍 0,靠顺序/退出码无法回退。探测让启动器**今天**跳过 stub 用 Chez,而 skiff 成熟(支持 `--program`)后**自动**被优先选用,无需改启动器。skiff 是 Chez 超集,`--libdirs`/`--program` 语义一旦实现即通用。
-- **卸载自洽、不依赖源码**:`chandler uninstall-self` 直接读 bake 的 `<libdir>/.bake-install/chandler.files`(绝对路径逐行)删库 + 清空父目录 + 删清单,再删启动器。装后源码删了也能卸。
+- **卸载自洽、不依赖源码**:`chandler uninstall-self` 直接读 bake 的 `<prefix>/.bake-install/chandler.files`(绝对路径逐行)删库 + 清空父目录 + 删清单,再删启动器。装后源码删了也能卸。
 - 后续升级:`chandler self-update` = `git pull && ./install.sh`(install-self 的 `--force` 先据清单卸旧库再装)。
 - 生态自举全序:**bake(自装,script-app 自拷)→ chandler(bake 装库 + 自补启动器)→ 应用**。bake 是 script-application 不能用 install-task 自装,故自拷;chandler 是库,直接 `bake install`——两者分工正好体现「库 vs 脚本应用」的安装差异。
 

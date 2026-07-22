@@ -11,7 +11,7 @@ Chandler 全部状态就四块,每条命令声明自己读/写哪块:
 | 清单 | `./manifest.ss` | 用户手写(或 `add`/`remove` 代改),意图之源 |
 | 锁 | `./manifest.lock` | 机器生成,可复现之源 |
 | 依赖树 | `./lib/<name>/` | 可随时重建的缓存态(从 lock 物化) |
-| 全局库 | `~/.local/share/chez/lib` 等 | 共享安装(见 [05](05-install-registry.md)) |
+| 全局库 | `~/.local/share/chez` 前缀(含 `src/` + `<mt>/`,挂 `src::<mt>` 对)等 | 共享安装(见 [05](05-install-registry.md)) |
 
 ## 命令总表
 
@@ -23,9 +23,9 @@ Chandler 全部状态就四块,每条命令声明自己读/写哪块:
 | `chandler install` | manifest, lock | lock, lib/ | 按需 | **主命令**:有 lock 且与 manifest 一致 → 按 lock 物化 `lib/`;无 lock 或 manifest 变了 → 解析([03](03-resolution.md))→ 写 lock → 物化 |
 | `chandler update [name…]` | manifest | lock, lib/ | 是 | 忽略旧 lock(或仅指定名),重解析 branch/区间 pin,刷新 lock |
 | `chandler build [--allow-build]` | lock, lib/ | lib/ 内产物 | 否 | 编译依赖闭包 + 跑 native 构建,**委托 bake**(见 [07](07-bake-integration.md)) |
-| `chandler run <script.ss> [args…]` | lock | — | 否 | Bundler exec 模型:设好 `library-directories` + 预载 native 后 `load` 脚本(见 [06](06-runtime-compat.md) 选择 runtime) |
-| `chandler exec -- <cmd…>` | lock | — | 否 | 导出 `CHEZSCHEMELIBDIRS` 后 exec 任意命令(给编辑器/CI 用) |
-| `chandler repl [--runtime R]` | lock, manifest | — | 否 | 交互 shell(skiff/chez):项目模式(lock 有依赖)挂 `lib/` 依赖 + 项目库根 + 全局兜底;非项目直接挂全局 `~/.local/share/chez/lib`(有 native 则预载) |
+| `chandler run <script.ss> [args…]` | lock | — | 否 | Bundler exec 模型:设好 `library-directories`(源目录 . 对象目录 成对,如 `lib/src::lib/<mt>`)+ 预载 native 后 `load` 脚本(见 [06](06-runtime-compat.md) 选择 runtime) |
+| `chandler exec -- <cmd…>` | lock | — | 否 | 导出 `CHEZSCHEMELIBDIRS`(`::` 分隔源::对象、`:` 分隔条目)后 exec 任意命令(给编辑器/CI 用) |
+| `chandler repl [--runtime R]` | lock, manifest | — | 否 | 交互 shell(skiff/chez):项目模式(lock 有依赖)挂 `lib/src::lib/<mt>` 对 + path 依赖源目录 + 项目库根 + 全局兜底对;非项目直接挂全局前缀对 `~/.local/share/chez/src::~/.local/share/chez/<mt>`(有 native 则预载) |
 | `chandler list` / `chandler tree` | lock | — | 否 | 平铺 / 树形显示已锁定依赖(名、rev、来源) |
 | `chandler verify` | lock, lib/ | — | 否 | 校验 `lib/` 与 lock 一致(rev 匹配、无脏改动),CI 用;不一致退出码非 0 |
 | `chandler build [--allow-build[=a,b]]` | lock, lib/ | build/ 产物 | 否 | 排单 → bake 编译依赖闭包 + native(见 [07](07-bake-integration.md)) |
