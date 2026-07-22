@@ -2,17 +2,18 @@
 ;;; chandler/cli/selfinstall.ss --- chandler install-self / uninstall-self
 ;;;
 ;;; **自安装基于 bake install**(生态闭环):库树的拷贝完全委托给 `bake install`
-;;; (读本仓 recipe.ss 的 install-task,装进 Chez lib dir 并写 bake 卸载清单);
+;;; (读本仓 recipe.ss 的 install-task,装进 Chez 库前缀并写 bake 卸载清单);
 ;;; chandler 只额外补一个**运行时发现启动器**(bin/chandler,skiff 优先 → Chez),
 ;;; 这是 bake 不管的部分。卸载据 bake 清单删库 + 删启动器,不依赖源码目录。
 ;;;
-;;; 落点(与 bake install-task 的 target 对齐):
-;;;   user(默认) → ~/.local/share/chez/lib + ~/.local/bin/chandler
-;;;   --global    → /usr/local/share/chez/lib + /usr/local/bin/chandler(需 root)
+;;; 落点(与 bake install-task 的 target + src/mt 拆分对齐):
+;;;   user(默认) → ~/.local/share/chez/{src,<mt>} + ~/.local/bin/chandler
+;;;   --global    → /usr/local/share/chez/{src,<mt>} + /usr/local/bin/chandler(需 root)
+;;;   启动器挂一对 <prefix>/src::<prefix>/<mt>,跑 <prefix>/src/chandler/cli/main.sps。
 
 (library (chandler cli selfinstall)
   (export cmd-install-self cmd-uninstall-self
-          self-libdir self-bindir self-launcher self-runtimes bake-command)
+          self-prefix self-bindir self-launcher self-runtimes bake-command)
   (import (chezscheme)
           (chandler util)
           (chandler fs)
@@ -27,53 +28,53 @@
   (define (win?)
     (string-suffix? "nt" (current-machine-type)))
 
-  ;; ── 落点(与 recipe 的 install-task target 对齐)──
-  (define (self-libdir flags)
-    (if (flag? flags 'global) "/usr/local/share/chez/lib"
-        (string-append (home-dir) "/.local/share/chez/lib")))
+  ;; ── 落点前缀(与 recipe 的 install-task target 对齐;下含 src/ 与 <mt>/)──
+  (define (self-prefix flags)
+    (if (flag? flags 'global) "/usr/local/share/chez"
+        (string-append (home-dir) "/.local/share/chez")))
   (define (self-bindir flags)
     (if (flag? flags 'global) "/usr/local/bin"
         (string-append (home-dir) "/.local/bin")))
   (define (self-launcher flags)
     (string-append (self-bindir flags) "/" (if (win?) "chandler.cmd" "chandler")))
 
-  ;; bake 的已装清单(卸载据此删库,不依赖源码)
-  (define (bake-manifest libdir) (string-append libdir "/.bake-install/chandler.files"))
+  ;; bake 的已装清单(卸载据此删库,不依赖源码):<prefix>/.bake-install/chandler.files
+  (define (bake-manifest prefix) (string-append prefix "/.bake-install/chandler.files"))
 
   ;; ── install-self:bake install 装库 + 写启动器 ──
   (define (cmd-install-self root flags)
-    (let* ([libdir   (self-libdir flags)]
+    (let* ([prefix   (self-prefix flags)]
            [launcher (self-launcher flags)]
            [global?  (flag? flags 'global)])
       ;; --force:已装则先卸库(bake install 遇清单会拒)
-      (when (and (flag? flags 'force) (file-exists? (bake-manifest libdir)))
+      (when (and (flag? flags 'force) (file-exists? (bake-manifest prefix)))
         (bake-uninstall root global?))
-      ;; 1. 库树 → 委托 bake install(cwd = 源码 checkout,读其 recipe.ss)
+      ;; 1. 库树 → 委托 bake install(cwd = 源码 checkout,读其 recipe.ss;落 <prefix>/{src,<mt>})
       (run-check (bake-command)
                  (list (if global? "install-global" "install"))
                  (list (cons 'cwd root)))
-      ;; 2. 运行时发现启动器(bake 不管这个)
-      (write-text launcher (if (win?) (launcher-cmd libdir) (launcher-sh libdir)))
+      ;; 2. 运行时发现启动器(bake 不管这个;挂 <prefix>/src::<prefix>/<mt>)
+      (write-text launcher (if (win?) (launcher-cmd prefix) (launcher-sh prefix)))
       (unless (win?) (run-check "chmod" (list "+x" launcher) '()))
       (printf "install ~a~%" launcher)
-      (printf "已自装 chandler → ~a(库经 bake install)~%" libdir)
+      (printf "已自装 chandler → ~a(库经 bake install,src/mt 拆分)~%" prefix)
       (path-hint (self-bindir flags))
       0))
 
   ;; ── uninstall-self:据 bake 清单删库 + 删启动器(不依赖源码)──
   (define (cmd-uninstall-self root flags)
-    (let ([libdir (self-libdir flags)]
+    (let ([prefix (self-prefix flags)]
           [launcher (self-launcher flags)])
-      (uninstall-by-manifest libdir)
+      (uninstall-by-manifest prefix)
       (when (file-exists? launcher)
         (delete-file launcher) (sweep-empty-parents launcher)
         (printf "rm ~a~%" launcher))
-      (printf "已卸载 chandler(自 ~a)~%" libdir)
+      (printf "已卸载 chandler(自 ~a)~%" prefix)
       0))
 
   ;; 据 bake 清单(绝对路径,逐行)删文件 + 清空父目录 + 删清单本身
-  (define (uninstall-by-manifest libdir)
-    (let ([mf (bake-manifest libdir)])
+  (define (uninstall-by-manifest prefix)
+    (let ([mf (bake-manifest prefix)])
       (if (file-exists? mf)
           (begin
             (for-each (lambda (f)
@@ -85,18 +86,21 @@
 
   ;; 卸库(--force 复用):优先据清单删;有源码时也可 bake uninstall
   (define (bake-uninstall root global?)
-    (uninstall-by-manifest (if global? "/usr/local/share/chez/lib"
-                               (string-append (home-dir) "/.local/share/chez/lib"))))
+    (uninstall-by-manifest (if global? "/usr/local/share/chez"
+                               (string-append (home-dir) "/.local/share/chez"))))
 
   ;; ── 启动器模板(运行时发现:skiff → Chez;非 Chez 须过能力探测)──
-  (define (launcher-sh home)
+  ;;   库前缀是 src/mt 拆分:挂一对 <prefix>/src::<prefix>/<mt>,程序在 <prefix>/src/。
+  ;;   <mt> 于安装机固定(库为该机所编),故生成期定死;源码目录同时兜底(无编译产物则按源编)。
+  (define (launcher-sh prefix)
     (string-append
       "#!/bin/sh\n"
       "# chandler launcher — generated by `chandler install-self`; do not edit.\n"
       "# Prefer skiff, fall back to Chez scheme. Non-Chez runtimes must pass a\n"
       "# capability probe (skips early skiff stubs that only print a demo banner).\n"
-      "CHANDLER_HOME=\"" home "\"\n"
-      "export CHANDLER_HOME\n"
+      "CHANDLER_PREFIX=\"" prefix "\"\n"
+      "CHANDLER_MT=\"" (current-machine-type) "\"\n"
+      "export CHANDLER_PREFIX CHANDLER_MT\n"
       "_prog_ok() {\n"
       "  printf '(import (chezscheme))(display \"CHANDLER_RT_OK\")' \\\n"
       "    | \"$1\" -q --program /dev/stdin 2>/dev/null | grep -q CHANDLER_RT_OK\n"
@@ -107,17 +111,19 @@
       "    scheme|chez|chez-scheme|chezscheme) : ;;\n"
       "    *) _prog_ok \"$rt\" || continue ;;\n"
       "  esac\n"
-      "  exec \"$rt\" -q --libdirs \"$CHANDLER_HOME\" --program \"$CHANDLER_HOME/chandler/cli/main.sps\" \"$@\"\n"
+      "  exec \"$rt\" -q --libdirs \"$CHANDLER_PREFIX/src::$CHANDLER_PREFIX/$CHANDLER_MT\" \\\n"
+      "    --program \"$CHANDLER_PREFIX/src/chandler/cli/main.sps\" \"$@\"\n"
       "done\n"
       "echo \"chandler: no program-capable Scheme runtime found (need skiff or Chez Scheme).\" 1>&2\n"
       "exit 127\n"))
 
-  (define (launcher-cmd home)
-    (let ([h (backslashes home)])
+  (define (launcher-cmd prefix)
+    (let ([h (backslashes prefix)] [mt (current-machine-type)])
       (string-append
         "@echo off\r\n"
         "setlocal\r\n"
-        "set \"CHANDLER_HOME=" h "\"\r\n"
+        "set \"CHANDLER_PREFIX=" h "\"\r\n"
+        "set \"CHANDLER_MT=" mt "\"\r\n"
         "set \"RT=\"\r\n"
         "for %%r in (" self-runtimes ") do if not defined RT (\r\n"
         "  where %%r >nul 2>nul && set \"RT=%%r\"\r\n"
@@ -126,7 +132,7 @@
         "  echo chandler: no Scheme runtime found ^(need skiff or Chez Scheme^). 1>&2\r\n"
         "  exit /b 127\r\n"
         ")\r\n"
-        "\"%RT%\" -q --libdirs \"%CHANDLER_HOME%\" --program \"%CHANDLER_HOME%\\chandler\\cli\\main.sps\" %*\r\n"
+        "\"%RT%\" -q --libdirs \"%CHANDLER_PREFIX%\\src::%CHANDLER_PREFIX%\\%CHANDLER_MT%\" --program \"%CHANDLER_PREFIX%\\src\\chandler\\cli\\main.sps\" %*\r\n"
         "exit /b %errorlevel%\r\n")))
 
   (define (backslashes s)

@@ -303,7 +303,8 @@
         'truncate)
       tmp))
 
-  (define (path-list dirs) (string-join dirs ":"))
+  ;; 库搜索条目 → --libdirs / CHEZSCHEMELIBDIRS 串(pair 条目 → "src::obj",见 layout)
+  (define (path-list dirs) (libdirs->arg dirs))
 
   (define (abspath root p)
     (if (string-prefix? "/" p) p (join-paths root p)))

@@ -64,10 +64,10 @@
           (assert-equal 0 (main (list "-C" app "install")))
           (assert-equal 0 (main (list "-C" app "verify")))
           (assert-equal 0 (main (list "-C" app "list")))
-          ;; 新模型:git 依赖 checkout 到 vendor/,bake install 到扁平 lib/,生成 setup
-          (assert-true (file-exists? (string-append app "/vendor/greet/greet.ss")))  ; checkout
-          (assert-true (file-exists? (string-append app "/lib/greet.ss")))           ; bake 装的扁平库
-          (assert-true (file-exists? (string-append app "/chandler-setup.ss"))))))   ; 生成的引入文件
+          ;; 新模型:git 依赖 checkout 到 vendor/,bake install 到 lib/{src,<mt>},生成 setup
+          (assert-true (file-exists? (string-append app "/vendor/greet/greet.ss")))     ; checkout
+          (assert-true (file-exists? (string-append app "/lib/src/greet.ss")))          ; bake 装的源(lib/src)
+          (assert-true (file-exists? (string-append app "/chandler-setup.ss"))))))      ; 生成的引入文件
 
     ;; ── 库搜索模式判定(run/exec/repl 统一):无 lock/依赖 → 全局;有 → 项目(最高优先)──
     (libdir-mode-detection
@@ -82,9 +82,9 @@
           (main (list "-C" app "add" "greet" greet "--branch" "main"))
           (main (list "-C" app "install"))
           (assert-true (project-mode? app))
-          ;; 项目 libdirs:扁平 lib/ 在前 + 项目根 + 全局兜底在末尾
+          ;; 项目 libdirs:lib/ 一对 (src . obj) 在前 + 项目根 + 全局兜底(一对)在末尾
           (let ([dirs (resolved-libdirs app)])
             (assert-true (>= (length dirs) 2))
-            (assert-string= (string-append app "/lib") (car dirs))               ; 扁平 lib/ 在前
-            (assert-string= (global-libdir) (list-ref dirs (- (length dirs) 1)))))))  ; 全局兜底在末尾
+            (assert-equal (project-lib-pair app) (car dirs))                     ; lib/ 一对在前
+            (assert-equal (global-libdir) (list-ref dirs (- (length dirs) 1)))))))  ; 全局兜底在末尾
     ))

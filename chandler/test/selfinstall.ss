@@ -22,15 +22,15 @@
         (let ([r (thunk)]) (putenv "HOME" old) r))))
 
   (define-suite suite
-    ;; ── 落点解析(user 默认 / --global)──
-    (libdir-user
+    ;; ── 落点解析(user 默认 / --global;前缀下含 src/mt 拆分)──
+    (prefix-user
       (with-home "/tmp/fake-home"
         (lambda ()
-          (assert-string= "/tmp/fake-home/.local/share/chez/lib" (self-libdir '()))
+          (assert-string= "/tmp/fake-home/.local/share/chez" (self-prefix '()))
           (assert-string= "/tmp/fake-home/.local/bin/chandler" (self-launcher '())))))
 
-    (libdir-global
-      (assert-string= "/usr/local/share/chez/lib" (self-libdir '((global . #t))))
+    (prefix-global
+      (assert-string= "/usr/local/share/chez" (self-prefix '((global . #t))))
       (assert-string= "/usr/local/bin/chandler" (self-launcher '((global . #t)))))
 
     ;; ── 运行时发现顺序:skiff 优先 ──
@@ -46,21 +46,22 @@
             (with-home home
               (lambda ()
                 (assert-equal 0 (cmd-install-self repo-root '()))
-                (let ([libdir (string-append home "/.local/share/chez/lib")]
+                (let ([prefix (string-append home "/.local/share/chez")]
                       [launcher (string-append home "/.local/bin/chandler")])
-                  ;; 库树经 bake install 落位(umbrella + cli 程序 + bake 清单)
-                  (assert-true (file-exists? (string-append libdir "/chandler.ss")))
-                  (assert-true (file-exists? (string-append libdir "/chandler/cli/main.sps")))
-                  (assert-true (file-exists? (string-append libdir "/.bake-install/chandler.files")))
-                  ;; 启动器:运行时发现(skiff + fallback + --program)
+                  ;; 库树经 bake install 落位(src/mt 拆分:源在 src/,umbrella + cli 程序 + bake 清单)
+                  (assert-true (file-exists? (string-append prefix "/src/chandler.ss")))
+                  (assert-true (file-exists? (string-append prefix "/src/chandler/cli/main.sps")))
+                  (assert-true (file-exists? (string-append prefix "/.bake-install/chandler.files")))
+                  ;; 启动器:运行时发现(skiff + fallback + --program)+ 挂 src::mt 一对
                   (let ([l (read-file launcher)])
                     (assert-true (substr? l "for rt in skiff scheme"))
                     (assert-true (substr? l "command -v"))
-                    (assert-true (substr? l "--program")))
+                    (assert-true (substr? l "--program"))
+                    (assert-true (substr? l "/src::")))
                   ;; 卸载:库文件 + 启动器 + bake 清单皆删
                   (assert-equal 0 (cmd-uninstall-self repo-root '()))
-                  (assert-false (file-exists? (string-append libdir "/chandler.ss")))
-                  (assert-false (file-exists? (string-append libdir "/.bake-install/chandler.files")))
+                  (assert-false (file-exists? (string-append prefix "/src/chandler.ss")))
+                  (assert-false (file-exists? (string-append prefix "/.bake-install/chandler.files")))
                   (assert-false (file-exists? launcher)))))))))
 
   (define (idx s sub)
