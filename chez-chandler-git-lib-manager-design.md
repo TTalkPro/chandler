@@ -100,8 +100,17 @@ git-first 下**首要 pin 手段是 git 的 `tag`/`rev`/`branch`**;版本区间�
 ### 机制三件套
 
 1. **`(chandler)` 库全局预装**(用户级前缀 `~/.local/share/chez`,src/mt 拆分)——类比"rubygems 预装",保证 `(import (chandler))` 永远可解析,解决"要用 Chandler 却得先装 Chandler"的鸡生蛋。
-2. **`(activate)`** 读 `./manifest.lock`,做两件事:(a) 把 `./lib` 下每个依赖的库根 **prepend 到 `(library-directories)`**;(b) **一次性自动加载所有依赖声明的 native `.so`**(见下)。
-3. **native 由 activate 统一加载,不是每个 lib 自己 load**。理由:库不该知道自己的 `.so` 装在哪——那是 machine-type/安装布局的事,只有 Chandler 知道。所以各依赖在其 `manifest.ss` 的 `native` 字段**声明**要哪些原生库,`activate` 按依赖序把它们全部 `load-shared-object`;之后**任何** lib 的 `foreign-procedure` 都能解析到符号(Chez 的 `foreign-procedure` 对所有已载入 shared object 全局查找)。`(load-native …)` 仅作**边缘/显式控制**的公开函数保留(如动态加载未声明的库),常规路径无需调用。
+2. **`(activate)`** 读 `./manifest.lock`,做两件事:(a) 把项目 `lib/` 的 **(源目录 . 对象目录) 对**(`lib/src` 与 `lib/<mt>`)prepend 到 `(library-directories)`;(b) 为**无自加载能力**的依赖兜底加载 native `.so`(见下)。
+3. **native 加载:自加载优先,activate 兜底**(2026-07-22 修订,对齐 bake designs/24)。
+
+   原先的裁决是「native 由 activate 统一加载,不是每个 lib 自己 load」,理由是**库不该知道自己的 `.so` 装在哪**——那是 machine-type/安装布局的事。这条理由**依然成立**,但 bake 现在给出了更好的落法:bake **生成** `(<lib> native-loader)` 库(作者不手写),FFI 模块 import 它并用其 `native-foreign-procedure` 宏。生成代码里**没有硬编码位置**,只有 **bake 自己维护的落点约定**——单点真源不破,被替换掉的只是「每个包作者手写一份定位逻辑」。
+
+   于是分两层:
+
+   - **自加载(优先)**:loader 在库 invoke 期按候选序自定位(env 覆盖 → `(library-directories)` 各根的**对象侧** `<obj>/<lib>/native/<soname>.<ext>` → `_build/<mt>/…` → 裸 soname)。因 Chandler 挂的正是 `lib/src::lib/<mt>` 对,**对象侧恰是 native 落点,挂好即生效**;且**惰性**——不引用 FFI 就不 `dlopen`。四态通吃(脚本 / `--program` / whole-program / boot),不依赖「使用者记得先 activate」的纪律。
+   - **统一加载(兜底)**:`activate` / `chandler-setup.ss` / `run` / `repl` 仍按 lock 的 `native` 声明扫描加载,但**仅限无生成 loader 的第三方库**(判据:该库目录下无 `native-loader.so`)。与自加载重复时幂等(dlopen 引用计数)。
+
+   `(load-native …)` 仍作**边缘/显式控制**的公开函数保留(如动态加载未声明的库),常规路径无需调用。
 
 ### ⚠️ expand-time 坑(决定用法边界)
 

@@ -19,14 +19,15 @@
 
 - **Skiff**(轻舟)= 运行时(Chez + libuv);**Chandler**(船具商)= 包管理器,读 `manifest.ss`,管**依赖的获取与激活**;**bake** = 构建工具,读 `recipe.ss`,管**编译**。
 - Chandler **不绑定 Skiff**:核心只依赖标准 Chez(`(chezscheme)` 可移植子集),Skiff 项目与纯 Chez 项目都能用(见 [06](06-runtime-compat.md))。
-- 依赖 = 整仓 checkout 到项目 `lib/<name>/`,仓库根即搜索根(见[库布局规范](../chez-skiff-library-layout.md));`(activate)` 挂路径 + 统一载 native。
+- 依赖 = 整仓 checkout 到项目 `vendor/<name>/`,再经 `bake install` 摊平进 `lib/{src,<mt>}`(src/mt 拆分;见[库布局规范](../chez-skiff-library-layout.md));
+  `(activate)` / 生成的 `chandler-setup.ss` 挂 **(源 . 对象) 对** `lib/src::lib/<mt>`,native 由 bake 生成的 loader **自加载**,Chandler 仅为无 loader 的第三方库兜底(见 [07 §5b](07-bake-integration.md))。
 
 ## 与同类工具对比(设计参照系)
 
 | | Chandler | Akku | Raven | rebar3 | cargo |
 |---|---|---|---|---|---|
 | 来源模型 | **git-first**(URL+pin 写在 manifest) | 中心化 curated index | 自建 registry | hex.pm + git | crates.io + git |
-| 依赖落点 | 项目 `lib/`(整仓) | `.akku/lib`(重写路径) | 全局 | `_build/` | `~/.cargo` + target |
+| 依赖落点 | 项目 `vendor/`(整仓)+ `lib/{src,<mt>}`(装好的库前缀) | `.akku/lib`(重写路径) | 全局 | `_build/` | `~/.cargo` + target |
 | 版本模型 | git tag/rev/branch 为主,区间辅助 | SemVer 求解 | 简单版本 | SemVer + lock | SemVer + lock |
 | 全局安装 | **可选**(`--global`,带卸载清单) | 无 | 有 | 无 | `cargo install` |
 | 原生构建 | 显式声明 + `--allow-build` 授权 | 无统一契约 | 无 | port 编译 | `build.rs`(默认信任) |

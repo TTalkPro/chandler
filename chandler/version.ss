@@ -25,7 +25,7 @@
       (map (lambda (p)
              (let ([n (string->number p)])
                (if (and n (integer? n) (exact? n) (>= n 0)) n
-                   (error 'parse-version "非法版本分量" s0 p))))
+                   (error 'parse-version "invalid version component" s0 p))))
            (filter (lambda (p) (> (string-length p) 0)) parts))))
 
   ;; 分量个数(caret/tilde 判断「指定到哪一级」用)

@@ -18,10 +18,10 @@
       (lambda (p)
         (let ([datum (read p)])
           (when (eof-object? datum)
-            (error 'read-datum-file "文件为空,期望单一 s-表达式" path))
+            (error 'read-datum-file "empty file; expected a single s-expression" path))
           (let ([rest (read p)])
             (unless (eof-object? rest)
-              (error 'read-datum-file "文件含多个顶层 form,期望单一" path rest)))
+              (error 'read-datum-file "multiple toplevel forms; expected exactly one" path rest)))
           datum))))
 
   ;; 从字符串读单一 datum(供解析镜像中 git show 出的清单内容)
@@ -29,7 +29,7 @@
     (let ([p (open-input-string s)])
       (let ([datum (read p)])
         (when (eof-object? datum)
-          (error 'read-datum-string "内容为空"))
+          (error 'read-datum-string "empty input"))
         datum)))
 
   ;; ── 结构助手 ──
@@ -40,7 +40,7 @@
   ;; 断言 datum 是 (tag ...),返回其 body(cdr);否则报错
   (define (expect-tag datum tag who)
     (unless (tagged-list? datum tag)
-      (error who (format "期望 (~a ...),实际" tag) datum))
+      (error who (format "expected (~a ...), got" tag) datum))
     (cdr datum))
 
   ;; 在 body(形如 ((k v ...) ...))中找**首个** key=k 的项,返回整项 (k v ...) 或 #f

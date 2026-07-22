@@ -5,6 +5,7 @@
   (export suite)
   (import (chezscheme)
           (chandler test harness)
+          (chandler util)          ; string-suffix?(判平台)
           (chandler layout))
 
   (define-suite suite
@@ -29,13 +30,18 @@
 
     ;; src/mt 拆分:安装前缀 → (源 . 对象) 对;条目 → --libdirs 串
     (split-pair-and-args
-      (assert-equal (cons "/pfx/src" (string-append "/pfx/" (current-machine-type)))
-                    (split-pair "/pfx"))
-      (assert-string= (string-append "/pfx/src::/pfx/" (current-machine-type))
-                      (entry->arg (split-pair "/pfx")))
-      (assert-string= "/plain" (entry->arg "/plain"))
-      (assert-string= (string-append "/pfx/src::/pfx/" (current-machine-type) ":/plain")
-                      (libdirs->arg (list (split-pair "/pfx") "/plain"))))
+      ;; 分隔符随平台:Chez $separator-character —— Windows ";" 其余 ":";
+      ;; 条目内双分隔符表 (源 . 对象),条目间单分隔符(见 layout.ss 注释)。
+      (let* ([sp (path-sep)] [mt (current-machine-type)]
+             [dbl (string-append sp sp)])
+        (assert-string= (if (string-suffix? "nt" mt) ";" ":") sp)
+        (assert-equal (cons "/pfx/src" (string-append "/pfx/" mt))
+                      (split-pair "/pfx"))
+        (assert-string= (string-append "/pfx/src" dbl "/pfx/" mt)
+                        (entry->arg (split-pair "/pfx")))
+        (assert-string= "/plain" (entry->arg "/plain"))
+        (assert-string= (string-append "/pfx/src" dbl "/pfx/" mt sp "/plain")
+                        (libdirs->arg (list (split-pair "/pfx") "/plain")))))
 
     ;; native 收进所属库:<obj-root>/<lib>/native/<soname>.<ext>
     (native-under-owning-lib

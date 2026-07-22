@@ -1,6 +1,7 @@
 # Chandler 实现任务清单
 
-> 本仓库**只实现 Chandler**(包管理器)。bake 在另一仓库实现——凡涉及编译动作(`compile-tree`/`native`)Chandler 只做**排单 + 子进程调用 + porcelain 契约**,以 mock bake 测试(见阶段 10)。
+> 本仓库**只实现 Chandler**(包管理器)。bake 在另一仓库实现——凡涉及编译动作,Chandler 只做**排单 + 生成 recipe + 子进程调 bake**,以 mock bake 测试(见阶段 10)。
+> (早期设计假想的 `bake compile-tree`/`bake native` 子命令真实 bake 并不存在,2026-07-22 已改为驱动真实 bake 任务,见 [07](designs/07-bake-integration.md)。)
 >
 > 设计权威:[designs/](designs/)。每条任务标注对应设计文档。实现约束:只 `import (chezscheme)`,限 Petite 可跑子集(见 [06 §2](designs/06-runtime-compat.md));`.ss` 首行 `#!chezscheme`、次行 `;;; <相对路径> --- <一句话>`([库布局规范](chez-skiff-library-layout.md))。
 >
@@ -39,6 +40,7 @@ bin/chandler                开发期入口 wrapper(运行时发现:skiff 优先
 tests/
   run-tests.sps             汇总跑 chandler/test/*
   mock-bake.sh              build 测试用的 mock bake
+  powershell-run.sh         Windows(.ps1)启动器验收:渲染后用 pwsh 实跑
 manifest.ss  manifest.lock  Chandler 自身依赖清单(自举:零外部依赖)
 recipe.ss                   bake 构建描述(另仓 bake 消费)
 install.sh                  薄壳:运行时发现 → chandler install-self
@@ -141,11 +143,33 @@ install.sh                  薄壳:运行时发现 → chandler install-self
   - **自安装 + 启动器**:落 `<prefix>/{src,<mt>}`,启动器挂 `<prefix>/src::<prefix>/<mt>` 跑 `<prefix>/src/chandler/cli/main.sps`;`recipe.ss` 的 install-task 加 `(needs build)`(bake 恒装编译内容)。
   - **验证**:全套 **133 用例三运行时(scheme/petite/skiff)全绿**;真实 bake 端到端(纯 Scheme 跨依赖 import + native `--allow-build`)跑通:`install → build → run` 用编译产物解析,native 经 setup 扫描自载。
 
+- [x] **对齐 bake native 自加载 loader + 输出改英文(2026-07-22 之二)**:bake 0.1.2 为每个带 native 的库生成 `(<lib> native-loader)`(产物 `<mt>/<lib>/native-loader.so`,随交付树落位),库 FFI 被引用时自加载。
+  - **chandler 零适配即命中**:loader 候选序第 2 条扫 `(library-directories)` 各根 obj 侧,而 chandler 挂的 `lib/src::lib/<mt>` 对象侧恰是 native 落点。实测:清空 `_build/` 后仅靠该对跑通;移走 native 则报 loader 自己的错。
+  - **`chandler-setup.ss` 生成优化**:不再预加载有 loader 的库(自加载**惰性**——不碰 FFI 就不 dlopen),扫描降级为**兜底**,只加载无 `native-loader.so` 的第三方库;`activate`/`run`/`repl` 同此分层。见 [07 §5b](designs/07-bake-integration.md)。
+  - **`.gitignore` 补齐**:生成的 `.chandler-build.ss` 与 bake 产出的 `_build/`(`.chandler-approvals` 是信任决定,是否提交交由用户,故不入)。
+  - **用户可见输出改英文**(CLI 帮助 + 运行期提示/错误),便于通用;源码 `;;;` 注释仍为中文(本仓约定)。
+  - 新增自加载跳过的回归用例;全套 **134 用例三运行时全绿**。
+
+- [x] **Windows/PowerShell 补强 + 显式指定运行时(2026-07-22 之三)**:
+  - **修掉 Windows 分隔符 bug**:`libdirs->arg` 原写死 `:`/`::`。据 ChezScheme `s/syntax.ss` 的 `parse-string`(`^ is ; under windows : otherwise`;`src-dir^^obj-dir` 为对),分隔符须随平台 —— 新增 `path-sep`,Windows 用 `;` / `;;`。
+  - **Windows 启动器 `.cmd` → `.ps1`**(与 bake 对齐):PowerShell 已取代 cmd,PATH 上 `.ps1` 可裸名调用。规避 PowerShell 四坑(无 `exec` 须回传 `$LASTEXITCODE`、PS 7.3+ 原生非零退出会终止、函数内 `$args` 是函数自己的、路径用正斜杠)。分隔符取 `[System.IO.Path]::PathSeparator`(与 Chez 同规则),故同一份脚本 Windows 正确、Linux pwsh 下亦可**实跑**。
+  - **显式指定运行时**:新增 `CHANDLER_RUNTIME=skiff|chez`(选哪一种),与既有 `CHANDLER_SKIFF`/`CHANDLER_SCHEME`(选哪个可执行文件)配套。优先级 `--runtime > CHANDLER_RUNTIME > manifest > 默认`,**启动器与 run/exec/repl 共用一套**。非法值报错(启动器 64);显式覆盖照单执行——找不到即 127,不静默回退、不再探测。
+  - **顺手修掉 skiff 误判为 chez**:skiff 自 0.1.1 起把顶层 `skiff-version` 绑为**过程**而非字符串,而 `skiff?` 只认字符串 → `current-runtime` 在 skiff 上报 `chez`,连带版本门挂错、`runtime-version` 回落成 Chez 版本、repl 兜底选错运行时。改为**两种绑法都认**(与 bake 同)。此 bug 由既有 `runtime-detection` 用例暴露(skiff 从 137 掉到 136),非本轮改动引入。
+  - **测试**:新增 `tests/powershell-run.sh`(P1–P9,渲染 `.ps1` 后用 pwsh **真跑**:语法/强制/覆盖/退出码/参数透传/端到端启动;无 pwsh 则干净跳过)**11 断言全绿**,并接入 `bake test-ps`;sh 启动器同项手工验证一致。Scheme 侧新增两启动器语义对齐、`CHANDLER_RUNTIME` 解析、skiff 版本不回落等用例,**137 用例三运行时全绿**。
+
+- [x] **skiff 以内置 `(skiff-version)` 自证 → 探测收紧 + 版本门归位(2026-07-22 之四)**:
+  - **探测收紧**:启动器原先只验「输出含口令」,现改为验 **`<token>:<数字打头版本>`** —— 一次调用同时确认「能跑 R6RS 程序」与「确实是 skiff」。实测:把一个指向 Chez 的 shim 命名为 `skiff` 放进 PATH,旧判据会误采纳,新判据正确跳过并回退真 Chez。sh/ps1 共用同一份探测程序文本(各写一份必漂移)。
+  - **两个坑写进注释与测试**:① 取值必须走反射 `(top-level-value (string->symbol "skiff-version"))`,直接写 `(skiff-version)` 在 `--program` 模式下是展开期未绑定标识符会报错(而 CLI/探测正是 `--program`);② 探测程序文本不得含单引号(sh 侧要嵌在 `'…'` 里),故用 `string->symbol` 而非 `'skiff-version`。
+  - **`(skiff …)` 版本门归位**:此前 skiff 被误判为 chez,导致 manifest 的 skiff 约束**从未被执行**且冒假警告;修复后 `(skiff ">=99")` 正确报 `have 0.1.1`,`(skiff ">=0.1")` 放行。
+  - **`chandler --version` 报告所在运行时**(与 bake 同款):`chandler 0.1.2 (skiff 0.1.1) (chez 10.4.1)`。PowerShell 验收据此把 P4/P5 从「能启动」升级为**校验选中的确实是哪个运行时**,13 断言全绿。
+  - **pack 侧结论**:`pack.manifest` 的 `(target … (skiff-version …))` 由 **bake** 探测并写入、由 `skiff --app` 校验,bake 用的正是同款反射 + 过程/字符串双容忍,故**不受影响、chandler 无需改动**;chandler 侧的关联只在 `manifest.ss` 的 `(skiff …)` 门(已归位)。
+  - **138 用例三运行时全绿** + PowerShell 13/13。
+
 ## 进度
 
 **全部 11 个阶段(0–10)完成,M1–M4 全部达成。** 环境:Chez 10.4.1 / ta6le。
 
-- 测试:`tests/run-tests.sps` **133 用例全绿**(16 个 suite:util/fs/sexp/layout/version/manifest/lock/proc/fetch/resolve/install/activate/cli/registry/build/selfinstall)。**`scheme`、`petite`、已部署的 `skiff` 三运行时均 133/133**——chandler 自身即跑在 skiff 上(启动器能力探测通过后优先 skiff)。src/mt 拆分对齐见本节顶部 2026-07-22 条目。
+- 测试:`tests/run-tests.sps` **138 用例全绿**(16 个 suite:util/fs/sexp/layout/version/manifest/lock/proc/fetch/resolve/install/activate/cli/registry/build/selfinstall)。**`scheme`、`petite`、已部署的 `skiff` 三运行时均 138/138**——chandler 自身即跑在 skiff 上(启动器能力探测通过后优先 skiff)。src/mt 拆分对齐见本节顶部 2026-07-22 条目。
 - **skiff 端到端验证**:skiff 应用(manifest 声明 `(skiff …)`)经 chandler-on-skiff 走 `init→add→install→verify→run` 全通;`chandler run` 依 manifest 自动选运行时(skiff-only→skiff、chez→chez),应用运行期自证落在正确运行时。
 - 端到端验证:`init→add→install→verify→list→tree→run→exec` 经二进制跑通;`(activate)` 真实挂载并 import 依赖;全局 `install/uninstall/list/doctor`;`build` 排单经 mock bake + 授权哈希绑定;`install-self` 装 `~/.local` + 自卸载自洽(启动器 skiff 优先运行时发现)。
 - 实现的库:`(chandler)` umbrella + 底座 `util/fs/hash/proc` + `sexp/layout/version/manifest/lock/fetch/resolve/install/registry/runtime/activate/build/cli.{args,commands,main,selfinstall}`;测试夹具 `(chandler test fixtures)`。

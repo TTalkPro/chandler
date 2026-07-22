@@ -39,11 +39,18 @@ git clone + ./install.sh [--global | --force]:
     4. prefix = --global ? /usr/local/share/chez : $HOME/.local/share/chez(与 bake target 对齐,含 src/ 与 <mt>/)
     5. 库树 → 委托 `bake install`(或 `bake install-global`),cwd=源码 checkout,读其 recipe.ss
        bake 把源码(chandler.ss + chandler/**)拷到 <prefix>/src/、编译 `.so` + native 拷到 <prefix>/<mt>/,并写 <prefix>/.bake-install/chandler.files 清单
-    6. 写运行时发现启动器 → <bindir>/chandler(skiff 优先);PATH 提示
+    6. 写运行时发现启动器 → <bindir>/chandler(POSIX,sh)或 <bindir>/chandler.ps1(Windows,PowerShell);skiff 优先;PATH 提示
 ```
 
 - **落点与 bake target 对齐**:bake `(target user)` = `$HOME/.local/share/chez`、`(target global)` = `/usr/local/share/chez`——恰是 chandler 的前缀。`recipe.ss` 提供 `install`/`install-global`(及对应 uninstall)两组 install-task 供 install-self 选调。源码落 `<prefix>/src`(Chez 库搜索根)、编译 `.so` + native 落 `<prefix>/<mt>`,消费方挂 `<prefix>/src::<prefix>/<mt>` 对,`(import (chandler))` 可解析——兑现「机制三件套」之一。
-- **启动器 = 运行时发现 + 能力探测**:生成的 `bin/chandler`(及开发期 `bin/chandler`、`install.sh`)按 `skiff scheme chez chez-scheme chezscheme` 逐个 `command -v`;Chez 各名已知可运行程序直接用,**非 Chez 运行时(skiff 等)须先过能力探测**——喂一段打印独特 token 的 R6RS 程序,输出含 token 才算「能跑程序」。命中即 `exec <rt> --libdirs <prefix>/src::<prefix>/<mt> --program <prefix>/src/chandler/cli/main.sps "$@"`;皆无 → exit 127。
+- **启动器 = 运行时发现 + 能力探测**(两平台同语义:POSIX 出 `chandler` sh 脚本,**Windows 出 `chandler.ps1`**——
+  PowerShell 已取代 cmd,且 PATH 上的 `.ps1` 可裸名 `chandler` 调用;正斜杠 + `[System.IO.Path]::PathSeparator`
+  使同一份脚本在 Windows 正确、在 Linux 的 pwsh 下也能实跑,`tests/powershell-run.sh` 即据此端到端验证):
+  生成的启动器按 `skiff scheme chez chez-scheme chezscheme` 逐个查找;Chez 各名已知可运行程序直接用,**非 Chez 运行时(skiff 等)须先过能力探测**——喂一段 R6RS 程序,输出 `<token>:<skiff 版本>`。
+  自 skiff 以内置 `(skiff-version)` 自证版本起,判据收紧为**口令 + 数字打头的版本**:一次调用同时确认「能跑程序」
+  与「确实是 skiff」。原先只验口令,一个能跑程序但并非 skiff 的同名可执行文件会被误采纳。命中即 `exec <rt> --libdirs <prefix>/src::<prefix>/<mt> --program <prefix>/src/chandler/cli/main.sps "$@"`;皆无 → exit 127。
+  `CHANDLER_RUNTIME=skiff|chez` 可**强制**某一种(非法值 → 64),`CHANDLER_SKIFF`/`CHANDLER_SCHEME` 指定具体可执行文件;
+  强制时照单执行、不探测不回退(见 [06 §3](06-runtime-compat.md))。
   - **为何要探测**:早期 skiff(如 `0.0.0-dev`)是 demo stub——吞掉旗标、只打印 banner、退出码仍 0,靠顺序/退出码无法回退。探测让启动器**今天**跳过 stub 用 Chez,而 skiff 成熟(支持 `--program`)后**自动**被优先选用,无需改启动器。skiff 是 Chez 超集,`--libdirs`/`--program` 语义一旦实现即通用。
 - **卸载自洽、不依赖源码**:`chandler uninstall-self` 直接读 bake 的 `<prefix>/.bake-install/chandler.files`(绝对路径逐行)删库 + 清空父目录 + 删清单,再删启动器。装后源码删了也能卸。
 - 后续升级:`chandler self-update` = `git pull && ./install.sh`(install-self 的 `--force` 先据清单卸旧库再装)。

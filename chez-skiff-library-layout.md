@@ -18,7 +18,7 @@ myproj/                        ← 仓库根 = 搜索根(加进 CHEZSCHEMELIBDIR
   myproj/                      ← Chez 库子树
     core/thing.ss              (library (myproj core thing))
     helpers/util.ss            (library (myproj helpers util))
-    ffi/sqlite.ss              (library (myproj ffi sqlite))   ← Scheme 侧 FFI 绑定,只写 foreign-procedure(native 由 activate 统一载)
+    ffi/sqlite.ss              (library (myproj ffi sqlite))   ← Scheme 侧 FFI 绑定;用 bake 生成的 (myproj native-loader) 的 native-foreign-procedure(自加载),Chandler 仅兜底
     test/thing.ss              (library (myproj test thing))   ← 与被测库同名共置
   native/ta6le/sqlite.so       ← C/C++ 产物,置于仓库根(不在 myproj/ 子树内,避开难点 4 的 .so 混淆)
   tests/                       ← 顶层脚本入口(非库)

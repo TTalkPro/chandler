@@ -65,7 +65,7 @@
       (rev    "9f8e7d6c…")            ; ★ 解析到的确切 commit,物化唯一依据
       (srcdir ".")
       (deps   (json uri))             ; 它的直接依赖名(拓扑排序依据)
-      (natives (llhttp)))             ; 它声明的 native 名(activate 统一加载依据)
+      (natives (llhttp)))             ; 它声明的 native 名(build 排 native-task + activate 兜底加载依据)
     (json
       (source (git "https://github.com/x/json"))
       (pin    (rev "a1b2c3d"))

@@ -37,7 +37,7 @@
            [entries (enumerate-lib src name)]      ; ((dest-rel . src-abs) …);dest-rel 已带 src//<mt>/ 命名空间
            [files (map car entries)])              ; 相对 <prefix> 的目标路径清单
       (when (null? entries)
-        (error 'install-global "源目录不含可安装库文件(缺 <name>.ss 与 <name>/)" src name))
+        (error 'install-global "source directory has no installable library files (no <name>.ss and no <name>/)" src name))
       (let ([old (and (file-exists? (registry-file libdir name))
                       (installed-files (read-registry libdir name)))])
         (check-conflicts files libdir name opts)
@@ -76,11 +76,11 @@
                 (cond
                   [(and owner (string=? owner name)) (void)]        ; 本包 → 升级
                   [owner (error 'install-global
-                                (format "文件被包 ~a 占有,拒绝覆盖:~a" owner rel))]
+                                (format "file is owned by package ~a; refusing to overwrite: ~a" owner rel))]
                   [(alist-ref opts 'adopt) (void)]                    ; 收编野文件
                   [(alist-ref opts 'force) (void)]
                   [else (error 'install-global
-                               (format "目标已有野文件(无主),--adopt 收编或 --force:~a" rel))])))))
+                               (format "unowned file already at target; use --adopt or --force: ~a" rel))])))))
         files)))
 
   ;; 反查:libdir 下每相对路径 → 拥有它的包名(据各 registry files 字段)
@@ -98,7 +98,7 @@
   (define (uninstall-global name libdir opts)
     (let ([rf (registry-file libdir name)])
       (unless (file-exists? rf)
-        (error 'uninstall-global "未安装该包" name libdir))
+        (error 'uninstall-global "package is not installed" name libdir))
       (let* ([reg (read-registry libdir name)]
              [entries (registry-file-entries reg)])
         (for-each
@@ -108,8 +108,8 @@
                 (if (and (string=? want (sha256-file target)))
                     (delete-file target)
                     (if (alist-ref opts 'keep-modified)
-                        (fprintf (current-error-port) "保留已改动文件:~a~%" rel)
-                        (begin (fprintf (current-error-port) "warning: ~a 已被改动,仍删除~%" rel)
+                        (fprintf (current-error-port) "keeping modified file: ~a~%" rel)
+                        (begin (fprintf (current-error-port) "warning: ~a was modified; deleting anyway~%" rel)
                                (delete-file target)))))))
           entries)
         (prune-empty-dirs libdir (map car entries))

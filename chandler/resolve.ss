@@ -108,11 +108,11 @@
         [(not (string=? (url-host (rentry-source-loc existing))
                         (url-host (rspec-source-loc new))))
          (error 'resolve
-                (format "依赖名 ~a 撞名:已选 ~a,又遇异域 ~a。请在根 manifest 用 overrides 指定来源。"
+                (format "dependency name ~a collides: already chose ~a, now also ~a on a different host; pin the source with overrides in the root manifest"
                         name (rentry-source-loc existing) (rspec-source-loc new)))]
         ;; 同 host 不同 pin/url → R3 警告,保留首见(层近者胜)
         [else
-         (warn! (format "依赖 ~a 冲突:采用 ~a@~a(层 ~a),忽略 ~a@~a。"
+         (warn! (format "dependency ~a conflict: using ~a@~a (depth ~a), ignoring ~a@~a"
                         name (rentry-source-loc existing)
                         (pin-str (rentry-pin-kind existing) (rentry-pin-val existing))
                         (rentry-depth existing)
@@ -149,7 +149,7 @@
       (define (visit n path)
         (case (hashtable-ref state n #f)
           [(done) (void)]
-          [(active) (warn! (format "检测到依赖环:~a → ~a(已断环继续)"
+          [(active) (warn! (format "dependency cycle detected: ~a -> ~a (cycle broken, continuing)"
                                    (reverse path) n))]
           [else
            (let ([e (hashtable-ref by-name n #f)])
@@ -180,17 +180,17 @@
                  (values #f (manifest-srcdir mf) (manifest-deps mf)
                          (map native-name (manifest-native mf)) #t))
                (values #f "." '() '() #t)))]
-        [else (error 'git-provider "未知来源类型" sk)])))
+        [else (error 'git-provider "unknown source kind" sk)])))
 
   (define (resolve-rev url pk pv)
     (case pk
       [(tag branch rev) (resolve-pin url pk pv)]
       [(version)
        (let ([t (select-highest pv (list-tags url))])
-         (unless t (error 'resolve-rev "无 tag 满足版本区间" url pv))
+         (unless t (error 'resolve-rev "no tag satisfies version range" url pv))
          (resolve-tag url t))]
       [(#f) (resolve-pin url 'branch (default-branch url))]
-      [else (error 'resolve-rev "未知 pin" pk)]))
+      [else (error 'resolve-rev "unknown pin kind" pk)]))
 
   (define (default-branch url) "HEAD")     ; 缺 pin:解析远端 HEAD(rev-parse HEAD 生效)
 

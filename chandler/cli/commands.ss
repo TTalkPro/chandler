@@ -28,11 +28,11 @@
     (let* ([name (or (flag flags 'name) (basename root))]
            [mpath (join-paths root "manifest.ss")])
       (when (and (file-exists? mpath) (not (flag? flags 'force)))
-        (error 'init "manifest.ss 已存在;--force 覆盖" mpath))
+        (error 'init "manifest.ss already exists; use --force to overwrite" mpath))
       (write-canonical-file mpath (skeleton-manifest-datum name))
       (ensure-gitignore-lib root)
       (when (flag? flags 'lib) (scaffold-lib root name))
-      (printf "已生成 ~a~%" mpath)
+      (printf "wrote ~a~%" mpath)
       0))
 
   (define (skeleton-manifest-datum name)
@@ -54,26 +54,26 @@
            [meta (list name version `(path ,root) (now-iso) 'chandler)]
            [opts (list (cons 'adopt (flag? flags 'adopt)) (cons 'force (flag? flags 'force)))])
       (install-global root libdir meta opts)
-      (printf "已全局安装 ~a ~a → ~a~%" name version libdir)
+      (printf "installed ~a ~a globally to ~a~%" name version libdir)
       0))
 
   (define (cmd-uninstall root flags)
-    (unless (flag? flags 'global) (error 'uninstall "仅支持 --global"))
+    (unless (flag? flags 'global) (error 'uninstall "only --global is supported"))
     (let ([libdir (target-libdir flags)]
           [name (flag flags 'name)])
-      (unless name (error 'uninstall "用法:chandler uninstall --global --name=<name>"))
+      (unless name (error 'uninstall "usage: chandler uninstall --global --name=<name>"))
       (uninstall-global name libdir (list (cons 'keep-modified (flag? flags 'keep-modified))))
-      (printf "已卸载 ~a~%" name)
+      (printf "uninstalled ~a~%" name)
       0))
 
   (define (cmd-doctor root flags)
     (let* ([libdir (target-libdir flags)]
            [issues (doctor-global libdir)])
       (if (null? issues)
-          (begin (printf "doctor: 全局库目录 ~a 无异常~%" libdir) 0)
+          (begin (printf "doctor: no issues in global library prefix ~a~%" libdir) 0)
           (begin
             (for-each (lambda (i) (fprintf (current-error-port) "  ~a~%" i)) issues)
-            (fprintf (current-error-port) "doctor: ~a 处异常~%" (length issues))
+            (fprintf (current-error-port) "doctor: ~a issue(s) found~%" (length issues))
             65))))
 
   (define (target-libdir flags)
@@ -110,8 +110,8 @@
 
   (define (cmd-verify root flags)
     (if (verify root)
-        (begin (printf "verify: lib/ 与 manifest.lock 一致~%") 0)
-        (begin (fprintf (current-error-port) "verify: 不一致(见上)~%") 65)))
+        (begin (printf "verify: vendor/ and lib/ match manifest.lock~%") 0)
+        (begin (fprintf (current-error-port) "verify: mismatch (see above)~%") 65)))
 
   ;; ── list / tree ──
   (define (cmd-list root flags)
@@ -122,14 +122,14 @@
   (define (cmd-list-global flags)
     (let ([rows (list-global (target-libdir flags))])
       (if (null? rows)
-          (printf "(全局库目录无已装包)~%")
+          (printf "(no packages installed in the global library prefix)~%")
           (for-each (lambda (r) (printf "~a  ~a  [~a]~%" (car r) (cadr r) (caddr r))) rows))
       0))
 
   (define (cmd-list-local root flags)
     (let ([rows (list-deps root)])
       (if (null? rows)
-          (printf "(无已锁依赖;先跑 chandler install)~%")
+          (printf "(no locked dependencies; run `chandler install` first)~%")
           (for-each
             (lambda (r)
               (printf "~a  ~a  ~a~a~%"
@@ -142,7 +142,7 @@
     ;; 简树:根 → 依赖(基于 lock deps 图)
     (let ([lpath (project-lock-path root)])
       (if (not (file-exists? lpath))
-          (begin (printf "(无 lock)~%") 0)
+          (begin (printf "(no lock file)~%") 0)
           (let ([lk (read-lock lpath)])
             (printf "(root)~%")
             (for-each (lambda (d)
@@ -158,13 +158,13 @@
   (define (cmd-add root flags positionals)
     (let ([name (and (pair? positionals) (car positionals))]
           [url  (and (pair? positionals) (pair? (cdr positionals)) (cadr positionals))])
-      (unless name (error 'add "用法:chandler add <name> <git-url> [--tag/--rev/--branch]"))
+      (unless name (error 'add "usage: chandler add <name> <git-url> [--tag/--rev/--branch]"))
       (let* ([mpath (join-paths root "manifest.ss")]
              [datum (read-datum-file mpath)]
              [dep (build-dep-sexpr (string->symbol name) url flags)]
              [datum* (add-dep datum dep)])
         (write-canonical-file mpath datum*)
-        (printf "已添加依赖 ~a~%" name)
+        (printf "added dependency ~a~%" name)
         0)))
 
   (define (build-dep-sexpr name url flags)
@@ -177,7 +177,7 @@
                        [(flag flags 'rev) => (lambda (v) `(rev ,(as-str v)))]
                        [(flag flags 'branch) => (lambda (v) `(branch ,(as-str v)))]
                        [else #f])])
-            (unless url (error 'add "git 依赖需 URL"))
+            (unless url (error 'add "a git dependency requires a URL"))
             (if pin `(,name ,src ,pin) `(,name ,src))))))
 
   (define (as-str v) (if (string? v) v (format "~a" v)))
@@ -198,12 +198,12 @@
 
   (define (cmd-remove root flags positionals)
     (let ([name (and (pair? positionals) (string->symbol (car positionals)))])
-      (unless name (error 'remove "用法:chandler remove <name>"))
+      (unless name (error 'remove "usage: chandler remove <name>"))
       (let* ([mpath (join-paths root "manifest.ss")]
              [datum (read-datum-file mpath)]
              [datum* (cons 'manifest (remove-dep (cdr datum) name))])
         (write-canonical-file mpath datum*)
-        (printf "已移除依赖 ~a(下次 install 清理 lib/)~%" name)
+        (printf "removed dependency ~a (next install will clean lib/)~%" name)
         0)))
 
   (define (remove-dep body name)
@@ -218,7 +218,7 @@
   ;; run:组库路径 + 载 native + 跑脚本(生成 preamble,自包含,不需子进程有 (chandler))
   (define (cmd-run root flags positionals rest)
     (let ([script (and (pair? positionals) (car positionals))])
-      (unless script (error 'run "用法:chandler run <script.ss> [args…]"))
+      (unless script (error 'run "usage: chandler run <script.ss> [args...]"))
       (let* ([dirs (resolved-libdirs root)]
              [natives (native-load-paths root)]
              [preamble (make-preamble root natives (abspath root script))]
@@ -230,7 +230,7 @@
 
   ;; exec:仅设 CHEZSCHEMELIBDIRS 后跑任意命令(给编辑器/CI)
   (define (cmd-exec root flags rest)
-    (unless (and rest (pair? rest)) (error 'exec "用法:chandler exec -- <cmd…>"))
+    (unless (and rest (pair? rest)) (error 'exec "usage: chandler exec -- <cmd...>"))
     (let ([dirs (resolved-libdirs root)])
       (run-foreground (car rest) (cdr rest)
                       (list (cons 'env (list (cons "CHEZSCHEMELIBDIRS" (path-list dirs))))))))
@@ -244,21 +244,21 @@
            [natives  (if project? (native-load-paths root) '())]
            [interp   (repl-interp root flags)])
       (fprintf (current-error-port)
-               "chandler repl:~a · ~a 个库搜索目录 · 运行时 ~a~%"
-               (if project? "项目模式" "全局模式") (length dirs) interp)
+               "chandler repl: ~a mode, ~a library search entries, runtime ~a~%"
+               (if project? "project" "global") (length dirs) interp)
       (let ([args (append (list "--libdirs" (path-list dirs))
                           (if (null? natives) '() (list (make-repl-preamble root natives))))])
         (run-foreground interp args))))
 
-  ;; 运行时:--runtime 覆盖 > manifest 声明 skiff-only > 跟随 chandler 当前所在运行时
+  ;; 运行时:--runtime > CHANDLER_RUNTIME > manifest 声明 skiff-only > 跟随 chandler 当前所在
   (define (repl-interp root flags)
-    (let ([rt (flag flags 'runtime)])
-      (cond
-        [(equal? rt "chez")  (or (getenv* "CHANDLER_SCHEME") "scheme")]
-        [(equal? rt "skiff") (or (getenv* "CHANDLER_SKIFF") "skiff")]
-        [(eq? 'skiff (interp-kind root flags)) (or (getenv* "CHANDLER_SKIFF") "skiff")]
-        [(eq? 'skiff (current-runtime))        (or (getenv* "CHANDLER_SKIFF") "skiff")]
-        [else (or (getenv* "CHANDLER_SCHEME") "scheme")])))
+    ;; 同 choose-interp 的优先级,末位再兜一层「跟随 chandler 当前所在运行时」
+    (cond
+      [(eq? 'skiff (interp-kind root flags)) (skiff-exe)]
+      [(flag flags 'runtime)                 (chez-exe)]   ; 显式 --runtime chez
+      [(preferred-runtime)                   (chez-exe)]   ; 显式 CHANDLER_RUNTIME=chez
+      [(eq? 'skiff (current-runtime))        (skiff-exe)]
+      [else                                  (chez-exe)]))
 
   ;; native 预载 preamble(仅项目有 native 时):加载各 .so 后落入 REPL
   (define (make-repl-preamble root natives)
@@ -271,18 +271,23 @@
         'truncate)
       tmp))
 
-  ;; 选解释器(designs/06 §3):--runtime 旗标 > manifest 声明 > scheme。
-  ;;   --runtime skiff|chez 显式指定;否则仅 (skiff …) 无 (chez …) → skiff;其余 → scheme。
+  ;; 选解释器(designs/06 §3)。**优先级**(run/exec/repl/启动器一致):
+  ;;   --runtime 旗标 > CHANDLER_RUNTIME 环境变量 > manifest 声明 > 默认
+  ;; 「哪一种」由上式定;「哪个可执行文件」由 CHANDLER_SKIFF / CHANDLER_SCHEME 定(名或路径)。
   (define (choose-interp root flags)
     (case (interp-kind root flags)
-      [(skiff) (or (getenv "CHANDLER_SKIFF") "skiff")]
-      [else    (or (getenv "CHANDLER_SCHEME") "scheme")]))
+      [(skiff) (skiff-exe)]
+      [else    (chez-exe)]))
+
+  (define (skiff-exe) (or (getenv* "CHANDLER_SKIFF") "skiff"))
+  (define (chez-exe)  (or (getenv* "CHANDLER_SCHEME") "scheme"))
 
   (define (interp-kind root flags)
     (let ([rt (flag flags 'runtime)])
       (cond
         [(equal? rt "skiff") 'skiff]
         [(equal? rt "chez") 'chez]
+        [(preferred-runtime)]                          ; CHANDLER_RUNTIME=skiff|chez
         [else                                          ; 依 manifest:仅 skiff → skiff
          (let ([mpath (join-paths root "manifest.ss")])
            (if (file-exists? mpath)
@@ -314,8 +319,13 @@
 
   ;; ── .gitignore / scaffold / basename(init 用)──
   ;; 忽略 chandler 生成物:vendor/(依赖 checkout)、lib/(bake 装的)、chandler-setup.ss、临时文件
-  (define gitignore-entries '("/vendor/" "/lib/" "chandler-setup.ss"
-                              ".chandler-run.ss" ".chandler-repl.ss" ".chandler-install.ss"))
+  ;; chandler/bake 生成物:依赖 checkout(vendor/)、装好的库前缀(lib/)、setup、
+  ;; 各临时 recipe/preamble,以及 `chandler build` 经 bake 产出的 _build/。
+  ;; 注:`.chandler-approvals`(native 构建授权记录)**不**入此列——它是信任决定,
+  ;; 提交与否属项目策略(提交=团队共享授权;不提交=各人各自授权),由用户自决。
+  (define gitignore-entries '("/vendor/" "/lib/" "/_build/" "chandler-setup.ss"
+                              ".chandler-run.ss" ".chandler-repl.ss"
+                              ".chandler-install.ss" ".chandler-build.ss"))
   (define (ensure-gitignore-lib root)
     (let* ([gi (join-paths root ".gitignore")]
            [lines (read-lines gi)]              ; fs.read-lines:文件缺失 → '()

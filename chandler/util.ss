@@ -7,8 +7,11 @@
   (export string-split split-lines string-trim
           string-prefix? string-suffix? string-search string-contains?
           char-index strip-prefix strip-suffix string-join
-          alist-ref getenv* ignore-errors)
+          alist-ref getenv* ignore-errors plural)
   (import (chezscheme))
+
+  ;; 英文单复数选词(用户可见输出用;避免 "1 dependencies" 之类)
+  (define (plural n one many) (if (= n 1) one many))
 
   ;; getenv 但空串视为未设(Chez putenv 无法删变量,还原为 "" 时需当作无)
   (define (getenv* name)

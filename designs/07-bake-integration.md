@@ -72,6 +72,19 @@ bake 是独立工具,但按依赖方向 **bake → chandler 库**(反向禁止,c
 
 两工具各自独立分发,但 bake 的 manifest 依赖里有 chandler(自举顺序:先 chandler 后 bake,见 [08](08-bootstrap-security.md))。
 
+## 5b. native 加载分层(对齐 bake designs/24,2026-07-22)
+
+bake 现为每个带 native 的库**生成** `(<lib> native-loader)`,编译产物 `<mt>/<lib>/native-loader.so` 随交付树落位(install/pack 白拿)。作者的 FFI 模块 import 它并用 `native-foreign-procedure` 宏,`.so` 的定位/加载由生成代码按落点不变量完成。于是统一加载**降级为兜底**:
+
+| 层 | 谁 | 何时 |
+|----|----|------|
+| **自加载(优先)** | bake 生成的 loader,库 invoke 期自定位 | 被 import 即生效,四态通吃,零使用方纪律;**惰性**(不引用 FFI 就不 dlopen) |
+| **统一加载(兜底)** | chandler `activate` / setup / run / repl | 仅**非 bake 构建、无生成 loader** 的第三方库;与自加载重复时幂等 |
+
+**chandler 侧零适配即命中**:loader 候选序第 2 条是「`(library-directories)` 每根的 obj 侧 `<obj>/<lib>/native/<soname>.<ext>`」,而 chandler 挂的正是 `lib/src::lib/<mt>` 对,obj 侧 `lib/<mt>` 恰是 native 落点 —— 挂好对即自加载生效(已实测:清空 `_build/` 后仅靠该对跑通;移走 native 则报 loader 自己的错)。
+
+故 chandler 的预加载清单(`native-load-paths`)改为**滤掉自带 loader 者**:判据为该 native 所属库目录下是否有 `native-loader.so`(与 `native/` 同级,多段库名同理)。`chandler build` 无需改动——loader `.so` 在 `_build/<mt>/` 内,随既有整树拷贝进 `lib/<mt>/`。
+
 ## 6. 失败与幂等约定
 
 - chandler 调 bake 一律子进程(生成 recipe + `bake -f <recipe> <task>`),非零退出即带上下文报出;临时 recipe 用毕即删(失败亦删)。

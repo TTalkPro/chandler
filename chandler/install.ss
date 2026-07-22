@@ -46,7 +46,7 @@
     (let* ([mpath (project-manifest-path root)]
            [lpath (project-lock-path root)])
       (unless (file-exists? mpath)
-        (error 'install "未找到 manifest.ss,先跑 chandler init" root))
+        (error 'install "manifest.ss not found; run `chandler init` first" root))
       (parameterize ([offline? (opt opts 'offline #f)])
         (let* ([mf (read-manifest mpath)]
                [lk (obtain-lock root mf mpath lpath opts)]
@@ -65,8 +65,8 @@
           (bake-install-deps root git-deps)
           ;; 3) 生成 chandler-setup.ss(一行激活文件)
           (write-setup-file root)
-          (printf "install 完成:~a 个依赖 → vendor/,已 bake install 到 lib/{src,<mt>};生成 chandler-setup.ss~%"
-                  (length git-deps))
+          (printf "install: ~a ~a vendored, installed to lib/{src,<mt>}; wrote chandler-setup.ss~%"
+                  (length git-deps) (plural (length git-deps) "dependency" "dependencies"))
           0))))
 
   ;; 取 lock:新鲜则用旧;否则解析 + 写(填 manifest-sha256)
@@ -97,7 +97,7 @@
          (if (opt opts 'force #f)
              (begin (rm-rf dir) (materialize url rev dir))
              (error 'install
-                    (format "~a 有本地改动,拒绝覆盖(--force 强制)~%  ~a"
+                    (format "~a has local changes; refusing to overwrite (use --force)~%  ~a"
                             (locked-dep-name ld) dir)))]
         [(string=? (head-rev dir) rev) (void)]
         [else
@@ -140,8 +140,8 @@
               (let ([full (join-paths vd entry)])
                 (when (and (file-directory? full) (not (member entry keep)) (not (dot-entry? entry)))
                   (if (opt opts 'keep-extra #f)
-                      (fprintf (current-error-port) "note: 保留额外目录 vendor/~a~%" entry)
-                      (begin (fprintf (current-error-port) "清理孤儿依赖 vendor/~a~%" entry)
+                      (fprintf (current-error-port) "note: keeping extra directory vendor/~a~%" entry)
+                      (begin (fprintf (current-error-port) "removing orphaned dependency vendor/~a~%" entry)
                              (rm-rf full))))))
             (dir-entries vd))))))
 
@@ -149,7 +149,7 @@
   (define (verify root)
     (let ([lpath (project-lock-path root)])
       (unless (file-exists? lpath)
-        (error 'verify "无 manifest.lock,先跑 chandler install" root))
+        (error 'verify "no manifest.lock; run `chandler install` first" root))
       (let ([lk (read-lock lpath)] [ok #t])
         (for-each
           (lambda (d)
@@ -158,19 +158,19 @@
                 (cond
                   [(not (file-directory? dir))
                    (set! ok #f)
-                   (fprintf (current-error-port) "缺失:vendor/~a(跑 chandler install)~%" (locked-dep-name d))]
+                   (fprintf (current-error-port) "missing: vendor/~a (run `chandler install`)~%" (locked-dep-name d))]
                   [(not (string=? (head-rev dir) (locked-dep-rev d)))
                    (set! ok #f)
-                   (fprintf (current-error-port) "rev 不符:vendor/~a 当前 ~a,锁定 ~a~%"
+                   (fprintf (current-error-port) "rev mismatch: vendor/~a is at ~a, lock says ~a~%"
                             (locked-dep-name d) (head-rev dir) (locked-dep-rev d))]
                   [(dirty? dir)
                    (set! ok #f)
-                   (fprintf (current-error-port) "有改动:vendor/~a~%" (locked-dep-name d))]))))
+                   (fprintf (current-error-port) "dirty: vendor/~a has local changes~%" (locked-dep-name d))]))))
           (lock-deps lk))
         (unless (or (null? (filter (lambda (d) (eq? 'git (locked-dep-source-kind d))) (lock-deps lk)))
                     (file-directory? (car (project-lib-pair root))))   ; lib/src 存在
           (set! ok #f)
-          (fprintf (current-error-port) "缺失:lib/src(跑 chandler install 重建)~%"))
+          (fprintf (current-error-port) "missing: lib/src (run `chandler install` to rebuild)~%"))
         ok)))
 
   ;; sync-status:list/tree 用
@@ -228,24 +228,37 @@
     (let ([mp (project-manifest-path root)])
       (if (file-exists? mp) (manifest-srcdir (read-manifest mp)) ".")))
 
-  ;; native .so:src/mt 拆分下,native 收进所属库 → lib/<mt>/<lib>/native/*.so。
-  ;; 扫描对象树 lib/<mt>/,取所有位于 native/ 子目录、扩展名匹配的动态库。
+  ;; ── native 兜底加载清单(designs/24 分层:自加载优先、统一加载兜底)──
+  ;;   bake 现为每个带 native 的库生成 `(<lib> native-loader)`,其编译产物
+  ;;   lib/<mt>/<lib>/native-loader.so 随交付树落位;该库 FFI 被引用时,loader 自己
+  ;;   按候选序定位并 load —— 候选 2 正是 (library-directories) 各根的 obj 侧,
+  ;;   而 chandler 挂的 lib/src::lib/<mt> 对,obj 侧恰是 native 落点,故**天然命中**。
+  ;;   ⇒ 有 loader 的库**无需预加载**(且自加载是惰性的:不碰 FFI 就不 dlopen);
+  ;;      这里只为「非 bake 构建、无生成 loader」的第三方库保留统一加载兜底。
   (define (native-load-paths root)
     (native-sos-under (project-obj-dir root)))
 
-  ;; 扫 obj 树:凡父目录名为 "native" 且扩展名匹配的文件即 native 动态库
-  ;; (与该库的编译 Scheme .so 区分:后者不在 native/ 子目录里)。
+  ;; 扫 obj 树:凡父目录名为 "native" 且扩展名匹配者即 native 动态库
+  ;; (与该库的编译 Scheme .so 区分:后者不在 native/ 子目录里);再滤掉自加载的。
   (define (native-sos-under obj-dir)
     (if (file-directory? obj-dir)
         (filter (lambda (f)
                   (and (native-so? f)
-                       (string=? "native" (base-name (parent-dir f)))))
+                       (string=? "native" (base-name (parent-dir f)))
+                       (not (self-loading? f))))
                 (files-under obj-dir))
         '()))
 
+  ;; 该 native 所属库是否自带生成 loader:<lib>/native-loader.so 与 native/ 同级
+  ;; (f = <lib>/native/<soname>.<ext> → 所属库目录 = f 的祖父目录)。
+  (define (self-loading? f)
+    (file-exists? (join-paths (parent-dir (parent-dir f)) "native-loader.so")))
+
   ;; ── 生成 chandler-setup.ss(位置无关:依入口脚本目录解析 root;src/mt 拆分)──
-  ;;   纯 Chez(无 (chandler) 依赖):挂 lib/ 一对(源.对象)+ path 源目录 + 全局兜底一对,
-  ;;   并**运行时扫描** lib/<mt>/**/native/ 载动态库(故 install 后再 build 亦生效)。
+  ;;   纯 Chez(无 (chandler) 依赖):挂 lib/ 一对(源.对象)+ path 源目录 + 全局兜底一对。
+  ;;   native 走 designs/24 分层:**挂好对本身就使 bake 生成的 native-loader 自加载生效**
+  ;;   (loader 候选 2 = library-directories 的 obj 侧 = lib/<mt>),故不再预加载有 loader
+  ;;   的库;仅对无 loader 的第三方库运行时扫描兜底(故 install 后再 build 亦生效)。
   (define (write-setup-file root)
     (let ([path-rels (relativize root (path-dep-source-dirs root))])
       (call-with-output-file (setup-path root)
@@ -257,13 +270,26 @@
       (map (lambda (x) (strip-prefix x pre)) paths)))
 
   (define (emit-setup p path-rels)
-    (put-string p ";;; chandler-setup.ss --- 由 chandler 生成;于主脚本顶部 (load) 它(勿手改)。\n")
-    (put-string p ";;; 依入口脚本(与本文件同目录)位置解析项目根,故项目可整体移动、任意 cwd 皆可。\n")
-    (put-string p ";;; 库搜索用 Chez (源目录 . 对象目录) 对:lib/src::lib/<mt>(src/mt 拆分)。\n")
-    (put-string p ";;; 主脚本顶部推荐写(位置无关加载):\n")
+    (put-string p ";;; chandler-setup.ss --- generated by chandler; (load) it at the top of your\n")
+    (put-string p ";;; main script. DO NOT EDIT -- regenerated on every `chandler install`.\n")
+    (put-string p ";;;\n")
+    (put-string p ";;; Resolves the project root from the entry script's own location (this file\n")
+    (put-string p ";;; sits beside it), so the project can be moved and run from any cwd.\n")
+    (put-string p ";;;\n")
+    (put-string p ";;; Library search uses Chez (source-dir . object-dir) PAIRS -- lib/src with\n")
+    (put-string p ";;; lib/<machine-type> (the src/mt split produced by `bake install`).\n")
+    (put-string p ";;;\n")
+    (put-string p ";;; Native (FFI) libraries are layered: mounting that pair is by itself enough\n")
+    (put-string p ";;; for bake-generated `(<lib> native-loader)` libraries to self-load, since a\n")
+    (put-string p ";;; loader locates its .so via the object side of library-directories. That is\n")
+    (put-string p ";;; lazy -- nothing is dlopen'd unless the FFI is actually used. The scan below\n")
+    (put-string p ";;; is only a fallback for third-party libraries built WITHOUT bake (no\n")
+    (put-string p ";;; generated loader), so it skips any library shipping a native-loader.so.\n")
+    (put-string p ";;;\n")
+    (put-string p ";;; Recommended (location-independent) at the top of your main script:\n")
     (put-string p ";;;   (load (string-append (let ([d (path-parent (car (command-line)))])\n")
     (put-string p ";;;                          (if (string=? d \"\") \".\" d)) \"/chandler-setup.ss\"))\n")
-    (put-string p ";;; 若总从项目根运行,简写即可:  (load \"chandler-setup.ss\")\n")
+    (put-string p ";;; If you always run from the project root, simply: (load \"chandler-setup.ss\")\n")
     (pretty-print (setup-datum path-rels) p))
 
   ;; 构造 setup 主体为数据(避免手工字符串转义);machine-type 于**加载期**求值,
@@ -283,17 +309,26 @@
                     (cond [(< i 0) d]
                           [(char=? #\/ (string-ref d i)) (substring d (+ i 1) (string-length d))]
                           [else (loop (- i 1))])))]
+            [pd (lambda (d)
+                  (let loop ([i (- (string-length d) 1)])
+                    (cond [(< i 0) "."]
+                          [(char=? #\/ (string-ref d i)) (substring d 0 i)]
+                          [else (loop (- i 1))])))]
             [ends? (lambda (s suf)
                      (let ([ls (string-length s)] [lu (string-length suf)])
                        (and (>= ls lu) (string=? suf (substring s (- ls lu) ls)))))]
-            [nativeso? (lambda (q) (or (ends? q ".so") (ends? q ".dylib") (ends? q ".dll")))])
-       ;; 库搜索:项目 lib/ 一对 + path 依赖源目录 + 全局兜底一对(项目最高优先)
+            [nativeso? (lambda (q) (or (ends? q ".so") (ends? q ".dylib") (ends? q ".dll")))]
+            ;; a library that ships <lib>/native-loader.so self-loads its own native
+            [self-loading? (lambda (d) (file-exists? (string-append (pd d) "/native-loader.so")))])
+       ;; Library search: project lib/ pair, then path-dep sources, then the global
+       ;; prefix pair -- project entries first so they win.
        (library-directories
          (append (list (cons (J "lib/src") (J (string-append "lib/" mt))))
                  (map J ',path-rels)
                  (list (cons (string-append gpfx "/src") (string-append gpfx "/" mt)))
                  (library-directories)))
-       ;; native:扫 lib/<mt>/**/native/*.{so,dylib,dll} 逐个 load-shared-object
+       ;; Native fallback ONLY for libraries with no bake-generated loader:
+       ;; scan lib/<mt>/**/native/*.{so,dylib,dll}, skipping self-loading libraries.
        (let walk ([dir (J (string-append "lib/" mt))])
          (when (file-directory? dir)
            (for-each
@@ -301,7 +336,9 @@
                (unless (or (string=? e ".") (string=? e ".."))
                  (let ([q (string-append dir "/" e)])
                    (cond [(file-directory? q) (walk q)]
-                         [(and (string=? "native" (bn dir)) (nativeso? q))
+                         [(and (string=? "native" (bn dir))
+                               (nativeso? q)
+                               (not (self-loading? dir)))
                           (load-shared-object q)]))))
              (directory-list dir))))))
 

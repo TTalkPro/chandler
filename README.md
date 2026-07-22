@@ -24,7 +24,7 @@ export PATH="$HOME/.local/bin:$PATH"
 chandler --version
 ```
 
-安装生成的 `bin/chandler` 启动器**运行时发现**:优先 `skiff`,回退 `scheme`/`chez`(designs/06 双运行时),并挂 `<prefix>/src::<prefix>/<mt>` 一对跑 `<prefix>/src/chandler/cli/main.sps`。卸载:`chandler uninstall-self`(据 bake 的 `<prefix>/.bake-install/chandler.files` 清单删库 + 删启动器,不依赖源码)。开发期无需安装,直接 `./bin/chandler <命令>`(同样 skiff 优先)。
+安装生成的启动器做**运行时发现**:优先 `skiff`,回退 `scheme`/`chez`(designs/06 双运行时),并挂 `<prefix>/src::<prefix>/<mt>` 一对跑 `<prefix>/src/chandler/cli/main.sps`。**POSIX 为 `chandler`(sh),Windows 为 `chandler.ps1`(PowerShell)**——PATH 上的 `.ps1` 可裸名 `chandler` 调用,两平台接口一致。卸载:`chandler uninstall-self`(据 bake 的 `<prefix>/.bake-install/chandler.files` 清单删库 + 删启动器,不依赖源码)。开发期无需安装,直接 `./bin/chandler <命令>`(同样 skiff 优先)。
 
 ### 用 bake 构建/安装(生态闭环)
 
@@ -32,7 +32,8 @@ chandler 带 `recipe.ss`,可被生态里的构建工具 **bake** 直接构建与
 
 ```sh
 bake            # = bake build,编译 (chandler) 库树为 .so
-bake test       # 跑全测试套件(133 用例)
+bake test       # 跑全测试套件(138 用例)
+bake test-ps    # PowerShell 启动器验收(需 pwsh,缺则跳过)
 bake install    # 装 (chandler) 库树 → ~/.local/share/chez/{src,<mt>}(--global 装 /usr/local)
 bake uninstall  # 据清单干净卸载
 ```
@@ -66,9 +67,15 @@ myapp/
 - **`chandler build`**:于项目根生成一份 recipe(`define-lib-roots "lib/src"` + 逐依赖 `library-task`/授权的 `native-task`),跑**真实 bake** 编译进 `_build/<mt>/`,再拷进 `lib/<mt>/` 补齐对(编译产物 + native)。
 - **path 依赖** `(path "../x")`:不进 vendor/lib,直挂其源目录(live,改一行立即生效)。
 
+### native 加载:自加载优先,统一加载兜底
+
+bake 会为每个带 native 的库生成 `(<lib> native-loader)`(产物 `lib/<mt>/<lib>/native-loader.so`),该库的 FFI 被引用时 loader **自己**定位并加载 `.so`——其候选之一正是 `library-directories` 的**对象侧**,而 chandler 挂的 `lib/src::lib/<mt>` 对象侧恰是 native 落点,故**挂好对即自动生效**,且是**惰性**的(不碰 FFI 就不 `dlopen`)。
+
+因此 `chandler-setup.ss` / `activate` / `run` / `repl` 的预加载已降级为**兜底**:只为「非 bake 构建、无生成 loader」的第三方库扫描加载,带 `native-loader.so` 的库一律跳过。
+
 ### 一行激活(Bundler 式)
 
-`chandler install` 生成 `chandler-setup.ss`。在主脚本顶部 `(load)` 它,即挂好 `lib/` 一对(源.对象)(+ path 源目录 + 全局兜底一对)并**运行时扫描** `lib/<mt>/**/native/` 载 native——之后 `(import (dep))` 即通,**纯 skiff/scheme 跑即可,无需 chandler 在场**:
+`chandler install` 生成 `chandler-setup.ss`。在主脚本顶部 `(load)` 它,即挂好 `lib/` 一对(源.对象)(+ path 源目录 + 全局兜底一对)——之后 `(import (dep))` 即通,**纯 skiff/scheme 跑即可,无需 chandler 在场**:
 
 ```scheme
 ;; 位置无关加载(项目可整体移动、任意 cwd 皆可):
@@ -110,6 +117,41 @@ myapp/
 
 全局旗标:`-C <dir>` `--offline` `--production` `--force` `--keep-extra` `--verbose`。
 
+## 指定运行时(skiff / chez)
+
+「用哪一种运行时」与「用哪个可执行文件」分开:
+
+| 变量 | 作用 |
+|------|------|
+| `CHANDLER_RUNTIME=skiff\|chez` | 选**哪一种**;非法值报错(退出码 64),不静默忽略 |
+| `CHANDLER_SKIFF=<exe>` | skiff 的可执行文件(名或路径) |
+| `CHANDLER_SCHEME=<exe>` | Chez 的可执行文件(名或路径) |
+| `CHANDLER_BAKE=<exe>` | bake 的可执行文件(install/build 委托它) |
+
+**优先级**(`run` / `exec` / `repl` 与**启动器**共用一套):
+
+```
+--runtime 旗标  >  CHANDLER_RUNTIME  >  manifest 声明(仅 (skiff …) → skiff)  >  默认
+```
+
+```sh
+CHANDLER_RUNTIME=skiff chandler run app.ss        # 强制 skiff
+CHANDLER_RUNTIME=chez  chandler repl              # 强制 Chez
+chandler run --runtime=chez app.ss                # 旗标最高优先
+CHANDLER_RUNTIME=chez CHANDLER_SCHEME=/opt/chez/bin/scheme chandler run app.ss
+```
+
+`chandler --version` 会报出**所在运行时**,可用来确认选中的是哪个:
+
+```sh
+$ chandler --version
+chandler 0.1.2 (skiff 0.1.1) (chez 10.4.1)   # 跑在 skiff 上
+$ CHANDLER_RUNTIME=chez chandler --version
+chandler 0.1.2 (chez 10.4.1)                 # 跑在标准 Chez 上
+```
+
+> **显式覆盖照单执行**:指定了 `CHANDLER_SKIFF`/`CHANDLER_SCHEME` 就只用它——找不到即失败(退出码 127),**不**静默回退到别的运行时(静默回退等于否定了覆盖)。同理,显式指定的运行时不再跑能力探测。
+
 ## 安全模型(designs/08)
 
 - **清单只 `read` 不求值**:`manifest.ss`/`manifest.lock`/registry 一律纯数据,永不 `eval`/`load`。
@@ -121,6 +163,17 @@ myapp/
 
 ```sh
 scheme --libdirs . --program tests/run-tests.sps    # 全量测试(纯 Chez,无外部依赖)
+petite  --libdirs . --program tests/run-tests.sps   # 同上(Petite 子集校验)
+skiff   --libdirs . --program tests/run-tests.sps   # 同上(Skiff 运行时)
+bash tests/powershell-run.sh                        # Windows 启动器验收(需 pwsh,缺则跳过)
 ```
 
+`tests/powershell-run.sh` 把生成的 `chandler.ps1` **渲染后用 pwsh 真跑**(语法 / 运行时强制 / 覆盖 / 退出码 / 参数透传 / 端到端启动)——因为生成的脚本用正斜杠且分隔符取 `[System.IO.Path]::PathSeparator`,同一份脚本在 Linux 的 pwsh 下也成立。装 pwsh:`mise use powershell`。
+
 库布局遵循[库布局规范](chez-skiff-library-layout.md):umbrella `chandler.ss` + 同名子库树 `chandler/`,搜索根 = 仓库根。核心只 `import (chezscheme)`,限 Petite 可跑子集(双运行时可移植)。
+
+### 语言约定
+
+- **用户可见输出一律英文**:CLI 帮助、运行期提示/警告/错误(`printf`/`fprintf`/`error` 的消息),以及**生成物**的头注释(`chandler-setup.ss`、`.chandler-build.ss`)——工具面向的用户不限中文。风格取 Unix 诊断惯例:小写、简短、不加句号,如 ``manifest.ss not found; run `chandler init` first``。
+- **源码注释(`;;` / `;;;`)与本仓文档保持中文**,便于设计推理的表达密度。
+- 单复数用 `(plural n "dependency" "dependencies")`(`(chandler util)`),避免 `1 dependencies`。

@@ -31,13 +31,18 @@
 | 仅 `(skiff ">=0.3")` | Skiff 应用 | `skiff`,校验 skiff 版本区间 |
 | 两者都写 | 双跑项目(如基础库的测试) | 默认 `scheme`;`chandler run --runtime skiff` 切换 |
 
-- 解释器定位:`--runtime-path` 旗标 > `CHANDLER_SCHEME` / `CHANDLER_SKIFF` 环境变量 > PATH。
+- **选哪一种运行时**(`run`/`exec`/`repl` 与**启动器**共用一套优先级,2026-07-22 补 env 层):
+  `--runtime` 旗标 > **`CHANDLER_RUNTIME=skiff|chez`** > manifest 声明(仅 `(skiff …)` → skiff)> 默认。
+  非法 `CHANDLER_RUNTIME` 值即报错(启动器退出码 64 = EX_USAGE),不静默忽略。
+- **选哪个可执行文件**:`CHANDLER_SKIFF` / `CHANDLER_SCHEME` 环境变量(名或路径)> PATH 上的默认名。
+  显式指定即**照单执行**:找不到就失败(启动器 127),**不**静默回退到别的运行时,也不再跑能力探测——
+  对显式覆盖再探测/再回退,等于否定了覆盖。
 - 版本探测:`scheme --version`(stderr)/ `skiff --version`;区间校验失败 fail fast,措辞同 pack 规范 `verify-target!` 风格(expected vs actual + 修复建议)。
 - **依赖侧校验**:解析时对每个 dep 的 `chez`/`skiff` 声明同样求交——纯 Chez 项目引入「仅 skiff」的依赖(声明了 `(skiff …)` 且未声明 `chez`)→ 警告;运行 `scheme` 时该依赖 import `(skiff …)` 自会硬错,Chandler 提前把话说明白。
 
 ## 4. `activate` 的双运行时行为
 
-`(chandler)` 库的 `activate` 在两种运行时下**代码路径完全相同**(挂 `library-directories` + topo 序 `load-shared-object` natives);差异只有一处版本门:
+`(chandler)` 库的 `activate` 在两种运行时下**代码路径完全相同**(挂 `library-directories` 的 (源 . 对象) 对 + 为无自加载能力的库兜底 `load-shared-object` natives,见 [07 §5b](07-bake-integration.md));差异只有一处版本门:
 
 ```scheme
 (define (activate . maybe-root)
@@ -45,12 +50,19 @@
   …)                                     ; ② 以下与总设计草案一致
 
 (define (current-runtime)                ; 探测:skiff 存在性以其标志绑定为准
-  (if (top-level-bound? 'skiff-version) 'skiff 'chez))
+  (if (skiff-version-string) 'skiff 'chez))   ; 取到字符串版本才算 skiff
 ```
 
-- Skiff 侧约定:运行时暴露顶层 `skiff-version`(字符串)。`current-runtime` 据此判别——**不**用可执行文件名猜(可能被符号链接/嵌入)。
+- Skiff 侧约定:运行时暴露顶层 `skiff-version`。`current-runtime` 据此判别——**不**用可执行文件名猜(可能被符号链接/嵌入)。
+  > **2026-07-22 修订**:skiff 自 0.1.1 起把它绑为**内置过程**(更早可能是字符串),**两种绑法都须认**(bake 同款容忍)。
+  > 只认字符串会把 skiff 误判成 Chez —— 连带 `(skiff …)` 版本门形同虚设(且冒出「要求 skiff 却跑在 Chez 上」的假警告)、
+  > `runtime-version` 回落成 Chez 版本、repl 兜底选错运行时。
+  >
+  > 另一个坑:取值必须走**反射** `(top-level-value (string->symbol "skiff-version"))`,
+  > **不能**直接写 `(skiff-version)` —— 后者在 `--program` 模式下是展开期未绑定标识符,直接报错,
+  > 而 chandler 的 CLI 与启动器探测正是以 `--program` 跑的。
 - `verify-runtime!` 只在**根项目** manifest 有 `chez`/`skiff` 声明时启用;失败即抛,措辞含双边版本。
-- Skiff 的 `--app` 部署态(pack)**不走 activate**(pack 规范 §4 自带加载逻辑),两者策略对齐(infra 统一载 native)但代码独立——部署态无 Chandler。
+- Skiff 的 `--app` 部署态(pack)**不走 activate**(pack 规范 §4 自带加载逻辑),两者策略对齐(infra 兜底载 native)但代码独立——部署态无 Chandler。bake 生成的 `(<lib> native-loader)` 在两态下都先行自加载,infra 侧只是兜底(幂等)。
 
 ## 5. `chandler run` 全流程(双运行时)
 
@@ -62,7 +74,7 @@ chandler run app.ss:
      ; 脚本内仍可写 (import (chandler)) (activate) —— 幂等,重复挂载无害
 ```
 
-- `run` 用**环境变量前置**而非依赖脚本顶层 `(activate)`:这样 whole-program/编译型入口也能跑(总设计「expand-time 坑」的官方出口)。native 加载仍需运行期动作:`run` 注入 `--script` 前先 load 一段 preamble(`(import (chandler)) (activate-natives)`)——`activate-natives` 是 `activate` 的 native-only 子集,新增导出。
+- `run` 用**环境变量前置**而非依赖脚本顶层 `(activate)`:这样 whole-program/编译型入口也能跑(总设计「expand-time 坑」的官方出口)。native 侧:bake 生成的 loader 已能自加载(其候选序含 `library-directories` 的对象侧,而 `run` 设的正是 `lib/src::lib/<mt>` 对),故 `run` 注入的 preamble 只为**无生成 loader 的第三方库**兜底 `load-shared-object`——`activate-natives` 即这一兜底子集。
 - `chandler exec -- <cmd>` 只做第 2 步后 exec,给编辑器 LSP、CI、REPL(`chandler exec -- scheme`)用。
 
 ## 6. 兼容性测试矩阵(CI 约定)

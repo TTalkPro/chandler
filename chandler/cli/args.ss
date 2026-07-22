@@ -38,12 +38,12 @@
              [(not (eq? v 'need-value))
               (loop (cdr args) pos (cons (cons k v) flags) rest)]
              ;; --k(取值长旗标)→ 吃下一个 token 作值
-             [(null? (cdr args)) (error 'parse-args "长旗标缺参数" (car args))]
+             [(null? (cdr args)) (error 'parse-args "long flag requires a value" (car args))]
              [else (loop (cddr args) pos (cons (cons k (cadr args)) flags) rest)]))]
         [(short-value-flag? (car args))
          (let ([k (string->symbol (substring (car args) 1 2))])
            (if (null? (cdr args))
-               (error 'parse-args "短旗标缺参数" (car args))
+               (error 'parse-args "short flag requires a value" (car args))
                (loop (cddr args) pos (cons (cons k (cadr args)) flags) rest)))]
         [(and (> (string-length (car args)) 1) (char=? #\- (string-ref (car args) 0)))
          ;; 其它短旗标:布尔

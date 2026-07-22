@@ -9,7 +9,8 @@
 ;;; 正是闭环所在。
 ;;;
 ;;;   bake            # = bake build,编译 (chandler) 库树为 .so
-;;;   bake test       # 跑全测试套件(133 用例)
+;;;   bake test       # 跑全测试套件(138 用例)
+;;;   bake test-ps    # PowerShell 启动器验收(需 pwsh,缺则跳过)
 ;;;   bake install    # 装 (chandler) 库树 → ~/.local/share/chez/{src,<mt>}(--global 装 /usr/local)
 ;;;   bake uninstall  # 据安装清单干净卸载
 ;;;   bake -T         # 列任务
@@ -25,10 +26,18 @@
 
 ;; ── test:跑测试套件(解释执行,无需先编译)──
 ;;   (build/install/uninstall 是 bake 的 tool-task,不带描述,故不列入 `bake -T`,但可直接调用。)
-(task 'test "跑全测试套件(133 用例)"
+(task 'test "跑全测试套件(138 用例)"
   '()
   (lambda ()
     (run "scheme" "--libdirs" "." "--program" "tests/run-tests.sps")))
+
+;; ── test-ps:Windows(PowerShell)启动器验收 —— 渲染 .ps1 后用 pwsh 实跑 ──
+;;   正斜杠 + [System.IO.Path]::PathSeparator 使同一份脚本跨 OS 可跑,故非 Windows
+;;   亦能端到端验证;无 pwsh 则干净跳过(`mise use powershell` 可装)。
+(task 'test-ps "跑 PowerShell 启动器验收(需 pwsh,缺则跳过)"
+  '()
+  (lambda ()
+    (run "bash" "tests/powershell-run.sh")))
 
 ;; ── install / uninstall:把 (chandler) 库树装进 Chez 库前缀(src/mt 拆分)──
 ;;   → (import (chandler …)) 全局可解析(apps 的 (activate) 与 bake 自身都需要)。

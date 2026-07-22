@@ -59,7 +59,7 @@
 
   (define (parse-dep item)
     (unless (and (pair? item) (symbol? (car item)))
-      (error 'parse-dep "依赖项须 (name ...) 形" item))
+      (error 'parse-dep "dependency entry must have the form (name ...)" item))
     (let ([name (car item)]
           [fs   (cdr item)])
       (let-values ([(sk sl) (extract-source fs name)]
@@ -70,10 +70,10 @@
     (let ([git  (find-tagged forms 'git)]
           [path (find-tagged forms 'path)])
       (cond
-        [(and git path) (error 'parse-dep "git 与 path 来源不可并存" who)]
+        [(and git path) (error 'parse-dep "git and path sources are mutually exclusive" who)]
         [git  (values 'git (cadr git))]
         [path (values 'path (cadr path))]
-        [else (error 'parse-dep "依赖缺 (git …) 或 (path …) 来源" who)])))
+        [else (error 'parse-dep "dependency has no (git ...) or (path ...) source" who)])))
 
   (define (extract-pin forms who)
     (let ([pins (filter (lambda (f) (memq (and (pair? f) (car f))
@@ -82,7 +82,7 @@
       (cond
         [(null? pins) (values #f #f)]
         [(> (length pins) 1)
-         (error 'parse-dep "pin 只能取 tag/rev/branch/version 之一" who pins)]
+         (error 'parse-dep "pin must be exactly one of tag/rev/branch/version" who pins)]
         [else (values (caar pins) (cadar pins))])))
 
   (define (extract-srcdir forms)
@@ -114,18 +114,18 @@
     ;; format 门
     (unless (and (integer? (manifest-format m)) (<= (manifest-format m) supported-format))
       (error 'validate-manifest
-             (format "manifest format ~a 高于本工具支持的 ~a,请升级 chandler"
+             (format "manifest format ~a is newer than the supported ~a; upgrade chandler"
                      (manifest-format m) supported-format)))
     ;; 必选字段
     (unless (string? (manifest-name m))
-      (error 'validate-manifest "manifest 缺 (name \"…\")"))
+      (error 'validate-manifest "manifest has no (name \"...\")"))
     (unless (string? (manifest-version m))
-      (error 'validate-manifest "manifest 缺 (version \"…\")"))
+      (error 'validate-manifest "manifest has no (version \"...\")"))
     ;; 版本区间可解析
     (for-each (lambda (pair)
                 (when (cdr pair)
                   (guard (e [#t (error 'validate-manifest
-                                       (format "~a 版本区间不可解析" (car pair)) (cdr pair))])
+                                       (format "~a version range is not parseable" (car pair)) (cdr pair))])
                     (version-match? (cdr pair) "0.0.0"))))
               (list (cons 'chez (manifest-chez m)) (cons 'skiff (manifest-skiff m))))
     ;; dep 校验:名唯一、不撞内建、path 相对存在性延后(resolve/install 时)
@@ -140,20 +140,20 @@
       (unless (null? ds)
         (let ([n (dep-name (car ds))])
           (when (memq n seen)
-            (error 'validate-manifest "依赖名重复" n))
+            (error 'validate-manifest "duplicate dependency name" n))
           (loop (cdr ds) (cons n seen))))))
 
   (define (check-dep d)
     (when (builtin-prefix? (dep-name d))
-      (error 'validate-manifest "依赖名与内建库前缀冲突" (dep-name d)))
+      (error 'validate-manifest "dependency name conflicts with a builtin library prefix" (dep-name d)))
     (when (and (eq? 'path (dep-source-kind d)) (absolute-path? (dep-source-loc d)))
-      (error 'validate-manifest "path 依赖须相对路径" (dep-source-loc d)))
+      (error 'validate-manifest "path dependency must use a relative path" (dep-source-loc d)))
     (when (and (eq? 'path (dep-source-kind d)) (dep-pin-kind d))
-      (error 'validate-manifest "path 依赖不可带 pin" (dep-name d))))
+      (error 'validate-manifest "path dependency cannot have a pin" (dep-name d))))
 
   (define (check-dep-native n)
     (when (and (eq? 'path (native-source-kind n)) (absolute-path? (native-source-loc n)))
-      (error 'validate-manifest "path native 须相对路径" (native-source-loc n))))
+      (error 'validate-manifest "path native must use a relative path" (native-source-loc n))))
 
   ;; 内建库前缀:chezscheme / rnrs / skiff(designs/06 §3)
   (define (builtin-prefix? name)

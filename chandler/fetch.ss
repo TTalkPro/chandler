@@ -56,7 +56,7 @@
         [(file-directory? p) p]
         [(offline?)
          (error 'ensure-mirror
-                (format "离线模式,缓存缺该仓库镜像:~a~%  ~a" url p))]
+                (format "offline mode: no cached mirror for ~a~%  ~a" url p))]
         [else
          (ensure-parent p)
          (git (list "clone" "--mirror" url p))
@@ -65,7 +65,7 @@
   (define (update-mirror url)
     (let ([p (ensure-mirror url)])
       (when (offline?)
-        (error 'update-mirror "离线模式不可 fetch" url))
+        (error 'update-mirror "cannot fetch in offline mode" url))
       (git (list "-C" p "fetch" "--prune" "--tags"))
       p))
 
@@ -84,14 +84,14 @@
       (or (rev-parse m branch)
           (and (not (offline?))
                (begin (update-mirror url) (rev-parse m branch)))
-          (error 'resolve-branch "分支不存在" url branch))))
+          (error 'resolve-branch "branch not found" url branch))))
 
   (define (resolve-tag url tag)
     (let ([m (ensure-mirror url)])
       (or (rev-parse m tag)
           (and (not (offline?))
                (begin (update-mirror url) (rev-parse m tag)))
-          (error 'resolve-tag "tag 不存在" url tag))))
+          (error 'resolve-tag "tag not found" url tag))))
 
   (define (list-tags url)
     (let ([m (ensure-mirror url)])
@@ -111,8 +111,8 @@
        (let ([m (ensure-mirror url)])
          (or (rev-parse m pin-val)
              (and (not (offline?)) (begin (update-mirror url) (rev-parse m pin-val)))
-             (error 'resolve-pin "rev 在仓库中不存在" url pin-val)))]
-      [else (error 'resolve-pin "未知 pin 类型" pin-kind)]))
+             (error 'resolve-pin "rev not found in repository" url pin-val)))]
+      [else (error 'resolve-pin "unknown pin kind" pin-kind)]))
 
   ;; ── 物化:--shared clone(借缓存对象库)+ detached checkout,保留 .git ──
   (define (materialize url rev dest)
@@ -121,7 +121,7 @@
         (unless (offline?) (update-mirror url)))
       (ensure-parent dest)
       (when (file-directory? dest)
-        (error 'materialize "目标已存在" dest))
+        (error 'materialize "destination already exists" dest))
       (git (list "clone" "--shared" "--no-checkout" m dest))
       (git (list "-C" dest "checkout" "--detach" rev))
       dest))

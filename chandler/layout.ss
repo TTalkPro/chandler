@@ -8,13 +8,14 @@
 ;;; 下,源码落 <prefix>/src/、平台绑定产物(编译 .so + native)整棵 _build/<mt>/ 落
 ;;; <prefix>/<mt>/。消费方用一条 Chez 库目录**对** (源目录 . 对象目录) 解析二者:
 ;;;   library-directories 形式:(cons "<prefix>/src" "<prefix>/<mt>")
-;;;   --libdirs / CHEZSCHEMELIBDIRS 串形式:"<prefix>/src::<prefix>/<mt>"(:: 分隔源::对象)
+;;;   --libdirs / CHEZSCHEMELIBDIRS 串形式:"<prefix>/src::<prefix>/<mt>"
+;;;     (双分隔符分隔 源::对象;分隔符随平台:Windows ";" 其余 ":",见 path-sep)
 ;;; native 收进所属库:<prefix>/<mt>/<lib>/native/<soname>.<ext>(与该库编译 .so 同处)。
 
 (library (chandler layout)
   (export current-machine-type so-ext
           join-paths path-join
-          split-pair entry->arg libdirs->arg
+          path-sep split-pair entry->arg libdirs->arg
           native-so? lib-native-dir lib-native-path native-so-name
           library-name->path srcdir-join
           lib-root)
@@ -56,16 +57,26 @@
     (cons (join-paths prefix "src")
           (join-paths prefix (current-machine-type))))
 
+  ;; 目录分隔符 = Chez 的 $separator-character:**Windows 为 ";",其余为 ":"**。
+  ;; 权威依据 ChezScheme s/syntax.ss 的 parse-string 注释:
+  ;;   ; "stuff^...", ^ is ; under windows : otherwise
+  ;;   ; stuff -> src-dir^^src-dir | src-dir
+  ;; 即:条目间用**单个**分隔符;条目内 "src<sep><sep>obj" 用**双**分隔符表示
+  ;; (源 . 对象) 对。故 Windows 上是 "src;;obj" 而非 "src::obj"——写死冒号会错。
+  (define (path-sep)
+    (if (string-suffix? "nt" (current-machine-type)) ";" ":"))
+
   ;; 一个「库目录条目」→ --libdirs / CHEZSCHEMELIBDIRS 的串片段。
-  ;;   pair (src . obj) → "src::obj"(:: = 源::对象);普通字符串 → 原样(源=对象)。
+  ;;   pair (src . obj) → "src<sep><sep>obj";普通字符串 → 原样(源=对象)。
   (define (entry->arg e)
     (if (pair? e)
-        (string-append (car e) "::" (cdr e))
+        (let ([s (path-sep)])
+          (string-append (car e) s s (cdr e)))
         e))
 
-  ;; 一列条目 → 完整 --libdirs 串(条目间 ":" 分隔)。
+  ;; 一列条目 → 完整 --libdirs 串(条目间单个分隔符)。
   (define (libdirs->arg entries)
-    (string-join (map entry->arg entries) ":"))
+    (string-join (map entry->arg entries) (path-sep)))
 
   ;; ── native(C/FFI)产物 ──
   ;;   收进所属库:<obj-root>/<lib>/native/<soname>.<ext>(obj-root = <prefix>/<mt>)。

@@ -17,6 +17,7 @@ chandler-setup.ss
 .chandler-run.ss
 .chandler-repl.ss
 .chandler-install.ss
+.chandler-build.ss
 
 # bake 编译产物
 _build/

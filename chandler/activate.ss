@@ -2,8 +2,13 @@
 ;;; chandler/activate.ss --- activate / load-native(src/mt 拆分:lib/{src,<mt>})
 ;;;
 ;;; 运行期激活(脚本顶层):挂 lib/ 一对(源.对象)(+ path 源目录 + 全局)到
-;;; library-directories,并 load 所有 lib/<mt>/**/native/*.so。规则与 run/exec/repl
-;;; 一致(install 的 resolved-libdirs)。native 收进所属库 lib/<mt>/<lib>/native/。
+;;; library-directories。规则与 run/exec/repl 一致(install 的 resolved-libdirs)。
+;;; native 收进所属库 lib/<mt>/<lib>/native/。
+;;;
+;;; **native 分层(bake designs/24)**:挂好该对本身就使 bake 生成的
+;;; `(<lib> native-loader)` 自加载生效(loader 按 library-directories 的 obj 侧定位,
+;;; 且惰性——不引用 FFI 就不 dlopen)。故 activate-natives 已降级为**兜底**:
+;;; 只预加载「无生成 loader」的第三方库(见 install 的 native-load-paths)。
 ;;; 注:日常激活推荐用 install 生成的 chandler-setup.ss(纯 skiff 即可,无需 (chandler))。
 
 (library (chandler activate)
@@ -27,7 +32,7 @@
        (library-directories (append (resolved-libdirs root) (library-directories)))
        (activate-natives root)]))
 
-  ;; 仅载 native(chandler-setup.ss / run 的 preamble 已自载,此为 (activate) 子集)
+  ;; 仅载 native —— 统一加载**兜底**:有 native-loader 的库自加载,不在此列
   (define activate-natives
     (case-lambda
       [() (activate-natives ".")]

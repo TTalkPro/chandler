@@ -74,7 +74,7 @@
          (if (= 0 (proc-result-code r))
              (proc-result-out r)
              (error 'run-check
-                    (format "命令失败(退出码 ~a):~a ~a~%stderr: ~a"
+                    (format "command failed (exit ~a): ~a ~a~%stderr: ~a"
                             (proc-result-code r) prog args (proc-result-err r)))))]))
 
   ;; run-status:只要退出码(用于 has-rev? 等布尔探测)

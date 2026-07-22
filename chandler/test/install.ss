@@ -7,6 +7,7 @@
           (chandler test harness)
           (chandler test fixtures)
           (chandler proc)
+          (chandler fs)
           (chandler layout)
           (chandler lock)
           (chandler fetch)
@@ -90,6 +91,23 @@
             (install app '())
             (assert-false (file-directory? orphan))
             (assert-true (file-directory? (vendor-dir app 'b)))))))
+
+    ;; designs/24 分层:bake 为带 native 的库生成 (<lib> native-loader),该库自加载;
+    ;; 统一加载降级为兜底 → native-load-paths 只报「无生成 loader」的第三方库。
+    (native-fallback-skips-self-loading
+      (let* ([root (mktmp)]
+             [obj (string-append root "/lib/" (current-machine-type))])
+        ;; a:bake 构建,带生成 loader → 自加载,不应预加载
+        (write-text (string-append obj "/a/native-loader.so") "LOADER")
+        (write-text (string-append obj "/a/native/a.so") "SO")
+        ;; b:第三方,无 loader → 需兜底预加载
+        (write-text (string-append obj "/b/native/b.so") "SO")
+        ;; 多段库名(如 (chez async))亦按所属库目录判定
+        (write-text (string-append obj "/chez/async/native-loader.so") "LOADER")
+        (write-text (string-append obj "/chez/async/native/rt.so") "SO")
+        (let ([paths (native-load-paths root)])
+          (assert-equal 1 (length paths))
+          (assert-true (substr? (car paths) "/b/native/b.so")))))
 
     (lock-reused-when-fresh
       (parameterize ([cache-root (mktmp)])
