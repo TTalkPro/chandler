@@ -12,4 +12,4 @@
           (chandler runtime-detector)
           (chandler base))
 
-  (define chandler-version "0.1.4"))
+  )

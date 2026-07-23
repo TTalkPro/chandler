@@ -8,7 +8,7 @@
 (library (chandler base)
   (export
     ;; runtime-paths(designs/11)
-    app-root app-resource-path find-app-resource-path
+    app-root app-name app-resource-path find-app-resource-path
     lib-resource-path find-lib-resource-path
     ;; hash
     sha256-bytevector sha256-string sha256-file
@@ -18,7 +18,7 @@
     string-split split-lines string-trim
     string-prefix? string-suffix? string-search string-contains?
     char-index strip-prefix strip-suffix string-join
-    alist-ref getenv* ignore-errors plural
+    alist-ref getenv* ignore-errors plural chandler-version
     ;; fs
     parent-dir base-name path-join*
     ensure-dir ensure-parent
