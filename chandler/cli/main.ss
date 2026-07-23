@@ -5,7 +5,7 @@
   (export main)
   (import (chezscheme)
           (chandler util)
-          (chandler runtime)                  ; 报告所在运行时(skiff 自证版本)
+          (chandler runtime-detector)         ; 报告所在运行时(skiff 自证版本)
           (chandler cli args)
           (chandler cli commands)
           (chandler cli selfinstall))

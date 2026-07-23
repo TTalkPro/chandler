@@ -19,7 +19,7 @@
           (chandler lock)
           (chandler install)
           (chandler registry)
-          (chandler runtime)
+          (chandler runtime-detector)
           (chandler build)
           (chandler pack)
           (chandler cli args))

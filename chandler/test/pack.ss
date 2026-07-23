@@ -15,7 +15,7 @@
           (chandler layout)
           (chandler fetch)
           (chandler install)
-          (chandler runtime)
+          (chandler runtime-detector)
           (chandler pack))
 
   (define mt (current-machine-type))

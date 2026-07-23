@@ -9,7 +9,7 @@
           (chandler proc)
           (chandler fetch)
           (chandler install)
-          (chandler runtime))
+          (chandler runtime-detector))
 
   (define repo-root (current-directory))   ; 跑 run-tests 时 = chandler 仓库根
 

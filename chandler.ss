@@ -9,6 +9,7 @@
           current-runtime runtime-version verify-runtime!)
   (import (chezscheme)
           (chandler activate)
-          (chandler runtime))
+          (chandler runtime-detector)
+          (chandler base))
 
   (define chandler-version "0.1.4"))

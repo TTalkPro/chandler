@@ -4,7 +4,7 @@
 ;;; Chandler 双运行时:标准 Chez 与 Skiff 都是一等公民。差异仅「选哪个可执行文件」与
 ;;; 「版本门」;库/展开机制两者相同(Skiff 不改),故 activate 代码路径一致(见 activate.ss)。
 
-(library (chandler runtime)
+(library (chandler runtime-detector)
   (export current-runtime runtime-version chez-version-string verify-runtime!
           runtime-env-var preferred-runtime parse-runtime-kind)
   (import (chezscheme)

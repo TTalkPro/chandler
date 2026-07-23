@@ -18,7 +18,7 @@
           (chandler fs)
           (chandler manifest)
           (chandler install)
-          (chandler runtime))
+          (chandler runtime-detector))
 
   (define native-root (make-parameter "lib"))   ; 项目 lib 前缀(base)
   (define loaded (make-hashtable string-hash string=?))   ; 幂等注册表

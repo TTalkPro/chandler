@@ -32,7 +32,7 @@
           (chandler manifest)
           (chandler lock)
           (chandler install)
-          (chandler runtime)
+          (chandler runtime-detector)
           (chandler version)
           (chandler hash))
 
