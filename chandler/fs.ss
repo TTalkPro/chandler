@@ -1,7 +1,7 @@
 #!chezscheme
 ;;; chandler/fs.ss --- 文件系统操作(优先 Chez 原生,替代 shell-out)
 ;;;
-;;; 消除 fetch/install/registry/selfinstall 各写一份 ensure-dir/rm-rf/dir-entries 的冗余。
+;;; 消除 fetch/install/registry 各写一份 ensure-dir/rm-rf/dir-entries 的冗余。
 ;;; 用 Chez 原生 directory-list/rename-file/delete-directory/bytevector I/O,不 shell-out
 ;;; (更快、可移植、无引用注入面)。
 

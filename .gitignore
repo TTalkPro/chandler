@@ -22,3 +22,5 @@ chandler-setup.ss
 # bake 编译产物
 _build/
 /build/
+
+.sisyphus/

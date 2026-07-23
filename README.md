@@ -8,7 +8,7 @@
 
 - **Skiff**(轻舟)= 运行时(Chez + libuv);**Chandler**(船具商)= 包管理器,管**依赖获取与激活**;**bake** = 构建工具(另仓),管**编译**。
 - git-first:依赖来源(URL + tag/rev/branch pin)写在 `manifest.ss`,无需中心 registry。
-- 依赖 = 整仓 checkout 到 `vendor/<name>/`,再经 `bake install` 摊平进 `lib/{src,<mt>}`(src/mt 拆分);`manifest.lock` 锁确切 commit,可复现。
+- 依赖 = 整仓 checkout 到 `vendor/<name>/`,再由 **chandler 直接**摊平进 `lib/{src,<mt>}`(src/mt 拆分);`manifest.lock` 锁确切 commit,可复现。
 
 > **2026-07-22 对齐 bake install 改版**:`bake install` 落点由扁平 `lib/` 改为 **src/mt 拆分**——源码 → `<prefix>/src/`、平台绑定产物(编译 `.so` + native)整棵 `_build/<mt>/` → `<prefix>/<mt>/`。消费方用一条 Chez 库目录**对** `<prefix>/src::<prefix>/<mt>`(`::` = 源::对象)同时解析源码与对象;native 收进所属库 `<prefix>/<mt>/<lib>/native/`。
 
@@ -20,7 +20,7 @@
 |------|------|
 | **Scheme 运行时** | **skiff**(优先)或 **Chez Scheme ≥ 10.0**。二者装一个即可;都在则默认用 skiff。**Petite 不够**——它没有编译器,而 `bake install` 要编译库树。 |
 | **git** | 依赖获取靠它(`git` 需在 PATH 上)。 |
-| **bake** | 生态里的构建工具。**chandler 的自安装基于 `bake install`**:库树由 bake 装进 Chez 库前缀(读本仓 `recipe.ss`),本仓的安装脚本只补一个运行时发现启动器。**须先装好 bake。** |
+| **bake** | 生态里的构建工具。`chandler build` 委托 bake 编译依赖闭包。**`chandler install` 不需要 bake**(只拷源码)。bake 仅 `chandler build` 时需要。 |
 | PowerShell | **仅 Windows 需要**(启动器与安装脚本是 `.ps1`)。Windows 10/11 自带;或 `mise use powershell`。 |
 
 装 bake 前若尚无运行时,先装 skiff 或 Chez;`mise` 用户可 `mise use chezscheme`。
@@ -29,28 +29,30 @@
 
 ```sh
 git clone <this-repo> chandler && cd chandler
-./install.sh                      # 库经 bake → ~/.local/share/chez/{src,<mt>};启动器 → ~/.local/bin/chandler
-./install.sh --global             # 装到 /usr/local(需 root)
+scheme --script bootstrap.sh               # chandler 铺库 → ~/.local/share/chez/{src,<mt>};启动器 → ~/.local/bin/chandler
+skiff --script bootstrap.sh --global        # 装到 /usr/local(需 root)
 
-export PATH="$HOME/.local/bin:$PATH"   # 若尚未在 PATH 上(脚本会提示这行)
-chandler --version                     # → chandler 0.1.4 (skiff 0.1.1) (chez 10.4.1)
+export PATH="$HOME/.local/bin:$PATH"        # 若尚未在 PATH 上(脚本会提示这行)
+chandler --version                          # → chandler 0.1.4 (skiff 0.1.2) (chez 10.4.1)
 ```
 
 ### Windows(PowerShell)
 
 ```powershell
 git clone <this-repo> chandler; cd chandler
-./install.ps1                     # 启动器 → %USERPROFILE%\.local\bin\chandler.ps1
-./install.ps1 --global            # 系统级(需管理员)
+scheme --script bootstrap.sh                 # 启动器 → %USERPROFILE%\.local\bin\chandler.ps1
+scheme --script bootstrap.sh --global        # 系统级(需管理员)
 
 $env:PATH = "$HOME\.local\bin;$env:PATH"
 chandler --version
 ```
 
-> PATH 上的 `.ps1` 可**裸名** `chandler` 调用,故两平台命令写法完全一致。
+> `bootstrap.ss` 是自包含安装器(纯 `(chezscheme)`,零 chandler 依赖):铺源码 + 编译产物 + 写运行时发现启动器。
+> 用法:`scheme --script bootstrap.ss [--global] [--force] [--uninstall]`。用户通过调用方式选择运行时(`scheme` vs `skiff`)。
+>
 > 若 PowerShell 报「running scripts is disabled」,是执行策略为 Restricted,二选一:
 > `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`(一次性),或
-> `pwsh -ExecutionPolicy Bypass -File ./install.ps1`(仅本次)。
+> `pwsh -ExecutionPolicy Bypass -File ...`(仅本次)。
 
 ### 装完之后
 
@@ -58,7 +60,7 @@ chandler --version
 
 想固定用某个运行时,见下面[「指定运行时」](#指定运行时skiff--chez)——安装脚本与启动器认同一套变量。
 
-**卸载**:`chandler uninstall-self`(据 bake 的 `<prefix>/.bake-install/chandler.files` 清单删库 + 删启动器,**不依赖源码**,装完把仓库删了也能卸干净)。
+**卸载**:`scheme --script bootstrap.ss --uninstall`(按命名空间删库 + 删启动器,**不依赖文件清单**,装完把仓库删了也能卸干净)。
 
 **开发期不必安装**:仓库里直接 `./bin/chandler <命令>`(同样 skiff 优先)。
 
@@ -74,14 +76,14 @@ bake install    # 装 (chandler) 库树 → ~/.local/share/chez/{src,<mt>}(--glo
 bake uninstall  # 据清单干净卸载
 ```
 
-> `bake install` 装的是 **库**(供 `import`,src/mt 拆分,`(needs build)` 恒装编译内容);`chandler` **CLI 启动器**由 `chandler install-self` / `install.sh` 提供。
+> `bake` 装的是 **库**(供 `import`,src/mt 拆分);`chandler` **CLI 启动器**由 `bootstrap.ss` 安装时生成。
 
 ## 快速上手
 
 ```sh
 chandler init --name=myapp                 # 生成骨架 manifest.ss(vendor/ lib/ setup 入 .gitignore)
 chandler add http https://github.com/x/http --tag v1.2.0
-chandler install                           # 解析 → 写 lock → git 依赖到 vendor/ → bake install 到 lib/{src,<mt>}
+chandler install                           # 解析 → 写 lock → git 依赖到 vendor/ → chandler 直接铺源码到 lib/src/
 chandler list                              # 看已锁依赖
 chandler verify                            # CI:校验 vendor/ 与 lock 一致
 chandler repl                              # 交互 shell(自动挂库路径)
@@ -99,7 +101,7 @@ myapp/
   chandler-setup.ss        ← 生成的「一行激活」文件(Bundler 的 bundler/setup)
 ```
 
-- **`chandler install`**:git 依赖整仓 checkout 到 `vendor/`,再由 **bake install** 装进 `lib/{src,<mt>}`(只发源码)。库搜索挂**一对** `lib/src::lib/<mt>`,结构同全局前缀 `~/.local/share/chez`(install 依赖 bake)。
+- **`chandler install`**:git 依赖整仓 checkout 到 `vendor/`,chandler **直接**把源码摊进 `lib/src/`(不经 bake)。库搜索挂**一对** `lib/src::lib/<mt>`,结构同全局前缀 `~/.local/share/chez`。
 - **`chandler build`**:于项目根生成一份 recipe(`define-lib-roots "lib/src"` + 逐依赖 `library-task`/授权的 `native-task`),跑**真实 bake** 编译进 `_build/<mt>/`,再拷进 `lib/<mt>/` 补齐对(编译产物 + native)。
 - **path 依赖** `(path "../x")`:不进 vendor/lib,直挂其源目录(live,改一行立即生效)。
 
@@ -147,9 +149,7 @@ bake 会为每个带 native 的库生成 `(<lib> native-loader)`(产物 `lib/<mt
 | `install --global[=dir]` | 装当前项目库到全局 libdir(注册表事务) |
 | `uninstall --global --name=<n>` | 据文件清单干净卸载 |
 | `list --global` / `doctor --global` | 列出/体检全局已装包 |
-| `install-self [--prefix D] [--global]` | 自装 chandler 到 `~/.local`(bake 式,skiff 优先启动器) |
-| `uninstall-self [--prefix D]` | 卸载自装的 chandler |
-| `self-update` | 提示重跑 `install.sh` |
+| `pack [--runtime r] [--out dir]` | 组装自包含分发包 |
 
 全局旗标:`-C <dir>` `--offline` `--production` `--force` `--keep-extra` `--verbose`。
 
@@ -162,7 +162,7 @@ bake 会为每个带 native 的库生成 `(<lib> native-loader)`(产物 `lib/<mt
 | `CHANDLER_RUNTIME=skiff\|chez` | 选**哪一种**;非法值报错(退出码 64),不静默忽略 |
 | `CHANDLER_SKIFF=<exe>` | skiff 的可执行文件(名或路径) |
 | `CHANDLER_SCHEME=<exe>` | Chez 的可执行文件(名或路径) |
-| `CHANDLER_BAKE=<exe>` | bake 的可执行文件(install/build 委托它) |
+| `CHANDLER_BAKE=<exe>` | bake 的可执行文件(build 委托它编译;install 不需要) |
 
 **优先级**(`run` / `exec` / `repl`、**启动器**、**安装脚本**共用一套):
 
@@ -180,10 +180,8 @@ CHANDLER_RUNTIME=chez CHANDLER_SCHEME=/opt/chez/bin/scheme chandler run app.ss
 **安装期也认**(用哪个运行时跑安装本身):
 
 ```sh
-CHANDLER_RUNTIME=chez ./install.sh                # POSIX
-```
-```powershell
-$env:CHANDLER_RUNTIME='chez'; ./install.ps1       # Windows
+CHANDLER_RUNTIME=chez scheme --script bootstrap.ss    # 用 Chez 跑安装
+skiff --script bootstrap.ss                            # 用 skiff 跑安装(默认)
 ```
 
 **确认当前用的是哪个** —— `--version` 报出所在运行时(skiff 自 0.1.1 起以内置 `(skiff-version)` 自证版本):

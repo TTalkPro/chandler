@@ -13,7 +13,7 @@
 
   (define (mock-bake) (string-append (current-directory) "/tests/mock-bake.sh"))
 
-  ;; 用 mock bake 跑 thunk;结束后**恢复** CHANDLER_BAKE(否则污染后续 selfinstall 测试)
+  ;; 用 mock bake 跑 thunk;结束后**恢复** CHANDLER_BAKE(否则污染后续测试)
   (define (with-mock log thunk)
     (let ([old-bake (getenv "CHANDLER_BAKE")] [old-log (getenv "MOCK_BAKE_LOG")])
       (putenv "CHANDLER_BAKE" (mock-bake))
