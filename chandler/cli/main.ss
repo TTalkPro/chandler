@@ -5,10 +5,9 @@
   (export main)
   (import (chezscheme)
           (chandler util)
-          (chandler runtime-detector)         ; 报告所在运行时(skiff 自证版本)
+          (chandler runtime-detector)
           (chandler cli args)
-          (chandler cli commands)
-          (chandler cli selfinstall))
+          (chandler cli commands))
 
   (define chandler-cli-version "0.1.4")
 
@@ -44,31 +43,13 @@
          [(run)     (cmd-run root flags pos rest)]
          [(exec)    (cmd-exec root flags rest)]
          [(repl)    (cmd-repl root flags)]
-         [(uninstall) (cmd-uninstall root flags)]
-         [(doctor)  (cmd-doctor root flags)]
-         [(install-self) (cmd-install-self (self-src-root) flags)]
-         [(uninstall-self) (cmd-uninstall-self root flags)]
-         [(self-update) (cmd-self-update root flags)]
-         [(-T)      (list-tasks) 0]
+          [(uninstall) (cmd-uninstall root flags)]
+          [(doctor)  (cmd-doctor root flags)]
+          [(-T)      (list-tasks) 0]
          [else
           (fprintf (current-error-port)
                    "unknown command: ~a (run `chandler help` for usage)~%" sub)
           64])]))
-
-  ;; install-self 的源根 = chandler 源码 checkout(不是 -C 项目目录)。
-  ;; 优先 CHANDLER_SRC(install.sh 设),否则从程序路径 …/chandler/cli/main.sps 反推。
-  (define (self-src-root)
-    (or (getenv "CHANDLER_SRC")
-        (let ([prog (car (command-line))] [suf "/chandler/cli/main.sps"])
-          (and (string-suffix? suf prog) (strip-suffix prog suf)))
-        (current-directory)))
-
-  ;; self-update:提示走 install.sh(自更新 = 对自身仓库重跑安装事务,designs/08 §2)
-  (define (cmd-self-update root flags)
-    (fprintf (current-error-port)
-             "self-update: run `git pull && ./install.sh` in the chandler source checkout.~%~a~%"
-             "(install.sh delegates the library tree to `bake install`, which replaces the previous install.)")
-    0)
 
   (define (report-error e)
     (fprintf (current-error-port) "chandler: ")
@@ -113,10 +94,7 @@
     (printf "  repl [--runtime skiff|chez]  interactive shell with library paths mounted~%")
     (printf "  install --global[=dir]       install this project's library tree globally~%")
     (printf "  uninstall --global --name=N  uninstall a globally installed package~%")
-    (printf "  list --global | doctor --global   inspect the global library prefix~%")
-    (printf "  install-self [--global]      install chandler itself (libraries via bake install)~%")
-    (printf "  uninstall-self [--global]    remove a self-installed chandler~%")
-    (printf "  self-update                  how to update a self-installed chandler~%~%")
+    (printf "  list --global | doctor --global   inspect the global library prefix~%~%")
     (printf "Global flags: -C <dir> --offline --production --force --keep-extra --verbose~%~%")
     (printf "Environment:~%")
     (printf "  CHANDLER_RUNTIME=skiff|chez  pick WHICH runtime (run/exec/repl and the~%")
