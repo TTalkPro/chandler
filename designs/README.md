@@ -25,7 +25,7 @@
 - **Skiff**(轻舟)= 运行时(Chez + libuv);**Chandler**(船具商)= 包管理器,读 `manifest.ss`,管**依赖的获取与激活**;**bake** = 构建工具,读 `recipe.ss`,管**编译**。
 - Chandler **不绑定 Skiff**:核心只依赖标准 Chez(`(chezscheme)` 可移植子集),Skiff 项目与纯 Chez 项目都能用(见 [06](06-runtime-compat.md))。
 - 依赖 = 整仓 checkout 到项目 `vendor/<name>/`,再经 `bake install` 摊平进 `lib/{src,<mt>}`(src/mt 拆分;见[库布局规范](../chez-skiff-library-layout.md));
-  `(activate)` / 生成的 `chandler-setup.ss` 挂 **(源 . 对象) 对** `lib/src::lib/<mt>`,native 由 bake 生成的 loader **自加载**,Chandler 仅为无 loader 的第三方库兜底(见 [07 §5b](07-bake-integration.md))。
+  `(activate)` / `chandler run` 挂 **(源 . 对象) 对** `lib/src::lib/<mt>` 并交接 `APP_ROOT`(= 项目库前缀 `lib/`),native 由 bake 生成的 loader **自加载**,Chandler 仅为无 loader 的第三方库兜底(见 [07 §5b](07-bake-integration.md))。
 
 ## 与同类工具对比(设计参照系)
 
@@ -46,7 +46,7 @@
 
 与本目录设计的**已知偏差**(TASK.md 有完整记录):
 
-- **依赖布局改为 Bundler 式**(与 [03](03-resolution.md)/[chandler 总设计](../chez-chandler-git-lib-manager-design.md)早期"整仓 checkout 到 `lib/<name>/`"不同):git 依赖整仓 checkout 到 **`vendor/<name>/`**,再由 **`bake install`** 装进**扁平 `lib/`**(结构同 `~/.local/share/chez/lib`);库搜索只挂 `lib/` 一个目录。install 依赖 bake。另生成 **`chandler-setup.ss`**(位置无关的一行激活文件,Bundler `bundler/setup` 式)。run/exec/repl/activate 库搜索规则统一。
+- **依赖布局改为 Bundler 式**(与 [03](03-resolution.md)/[chandler 总设计](../chez-chandler-git-lib-manager-design.md)早期"整仓 checkout 到 `lib/<name>/`"不同):git 依赖整仓 checkout 到 **`vendor/<name>/`**,再由 **`bake install`** 装进**扁平 `lib/`**(结构同 `~/.local/share/chez/lib`);库搜索只挂 `lib/` 一个目录。install 依赖 bake。启动统一走 **`chandler run`**(2026-07-23 起;早期曾生成 `chandler-setup.ss` 一行激活文件,已取消)。run/env/repl/activate 库搜索规则统一。
 
 
 - **`add`/`remove` 用 datum 级改写**而非 [01](01-cli.md) 倾向的文本级插入——对 `init` 生成的规范清单无损,代价是重排手写格式。

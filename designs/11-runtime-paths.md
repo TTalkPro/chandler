@@ -14,7 +14,7 @@
 
 | 层 | 已有事实 | 缺口 | 直接后果 |
 |---|---|---|---|
-| app resources | [09](09-pack.md) K5 固定 `<pack>/resources/`;pack launcher 与 dev `chandler-setup.ss` 都设唯一 `APP_ROOT` | 没有公共 API | 每个应用手写 `getenv`、字符串拼接与 fallback |
+| app resources | [09](09-pack.md) K5 固定 `<pack>/resources/`(P1 起为 `share/<app>/resources/`);pack launcher 与 `chandler run` 都设唯一 `APP_ROOT` | 没有公共 API | 每个应用手写 `getenv`、字符串拼接与 fallback |
 | lib resources | bake install 只定义 `<prefix>/src/` 与 `<prefix>/<mt>/`;pack 只搬对象树 | 没有安装落点,也没有自定位 API | 库附带 schema、template、CA bundle、fixture 时会在 install/pack 链路丢失 |
 | manifest/lock | `srcdir`、`deps`、`natives` 已快照 | 没有 `resources` 声明 | pack 无法按 lock 精确搬资源 |
 | pack producer | `copy-resources!` 只复制项目根 `resources/` | 不区分 app 与 dep lib resources | 两类数据无法同时进入一个 pack |
@@ -40,7 +40,7 @@ lib 侧的问题更彻底。bake `run-install` 当前把 `<from>/<lib>/` 递归�
 | API | 所有者 | 权威锚点 | 根路径 | 为什么成立 |
 |---|---|---|---|---|
 | `(app-root)` | 当前启动目标 app | `APP_ROOT`,缺省由 `(car (command-line))` 推导 | project root 或 pack root | launcher/setup 知道应用从哪里启动 |
-| `(app-resource-path . segs)` | app | `(app-root)` | `<app-root>/resources/` | [09](09-pack.md) 已固定目录名 |
+| `(app-resource-path . segs)` | app | `(app-root)` + `(app-name)` | `<app-root>/share/<app>/resources/`,回落 `<app-root>/resources/` | [09](09-pack.md) 已固定目录名 |
 | `(lib-resource-path libref . segs)` | 被 import 的 lib | `(library-object-filename libref)` | `<prefix>/share/<libpath>/resources/` | Chez loader 知道实际命中的 library object |
 | `(find-lib-resource-path libref . segs)` | 被 import 的 lib | 同上,再走 source fallback | 同上 | 可选资源需要 `#f` 而非 exception |
 
@@ -58,29 +58,45 @@ app 不用 `(library-object-filename)`。应用是 launch target,其入口 `.so`
 
 ```scheme
 (app-root)                       ; -> string
+(app-name)                       ; -> string | #f
 (app-resource-path seg ...)      ; -> string,存在且在 resources/ 内
 (find-app-resource-path seg ...) ; -> string | #f
 ```
 
 `(app-root)` 的规则只有两级:
 
-1. `APP_ROOT` 已设且非空,原样采用。pack launcher 是部署态权威,dev `chandler-setup.ss` 也遵守「已有值不覆盖」。
+1. `APP_ROOT` 已设且非空,原样采用。pack launcher 是部署态权威;dev 由 `chandler run`/`repl`/`activate` 设为 `<project>/lib`,同样遵守「已有值不覆盖」。
 2. 否则从 `(car (command-line))` 取入口路径的 parent。没有可用 argv0 directory 时回落 `"."`。
 
-`(app-resource-path "templates" "index.html")` 拼成 `<app-root>/resources/templates/index.html`。API 接受 path segment,不接受调用者预拼的绝对路径。
+**唯一形状(P1,2026-07-23)**:`(app-resource-path "templates" "index.html")` 拼
+
+```text
+<app-root>/share/<app>/resources/templates/index.html
+```
+
+`APP_ROOT` 恒指向一个**库前缀**,而三种前缀逐层同构(全局 `~/.local/share/chez` · 项目自己的 `lib/` · 解开的 pack,见 [09](09-pack.md) §包布局),故这里**不设第二条候选、不分支**:源码里的 `resources/` 由 `chandler deps`/`run`/`repl` 同步进 `<project>/lib/share/<name>/resources/`,四态读同一条路径。找不到即报错(`find-app-resource-path` 返回 `#f`);认不出 `<app>` 时报的是「这个前缀属于谁」而不是「文件不存在」——两种失败的修法完全不同。API 接受 path segment,不接受调用者预拼的绝对路径。
+
+`(app-name)` 回答候选 1 里的 `<app>`,三级:
+
+1. `APP_NAME` 显式(共享前缀里装了多个应用时由启动器传 —— 这是**可选**变量,不参与包内定位);
+2. `<app-root>/.chandler/` 下的**唯一**条目 —— `chandler pack` 恒只写一个([09](09-pack.md) 布局的 `.chandler/<app>/manifest.ss`),故**包内不需要第二个 env**,`APP_ROOT` 仍是唯一必需变量;多于一个即认为无法判定,返回 `#f`(不猜);
+3. 都取不到 → `#f`,只走候选 2。
 
 ### 3.2 为什么 app 用 env
 
-app 是进程的 launch target。launcher 在 `exec` 前已知道 pack root,`chandler-setup.ss` 在 load 时也知道 project root,因此 `APP_ROOT` 是天然的单点交接。它比从 library object 猜入口更准确,也满足 native loader 在 library invoke 期之前就需要 root 的时序约束。
+app 是进程的 launch target。launcher 在 `exec` 前已知道 pack root,`chandler run` 在起子进程前也知道项目前缀,因此 `APP_ROOT` 是天然的单点交接。它比从 library object 猜入口更准确,也满足 native loader 在 library invoke 期之前就需要 root 的时序约束。
 
 ### 3.3 四态一致
 
-| 状态 | `APP_ROOT` 来源 | `(app-root)` 结果 | app resources |
-|---|---|---|---|
-| source checkout | 通常未设 | argv0 dirname,最差 `.` | `<project>/resources/` |
-| project install/dev | `chandler-setup.ss` 在空值时设 project root | project root | `<project>/resources/` |
-| pack | sh / PowerShell launcher 在 `exec` 前设 pack root | pack root | `<pack>/resources/` |
-| CI/run | setup 自动设置,或用户显式设 `APP_ROOT` | 显式值优先 | `<APP_ROOT>/resources/` |
+| 状态 | `APP_ROOT` 来源 | `(app-root)` 结果 | `(app-name)` | app resources |
+|---|---|---|---|---|
+| dev / CI(`chandler run`/`repl`) | `chandler run` 在 exec 前设 | `<project>/lib` | `lib/.chandler/` 唯一条目 | `<project>/lib/share/<app>/resources/` |
+| 进程内 `(activate)` | `activate` 设(已有值不覆盖) | `<project>/lib` | 同上 | 同上 |
+| pack | sh / PowerShell launcher 在 `exec` 前设 | pack 根 | `.chandler/` 唯一条目 | `<pack>/share/<app>/resources/` |
+| global install(共享前缀) | 启动器设前缀根 + `APP_NAME` | 前缀根 | `APP_NAME` | `<prefix>/share/<app>/resources/` |
+| 裸跑(谁都没设) | — | argv0 dirname(多半不是前缀)| 多半 `#f` | 报「认不出是哪个 app,请经 `chandler run` 或包启动器启动」|
+
+四态一致由**同一形状**保证:`APP_ROOT` 永远是个前缀,应用代码只有一种拼法,不必条件分支;差别全在「哪个前缀」,那正是这一个变量要交接的信息。
 
 skiff-demo 的迁移只替换公共部分,应用自己的 `MDSERVER_DOCS` override 可继续保留:
 
@@ -94,7 +110,7 @@ skiff-demo 的迁移只替换公共部分,应用自己的 `MDSERVER_DOCS` overri
     (app-resource-path))
 ```
 
-`(app-resource-path)` 零 segment 返回 resources directory 本身。这让现有 `docs-root` 保持原语义,但不再手写 `APP_ROOT` fallback。
+`(app-resource-path)` 零 segment 返回 resources directory 本身。这让现有 `docs-root` 保持原语义,但不再手写 `APP_ROOT` fallback —— 且**必须**迁移:P1 之后 `$APP_ROOT/resources` 那条硬拼路径在任何一态都不再成立(源码态资源在 `<project>/lib/share/<app>/resources/`,包里在 `<pack>/share/<app>/resources/`)。
 
 ## 4. Lib 资源(新机制,基于 library-object-filename)
 
@@ -347,7 +363,7 @@ M2 完成后,按 [10](10-deploy-loader.md) L5 的 precedent 更新 [`../../skiff
 | 同一 lib 多版本同时出现在 `library-directories` | 以 Chez 对实际 loaded library 的 object query 为准 | 不自行选择 first directory,避免资源与已载代码版本错配 |
 | `<prefix>/share/<lib>/resources/` 未安装 | strict API raise,find API 返回 `#f` | 提示该安装可能来自 M1 前的旧 bake,建议重装 |
 | resources directory 存在,具体 `<segs>` 文件缺失 | strict API raise,find API 返回 `#f` | 区分 root missing 与 leaf missing |
-| app 未设 `APP_ROOT`,且 argv0 不是位于 project root 的入口 | argv0 fallback 可能得到错误 root | 诊断打印 derived root;推荐 load `chandler-setup.ss` 或显式设唯一 `APP_ROOT` |
+| app 未设 `APP_ROOT`,且 argv0 不是位于前缀里的入口 | argv0 fallback 可能得到错误 root | 认不出 `<app>` 即报错并指明经 `chandler run` / 包启动器启动,或显式设 `APP_ROOT`(+ 必要时 `APP_NAME`)|
 | app 从 REPL 启动,`(car (command-line))` 只给 runtime 名 | fallback 可能落到 `.` | REPL/CI 可显式设 `APP_ROOT`,不新增 env |
 | libref typo,如库写 `'(mylib)` 而真实库是 `'(mylib core)` | object 与 source lookup 都 miss | 错误完整打印 libref 与检查候选 |
 | multi-segment libref 回退层数算错 | 可能把 `<mt>` 或 prefix 识别成 lib directory | 测试 1/2/3 segment,按 libref 长度计数,禁止硬编码 |
@@ -365,7 +381,7 @@ M2 完成后,按 [10](10-deploy-loader.md) L5 的 precedent 更新 [`../../skiff
 
 | 文档 | 关系 |
 |---|---|
-| [09-pack.md](09-pack.md) | 权威定义 `APP_ROOT` 是唯一 env、app `resources/` 名字固定、launcher 与 `chandler-setup.ss` 四态读同一值。本设计只加 API,不改这些结论;M2 添加并列的 lib `share/` namespace |
+| [09-pack.md](09-pack.md) | 权威定义 `APP_ROOT` 是唯一 env(P1 起其值是**库前缀**)、app 资源目录名固定、launcher 与 `chandler run` 四态读同一值。本设计只加 API,不改这些结论;M2 添加并列的 lib `share/` namespace |
 | [10-deploy-loader.md](10-deploy-loader.md) | deploy loader 已统一为 `bootstrap.ss`,但不向应用库暴露 `%root`;`runtime-paths` 填上业务代码的公开定位面。L0-L6 的 milestone 样式是 M0-M6 的 precedent |
 | [06-runtime-compat.md](06-runtime-compat.md) | skiff 与 stock Chez 共用 library mechanism。两边都通过 `library-directories` 挂 source/object pair,因此 lib introspection 不分 runtime |
 | [02-manifest-lock-spec.md](02-manifest-lock-spec.md) | M4 扩展 manifest/lock schema。resources 与 deps/natives 一样快照进 lock,pack 不读 mutable dep manifests |

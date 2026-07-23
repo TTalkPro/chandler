@@ -106,9 +106,11 @@ bake `run-install` 的步骤 2(`files-under` → 全拷)会把 vendor 树里的 
 
 用户可以在**未安装 bake** 的机器上跑 `chandler install`(源码激活、REPL、`chandler run` 等不依赖编译产物的场景)。
 
-### 3.4 chandler-setup.ss 继续生成
+### 3.4 chandler-setup.ss 继续生成 —— **已推翻(2026-07-23)**
 
-`write-setup-file`(install.ss:296-300)**不变**——它解决的是 library-directories 引导问题(chicken-and-egg:要在 import 前设好库路径),与本设计的 install 搬运无关。详见 §6。
+> 本节与 §6 的结论(保留 setup 文件)已被后续决定取代:**setup 文件不再生成,启动统一走 `chandler run`**。
+> 它当年要解的 chicken-and-egg 由 §6.2 早已点出的 launcher 路线解决——而 `chandler run` 就是那个 launcher:
+> 它在 exec 解释器之前设好 `--libdirs` 与 `APP_ROOT`,不需要任何 import。见 §6 的补记。
 
 ## 4. 构建:chandler build(编译委托 bake + chandler 布局产物)
 
@@ -220,9 +222,19 @@ bake `install-task` 旧流程写 `.bake-install/<lib>.files` 文件清单,供 `u
 
 当前无 `chandler uninstall <dep>`(项目级)。若未来需要,chandler 可凭 lock 知道某依赖的命名空间,精确删 `lib/src/<name>.*` + `lib/src/<name>/` + `lib/<mt>/<name>.so` + `lib/<mt>/<name>/` + `lib/share/<libpath>/`。**本设计不实现,留 §12 open question 3。**
 
-## 6. chandler-setup.ss 的处置
+## 6. chandler-setup.ss 的处置 —— **结论已反转(2026-07-23)**
 
-### 6.1 结论:保留,不改
+> **现状**:`write-setup-file` 已删除,`chandler deps` 不再生成 `chandler-setup.ss`;启动统一 `chandler run`
+> (它同时交接库搜索路径与 `APP_ROOT` = 项目库前缀 `<project>/lib`),进程内则用 `(activate)`,
+> 别的进程用 `eval "$(chandler env)"`。§6.2 当年判定为「未来方向」的 launcher-wrapper 正是现在的做法,
+> 只是不必新造 `chandler-run` 可执行文件——`chandler run` 子命令即可。
+>
+> **为什么反转**:setup 是**生成物**,它把「库搜索规则 + APP_ROOT 约定」复制了一份到项目里,规则一改就有
+> 两处要同步(P1 改前缀语义时正好撞上)。少一份副本,就少一类漂移。
+>
+> 以下原文保留作决策记录。
+>
+> ### 6.1 结论(**当时**):保留,不改
 
 `chandler-setup.ss` 解决的是 **library-directories 引导问题**——chicken-and-egg:
 
@@ -248,9 +260,11 @@ Metis 分析(见 `.sisyphus/analysis/`)的结论一致:
 
 这需要一个 `chandler-run` 可执行文件,在 exec scheme 前设好环境。它解决了 chicken-and-egg(因为 wrapper 不需要 import)。但这是独立设计,不在本设计范围内。§12 open question 4。
 
-### 6.3 install 接管对 setup 文件的影响:零
+### 6.3 install 接管对 setup 文件的影响:零(**已作废**:setup 文件本身已删除)
 
-`write-setup-file`(install.ss:296-300)的逻辑完全不变——它挂的是 `lib/src::lib/<mt>` 对,而本设计**不改 `lib/` 的布局结构**(src/mt 拆分不变、路径不变)。setup 文件无需任何改动。
+`write-setup-file` 的逻辑当时完全不变——它挂的是 `lib/src::lib/<mt>` 对,而本设计**不改 `lib/` 的布局结构**。
+2026-07-23 起该函数已删除,`lib/` 反而多了两样东西使它成为一个**完整前缀**:`share/<name>/resources/`
+(项目自己的资源同步过来)与 `.chandler/<name>/manifest.ss`(清单快照,应用名由此可辨)。
 
 ## 7. pack 的简化
 
