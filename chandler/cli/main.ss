@@ -9,7 +9,7 @@
           (chandler cli args)
           (chandler cli commands))
 
-  (define chandler-cli-version "0.1.4")
+  (define chandler-cli-version chandler-version)
 
   ;; main:argv(不含程序名)→ 退出码
   (define (main argv)
@@ -48,14 +48,25 @@
                    "unknown command: ~a (run `chandler help` for usage)~%" sub)
           64])]))
 
+  ;; Chez 自带的条件(尤其 I/O)把格式指令写在 message 里、值放 irritants ——
+  ;; 例如 open-file 失败是 message "failed for ~a: ~(~a~)" + irritants (路径 原因)。
+  ;; 直接 display 会把 `~a` 原样打给用户,故先按 format 试;chandler 自己 error 出来的
+  ;; message 不含指令,那条路会失败(实参多余),再退回「消息 + 写出 irritants」。
   (define (report-error e)
     (fprintf (current-error-port) "chandler: ")
     (cond
       [(and (condition? e) (message-condition? e))
-       (display (condition-message e) (current-error-port))
-       (when (irritants-condition? e)
-         (for-each (lambda (x) (display " " (current-error-port)) (write x (current-error-port)))
-                   (condition-irritants e)))]
+       (let* ([msg (condition-message e)]
+              [irr (if (irritants-condition? e) (condition-irritants e) '())]
+              [formatted (and (pair? irr) (ignore-errors (apply format msg irr)))])
+         (if formatted
+             (display formatted (current-error-port))
+             (begin
+               (display msg (current-error-port))
+               (for-each (lambda (x)
+                           (display " " (current-error-port))
+                           (write x (current-error-port)))
+                         irr))))]
       [else (write e (current-error-port))])
     (newline (current-error-port))
     65)

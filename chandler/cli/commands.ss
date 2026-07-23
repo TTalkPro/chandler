@@ -78,39 +78,32 @@
       (printf "wrote ~a~%" mpath)
       0))
 
-  ;; chandler runtime dep 注入:从本地安装复制到 vendor/,不从 URL 下载
-  ;; 检测 chandler 的本地源码根(CHANDLER_PREFIX/src 或开发 checkout)
-  (define (chandler-local-src)
-    (or (and (getenv* "CHANDLER_PREFIX")
-             (join-paths (getenv* "CHANDLER_PREFIX") "src"))
-        (let ([prog (car (command-line))]
-              [suf "/chandler/cli/main.sps"])
-          (and (string-suffix? suf prog)
-               (substring prog 0 (- (string-length prog) (string-length suf)))))
-        "."))
-
-  (define chandler-dep-template
-    `(chandler (path ,(chandler-local-src))))
+  ;; chandler 是**运行时门**,与 (chez …)/(skiff …) 同类:只声明版本区间,不声明
+  ;; 来源 —— 实体是全局前缀里装好的那一份,`chandler deps` 校验版本并把它的 runtime
+  ;; 子集铺进 vendor/ 与 lib/(designs/12 §5)。故模板写区间,不写 URL/path。
+  ;; 区间取「当前这个 chandler 的次版本兼容」:装得比它旧就该报错。
+  (define (chandler-gate-range)
+    (string-append ">=" chandler-version))
 
   (define (skeleton-manifest-datum name)
-    `(manifest (format 1) (name ,name) (version "0.1.0") (chez ">=10.0") (srcdir ".")
-       (deps ,chandler-dep-template)))
+    `(manifest (format 1) (name ,name) (version "0.1.0") (chez ">=10.0")
+       (chandler ,(chandler-gate-range)) (srcdir ".")
+       (deps)))
 
   ;; app 形态:多一个 (app (entry …) (main …)) 字段。entry 是 symbol list(库名),
   ;; main 是 symbol(入口过程名)。这两个就是 pack 的入口契约 —— 声明了就能 pack,
   ;; 没声明(走 skeleton-manifest-datum)就是 lib,pack 会拒绝。
   (define (skeleton-app-manifest-datum name entry main)
-    `(manifest (format 1) (name ,name) (version "0.1.0") (chez ">=10.0") (srcdir ".")
-       (deps ,chandler-dep-template)
+    `(manifest (format 1) (name ,name) (version "0.1.0") (chez ">=10.0")
+       (chandler ,(chandler-gate-range)) (srcdir ".")
+       (deps)
        (app (entry ,entry) (main ,main))))
 
   ;; ── deps:resolve + vendor + install source(合并旧 install + update)──
 
-  ;; N5:检测项目是否依赖 chandler runtime;缺则 warning(--strict 则拒绝)。
-  (define (dep-list-has-chandler? deps)
-    (and (pair? deps)
-         (exists (lambda (d) (eq? (dep-name d) 'chandler)) deps)))
-
+  ;; N5:项目是否声明了 chandler 运行时门;缺则 warning(--strict 则拒绝)。
+  ;; 声明形式是 (chandler ">=X"),**不是** (deps (chandler …)) —— 它没有来源可 fetch,
+  ;; 实体来自全局前缀(designs/12 §5)。自举例外:项目名 = "chandler"。
   (define (check-chandler-dep root flags)
     (let ([mpath (join-paths root "manifest.ss")])
       (if (not (file-exists? mpath))
@@ -118,15 +111,17 @@
           (let ([mf (read-manifest mpath)])
             (cond
               [(string=? (or (manifest-name mf) "") "chandler") #t]
-              [(dep-list-has-chandler? (manifest-deps mf)) #t]
+              [(manifest-chandler mf) #t]
               [(flag? flags 'strict)
                (fprintf (current-error-port)
-                 "chandler: project does not depend on chandler; add (deps (chandler ...)) to manifest.ss\n")
+                 "chandler: project does not declare a chandler runtime gate; add (chandler \">=~a\") to manifest.ss\n"
+                 chandler-version)
                #f]
-               [else
-                (fprintf (current-error-port)
-                  "warning: project does not depend on chandler; add (deps (chandler ...)) to manifest.ss\n")
-                #t])))))
+              [else
+               (fprintf (current-error-port)
+                 "warning: project does not declare a chandler runtime gate; add (chandler \">=~a\") to manifest.ss\n"
+                 chandler-version)
+               #t])))))
 
   ;; --global:装当前项目库树到全局 libdir(注册表事务,designs/05)
   (define (cmd-install-global root flags)

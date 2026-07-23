@@ -7,6 +7,8 @@
           (chandler test harness)
           (chandler test fixtures)
           (chandler fetch)
+          (chandler fs)
+          (chandler layout)
           (chandler install)
           (chandler manifest)
           (chandler cli args)
@@ -62,9 +64,11 @@
         (assert-equal 0 (main (list "-C" app "init" "--name=foo")))
         (let ([mf (read-manifest (string-append app "/manifest.ss"))])
           (assert-false (manifest-app mf))           ; 默认无 (app ...)
-          ;; N4:init 模板注入 chandler runtime dep
-          (assert-true (exists (lambda (d) (eq? (dep-name d) 'chandler))
-                               (manifest-deps mf))))))
+          ;; N4:init 模板写 chandler **运行时门**(版本区间),不是依赖 ——
+          ;; 它没有来源可 fetch,实体取自全局前缀(designs/12 §5)
+          (assert-true (string? (manifest-chandler mf)))
+          (assert-false (exists (lambda (d) (eq? (dep-name d) 'chandler))
+                                (manifest-deps mf))))))
 
     ;; --app:写 (app (entry (name)) (main main)),entry 默认取 name
     (init-app-writes-app-declaration
@@ -134,6 +138,20 @@
             (assert-true (>= (length dirs) 2))
             (assert-equal (project-lib-pair app) (car dirs))                     ; lib/ 一对在前
             (assert-equal (global-libdir) (list-ref dirs (- (length dirs) 1)))))))  ; 全局兜底在末尾
+
+    ;; 错误输出不许把格式指令原样打给用户:Chez 的 I/O 条件把 "~a" 写在 message 里、
+    ;; 值放 irritants,report-error 必须 format 出来(回归钉:曾打出
+    ;; `failed for ~a: ~(~a~) "/path" "No such file or directory"`)。
+    (error-report-interpolates-condition-irritants
+      (let* ([missing (join-paths (mktmp) "no-such-dir")]
+             [op (open-output-string)]
+             [rc (parameterize ([current-error-port op])
+                   (main (list "-C" missing "init" "--name=demo")))])
+        ;; get-output-string 会**清空**该端口,故只取一次
+        (let ([err (get-output-string op)])
+          (assert-equal 65 rc)
+          (assert-false (substr? err "~a"))
+          (assert-true (substr? err missing)))))
 
     ;; ── N5: chandler dep warning / --strict(designs/12 §5)──
     (install-strict-rejects-without-chandler-dep
