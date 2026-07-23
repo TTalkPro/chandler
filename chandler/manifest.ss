@@ -7,7 +7,7 @@
 (library (chandler manifest)
   (export read-manifest parse-manifest validate-manifest
           manifest? manifest-format manifest-name manifest-version
-          manifest-chez manifest-skiff manifest-srcdir
+          manifest-chez manifest-skiff manifest-chandler manifest-srcdir
           manifest-deps manifest-dev-deps manifest-native
           manifest-overrides manifest-scripts
           manifest-resources manifest-runtime-subset
@@ -25,8 +25,12 @@
   (define supported-format 1)
 
   ;; ── records ──
+  ;; chez / skiff / chandler 三个字段是**运行时门**,不是依赖:声明的是版本区间,
+  ;; 实体由环境提供(chez/skiff 是解释器本身;chandler 是全局库前缀
+  ;; ~/.local/share/chez 里装好的那一份)。故 chandler **不写进 (deps …)** ——
+  ;; 它没有 URL、不需要 fetch,只需要「装的那份够不够新」(designs/12 §5)。
   (define-record-type manifest
-    (fields format name version chez skiff srcdir
+    (fields format name version chez skiff chandler srcdir
             deps dev-deps native overrides scripts app
             resources runtime-subset))
 
@@ -57,6 +61,7 @@
         (field-ref body 'version)
         (field-ref body 'chez)
         (field-ref body 'skiff)
+        (field-ref body 'chandler)
         (or (field-ref body 'srcdir) ".")
         (parse-deps (field-ref* body 'deps))
         (parse-deps (field-ref* body 'dev-deps))
@@ -222,7 +227,14 @@
                   (guard (e [#t (error 'validate-manifest
                                        (format "~a version range is not parseable" (car pair)) (cdr pair))])
                     (version-match? (cdr pair) "0.0.0"))))
-              (list (cons 'chez (manifest-chez m)) (cons 'skiff (manifest-skiff m))))
+              (list (cons 'chez (manifest-chez m)) (cons 'skiff (manifest-skiff m))
+                    (cons 'chandler (manifest-chandler m))))
+    ;; chandler 是运行时门,不是依赖 —— 两处都写会让人以为它会被 fetch
+    (when (and (manifest-chandler m)
+               (exists (lambda (d) (eq? 'chandler (dep-name d)))
+                       (append (manifest-deps m) (manifest-dev-deps m))))
+      (error 'validate-manifest
+             "chandler is declared both as (chandler \"<range>\") and as a dependency; it is a runtime gate, not a dependency -- drop the deps entry"))
     ;; dep 校验:名唯一、不撞内建、path 相对存在性延后(resolve/install 时)
     (let ([all (append (manifest-deps m) (manifest-dev-deps m))])
       (check-unique-names all)
