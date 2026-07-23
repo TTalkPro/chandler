@@ -1,7 +1,8 @@
 # Chandler 实现任务清单
 
-> 本仓库**只实现 Chandler**(包管理器)。bake 在另一仓库实现——凡涉及编译动作,Chandler 只做**排单 + 生成 recipe + 子进程调 bake**,以 mock bake 测试(见阶段 10)。
-> (早期设计假想的 `bake compile-tree`/`bake native` 子命令真实 bake 并不存在,2026-07-22 已改为驱动真实 bake 任务,见 [07](designs/07-bake-integration.md)。)
+> 本仓库正在**吸收 bake**(阶段 B 进行中),吸收后 chandler 成为包管理器 + 构建器。阶段 B 完成前,编译动作仍由 bake 子进程执行(以 mock bake 测试,见阶段 10)。
+>
+> **资源定位 + per-dep 库路径 + .env** 的后续架构见 [design 14](designs/14-unified-resources.md)(统一 `resource-path`、dev 期无 `lib/`、`.env` 项目配置),替代原 P6 阶段 C 的 assembled + CHANDLER_DEV_ROOT 方案。
 >
 > 设计权威:[designs/](designs/)。每条任务标注对应设计文档。实现约束:只 `import (chezscheme)`,限 Petite 可跑子集(见 [06 §2](designs/06-runtime-compat.md));`.ss` 首行 `#!chezscheme`、次行 `;;; <相对路径> --- <一句话>`([库布局规范](chez-skiff-library-layout.md))。
 >
@@ -301,17 +302,101 @@ $APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
 
 **验证**:三运行时 **224/224 全绿**(新增 4 个用例:runtime 子集铺设 + dev-only 不铺、版本过旧报错、前缀无 chandler 报错、vendor/chandler 不被孤儿清理误删)。skiff-demo 全链路实跑:`deps`(铺 10 个 runtime 库到 `lib/{src,ta6le}`,无 cli/pack/build)→ `bake`(`(prebuilt "lib")` 直接消费,`_build/` 里不再重编 chandler)→ `chandler build` → `run` 起服务 200 → `pack`(`<pack>/ta6le/chandler/` 10 个 `.so`)→ `env -i` clean-env 起服务 `/` 与 `/features` 均 200 → `verify-pack --target` **131 ok / 0 bad**。
 
-### P4 — 单一前缀:`lib/` 与 `_build/` 合一 — **分析完成,待决**
+### P4 — 单一前缀:`lib/` 与 `_build/` 合一 — **已被 design 14 替代**
 
-分析见 [docs/single-build-prefix.md](docs/single-build-prefix.md)。一句话:`APP_ROOT` 语义反复摇摆只是症状,病根是**一个项目有两个库加载根**(`lib/{src,<mt>}` 与 `_build/<mt>`)——资源要复制、`build` 要把 `_build/<mt>` 同步进 `lib/<mt>`、pack 要从两处拼(还留着 stale 覆盖的坑)、run/repl/activate 要枚举两根。合成一个前缀后这些整段消失,且 `run`/`install`/`pack` 变成同一棵树的三次搬运。
+> ** superseded by [design 14](designs/14-unified-resources.md)**。doc 14 的 per-dep `(src . obj)` 对方案更彻底地解决了同一个问题:dev 期**根本不需要 `lib/`**(源码/对象/资源各自 live),`assembled` 命令被消除。原分析 [docs/single-build-prefix.md](docs/single-build-prefix.md) 保留作决策记录。
 
-代价:bake 的输出目录写死 `_build/<mt>`(`bake/compile.ss:11`)、`bake -c` 删整棵 `_build/`,故 chandler 的持久状态会落在 bake 的地盘上。建议对策是「前缀缺失就自动从 `_vendor` 重铺」(纯本地拷贝,顺带覆盖新 clone / CI 缓存丢失)。落地分 5 步,前 3 步即可验证收益。
-
-### P5 — bake 与 chandler 是否合并 — **分析完成,待决**
+### P5 — bake 与 chandler 是否合并 — **方向已决(2026-07-23),落地中**
 
 分析见 [docs/bake-chandler-merge.md](docs/bake-chandler-merge.md)。要点:两个工具**零代码共享**(bake 不 import 任何 `(chandler …)`),却共享 5 条不变量(前缀形状 / native 落点 / loader 候选序 / `APP_ROOT` 语义 / mt→so-ext),且各自重复实现了 sha256+util+运行时探测约 900 行 —— 今天一小时内就撞了两次漂移(bake 删 `install-task` 使 chandler 的 recipe 整份加载失败;P1 改包布局使 loader 候选 1 恒 miss)。
 
-结论:**合并概念(清单里写构建)否决** —— 撞 [08 §3](designs/08-bootstrap-security.md) 的「清单只读不求值」红线(解析第三方清单将等于执行其代码);**共享底座(M2)现在就该做** —— bake 声明 `(chandler ">=…")` 运行时门、改用 `(chandler base)`,不变量常量收敛进 `(chandler layout)`,前置条件刚随 P1c 就绪;**单仓单二进制(M1)方向正确但排在其后**。
+结论:**合并概念(清单里写构建)否决** —— 撞 [08 §3](designs/08-bootstrap-security.md) 的「清单只读不求值」红线;**共享底座(M2)已完成**(P1c 运行时门 + 阶段 13 `(chandler base)` umbrella);**单仓单二进制(M1)升格为全吸收** —— bake 编译引擎整体搬进 chandler dev-time 层。落地任务见下方 **P6 阶段 A–D**;资源定位 + per-dep pairs + `.env` 的后续重构见 **[design 14](designs/14-unified-resources.md)**(替代原 P6 阶段 C 的 assembled + CHANDLER_DEV_ROOT 方案)。
+
+### P6 — bake 全吸收进 chandler(单仓单二进制)— **进行中**
+
+设计权威:[docs/bake-chandler-merge.md](docs/bake-chandler-merge.md) §5–§9。bake 仓 `/home/david/workspace/bake`(18 模块 + launcher + bootstrap = 3318 行)整体并入 chandler;chandler 从包管理器变成**包管理器 + 构建器**。三条要求:① 三层边界(runtime/dev-time/assembled);② 继承 bake 全部能力;③ 新增 `assembled` 命令。
+
+**三层架构**(§6):
+
+```
+③ assembled(用户命令)— 唯一把 _build/ 组装进 lib/<mt>/;不装源码
+② dev-time 工具层 — 包管理(install/fetch/resolve/lock/manifest/registry/activate/pack)
+                   + 编译引擎(吸收自 bake:compile/native-build/import-graph/task-engine/recipe/miniregex)
+① runtime 公共基础设施 (chandler base) — 9 子库,零编译逻辑
+```
+
+**实施决策(执行前澄清)**:
+
+- bake 是 **load-based**(被 `bake.ss` 顺序 load 到共享 interaction-environment),非 `(library …)` 形式。阶段 A 的「改 import `(chandler base)`」= 在 `bake.ss` 顶部加 `(import (chandler base))`(同 `(import (chezscheme))` 一行),bake 模块即可见 base 导出;非「逐模块改 import」。阶段 B 把源码搬进 chandler 时自然变成 library。
+- bake 仓**没有 manifest.ss**(零依赖自含)。阶段 A2 需先建 manifest(`(chandler ">=0.1.4")` 运行时门 + `(chez ">=10.0")`),`bootstrap.ss` 改为依赖已装的 chandler。
+
+#### 阶段 A — 共享底座(M2,可独立交付)
+
+消灭 §0 诊断的 ~900 行重复面 + 5 条不变量漂移。前置条件已就绪(P1c 运行时门 + 阶段 13 base umbrella)。
+
+| # | 任务 | 状态 | 文件 |
+|---|------|------|------|
+| A1 | 不变量常量收敛进 `(chandler layout)` | ✅ 已完成(核对) | layout 已含 so-ext/native-*/split-pair 全部不变量(阶段 13 + P1 已收敛),无需补充 |
+| A2 | bake 改用 `(chandler base)`,删重复实现 | ✅ 已完成 | 见下方「A2 实现期决定」 |
+
+**A2 实现期决定(2026-07-23)**:
+
+1. **chandler 侧扩充(面向阶段 B)**——util 加 `format-object`/`eprintf`/`datum->string`/`string-subst`/`strip-leading`(= strip-prefix 别名);fs 加 `write-text-if-changed`/`file-byte-size`/`mtime`/`path-root`/`path-ext`/`path-swap-ext` + 别名 `file->string`/`file->lines`/`delete-tree`/`path-basename`;layout 加 `machine-type-string`/`windows-mt?`/`join-path`/`rel-to`。base export 同步。
+2. **bake 侧保守删改(零风险)**——`bake/sha256.ss` 整删(129 行,API 与 chandler hash 完全一致);`bake/native.ss` 删 `so-ext`(由 base 提供);`bake/util.ss`+`runtime.ss` 把纯字符串/格式化/路径函数改为 alias(str-prefix?→string-prefix? 等);`bake.ss` 加 `(import (chandler base))` + libdirs 自动挂全局前缀对。
+3. **子进程封装保留 bake**(签名不兼容,阶段 B 统一)——bake `run`/`run/capture`/`run/code` 接受 `(run "prog" "arg" ...)` 可变参数,chandler `run-capture`/`run-check` 接受 `(run-capture prog args-list)` 列表签名;bake `shq`(加双引号)与 chandler `shell-quote`(单引号转义)语义不同;bake `bail-*` 依赖 `*exit-code*` 全局状态。这些**不 alias**,留 bake(阶段 B 搬进 task-engine 时统一)。
+4. **bake manifest 暂未建**——bake 仓当前零依赖自含,manifest 化牵连 bootstrap/启动器/测试全套,留阶段 B7(删 bake 仓)时随合并自然解决;A2 仅让 bake 在已装 chandler 的环境下 import base。
+5. **bake bootstrap.ss 不动**(计划要求保持自含)。
+
+**验证**:chandler **225/225** 全绿(新增 path-root/path-ext/string-subst 等用例);bake **12 suite 全绿**(loader-run **35/35** 含 Z4/Z5 → native-loader codegen 文本字节不变);bake 净删 174 行重复实现。
+
+#### 阶段 B — 吸收编译引擎(M1+,核心工作,~2000 行搬运)
+
+把 bake 的编译引擎搬进 chandler dev-time 层,变 6 个新 library 模块。依赖序 B1→B7。
+
+| # | 任务 | 状态 | 文件 |
+|---|------|------|------|
+| B1 | `records`(36)+ `globals`(34)+ `output`(40)+ `engine`(156) → `(chandler task-engine)`;import 改 `(chandler base)` | 🔲 待实现 | `chandler/task-engine.ss`(新) |
+| B2 | `dsl`(147)+ `loader`(68) → `(chandler recipe)`(DSL 宏 + recipe 加载);`(load-recipe)` + `(invoke-task 'build)` 跑通 chandler 自身编译 | 🔲 待实现 | `chandler/recipe.ss`(新;注意与根 recipe.ss 同名不同路径) |
+| B3 | `deps`(312) → `(chandler import-graph)`(R6RS import 解析 + 库闭包 + 环检测) | 🔲 待实现 | `chandler/import-graph.ss`(新) |
+| B4 | `compile`(612) → `(chandler compile)`(library-task/compile-lib/指纹/并行 `-j`/prebuilt);编译 chandler 自身产物与 bake 字节一致 | 🔲 待实现 | `chandler/compile.ss`(新) |
+| B5 | `native`(427)+ `miniregex`(70) → `(chandler native-build)` + `(chandler miniregex)`;native(script/make/cmake)端到端;loader codegen 文本不变 | 🔲 待实现 | `chandler/native-build.ss`、`chandler/miniregex.ss`(新) |
+| B6 | bake CLI(`dispatch` 65 + `cli` 235 + `init` 113 + `main` 29)合入 chandler CLI;保留 `chandler bake` 别名;`chandler bake build` ≡ 旧 `bake build` | 🔲 待实现 | `chandler/cli/{args,commands,main}.ss` |
+| B7 | 删除 bake 仓;统一一套 bootstrap + 启动器;skiff-demo 端到端 | 🔲 待实现 | 删 `/home/david/workspace/bake`;`bootstrap.ss` |
+
+#### 阶段 C — 统一资源定位 + per-dep 库路径 + .env(替代原 C1-C7)
+
+> **设计权威:[design 14](designs/14-unified-resources.md)**。原 C1-C7(assembled 命令 + CHANDLER_DEV_ROOT)已被 doc 14 替代:per-dep pairs 消除 `assembled`(dev 期全 live,不需要组装);src-scan 消除 `CHANDLER_DEV_ROOT`(资源直接从源码读)。
+
+| # | 任务 | doc 14 | 状态 | 文件 |
+|---|------|--------|------|------|
+| C0 | `resolved-libdirs` 改 per-dep pairs;`vendor/`→`_vendor/` 改名;删 `install-dep-sources!`(不再拷源码进 lib/) | P0 | 🔲 待实现 | `chandler/install.ss` |
+| C1 | 统一 `resource-path`:scan-src-sides + prefix-fallback;删旧四 API(`app-resource-path`/`find-app-resource-path`/`lib-resource-path`/`find-lib-resource-path`) | P1 | 🔲 待实现 | `chandler/runtime-paths.ss` |
+| C2 | `native-load-paths` 改扫所有 pair obj 侧(不再只扫 `lib/<mt>`) | P2 | 🔲 待实现 | `chandler/install.ss` |
+| C3 | `.env` 读取模块(`chandler/env.ss`);`run`/`repl`/`env`/`install` 消费 `.env` | P3 | 🔲 待实现 | `chandler/env.ss`(新)、`chandler/cli/commands.ss` |
+| C4 | install 落点:resources → `src/resources/<namespace>/`(替代 `share/<namespace>/resources/`);install = 全局安装(摊平进 `~/.local/share/chez/`) | P5 | 🔲 待实现 | `chandler/install.ss` |
+| C5 | pack 来源改:`_vendor/<dep>/_build/<mt>/` + `_build/<mt>/` + `resources/`;pack 输出 resources 在 `src/resources/<ns>/` | P6 | 🔲 待实现 | `chandler/pack.ss` |
+| C6 | 文档 + skiff-demo 迁移 + `chandler init` 模板加 `.env` 骨架 | P7 | 🔲 待实现 | `README.md`、`chandler/cli/commands.ss` |
+
+**依赖序**:
+- C0–C3 可**先于阶段 B** 落地(不依赖 bake 吸收)——过渡期 bake 子进程仍跑,但 libdirs 已是 per-dep 对、resources 已统一、`.env` 已生效。
+- C4–C5 依赖阶段 B4(compile 吸收完成)——install/pack 从 `_vendor/` + `_build/` 取需要进程内编译。
+- C6 最后。
+
+**原 C 阶段被消除的任务**:
+- ~~C1 `build` 去掉 `install-dep-objects!`~~ — per-dep pairs 模型里 `install-dep-objects!` 整个删除(对象不搬进 lib/)。
+- ~~C3 `assembled` 命令~~ — 消除:dev 期全 live,不需要组装步骤。
+- ~~C4 `run`/`repl` 自动触发 assembled~~ — 消除:run/repl 直接用 per-dep pairs,无 assembled 可触发。
+- ~~C5 `CHANDLER_DEV_ROOT`~~ — 消除:src-scan 直接从 `<src>/resources/` 读,无需 env var。
+
+#### 阶段 D — 收尾(bootstrap/launcher 合一,可同期 B7)
+
+| # | 任务 | 状态 | 文件 |
+|---|------|------|------|
+| D1 | 两套 bootstrap 合一(chandler `bootstrap.ss` 统一安装编译引擎 + 包管理) | 🔲 待实现 | `bootstrap.ss` |
+| D2 | 两套启动器合一(不再有独立 bake 启动器) | 🔲 待实现 | `bootstrap.ss` |
+| D3 | `chandler init` 模板:recipe.ss 注明「chandler 直接消费,不需 bake」 | 🔲 待实现 | `chandler/cli/commands.ss` |
+
+**发布节奏**:A 已完成(消灭漂移);B 逐模块吸收(B1–B5 串行,B6–B7 一次合仓);C0–C3 可先于 B 落地(per-dep pairs + 统一 resource-path + .env,过渡期 bake 子进程仍跑);C4–C6 依赖 B4(进程内编译);D 是 B7 延伸。
 
 ### P2 — 运行时依赖 vs 开发时依赖分离(dev-deps)
 
