@@ -63,6 +63,8 @@
           ;;    `chandler build` 补进 lib/<mt>/。
           (rm-rf (project-libdir root))
           (bake-install-deps root git-deps)
+          ;; M1: 复制依赖声明资源到 lib/share/<libpath>/resources/(designs/11 §5)
+          (install-resources root git-deps)
           ;; 3) 生成 chandler-setup.ss(一行激活文件)
           (write-setup-file root)
           (printf "install: ~a ~a vendored, installed to lib/{src,~a}; wrote chandler-setup.ss~%"
@@ -130,6 +132,37 @@
           (delete-if-exists recipe)))))
 
   (define (delete-if-exists p) (when (file-exists? p) (delete-file p)))
+
+  ;; M1: 复制依赖声明资源到 lib/share/<libpath>/resources/(designs/11 §5)
+  ;; 资源是 ABI-independent,落 share/ 层(与 src/ <mt>/ 并列);lock 驱动,不重读 dep manifest。
+  (define (install-resources root git-deps)
+    (for-each
+      (lambda (d)
+        (let ([resources (locked-dep-resources d)])
+          (when resources
+            (let ([vdir (vendor-dir root (locked-dep-name d))])
+              (for-each
+                (lambda (entry)
+                  (let* ([libref (car entry)]
+                         [rel-path (cdr entry)]
+                         [src-dir (join-paths vdir rel-path)]
+                         [libpath (string-join (map symbol->string libref) "/")]
+                         [dst-base (join-paths (project-libdir root) "share" libpath "resources")])
+                    (when (file-directory? src-dir)
+                      (copy-resource-tree src-dir dst-base))))
+                resources)))))
+      git-deps))
+
+  ;; 递归复制目录树:files-under 给绝对路径,copy-file 自动建父目录
+  (define (copy-resource-tree src-dir dst-dir)
+    (let* ([prefix (if (string-suffix? "/" src-dir) src-dir (string-append src-dir "/"))]
+           [files (files-under src-dir)])
+      (for-each
+        (lambda (f)
+          (let* ([rel (strip-prefix f prefix)]
+                 [dst (path-join* dst-dir rel)])
+            (copy-file f dst)))
+        files)))
 
   ;; ── 孤儿清理:vendor/ 下有、lock 无的目录 ──
   (define (clean-orphans root lk opts)

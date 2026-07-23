@@ -16,13 +16,13 @@
   (define (make-provider graph)
     (lambda (name sk sl pk pv)
       (if (eq? sk 'path)
-          (values #f "." '() '() #t)
+          (values #f "." '() '() #t #f)
           (let ([e (assq name graph)])
             (if e
                 (let ([info (cdr e)])
                   (values (list-ref info 0) (list-ref info 1)
-                          (deps-from-sexprs (list-ref info 2)) (list-ref info 3) #f))
-                (values "rev-unknown" "." '() '() #f))))))
+                          (deps-from-sexprs (list-ref info 2)) (list-ref info 3) #f #f))
+                (values "rev-unknown" "." '() '() #f #f))))))
 
   (define (deps-from-sexprs sexprs)
     (manifest-deps (parse-manifest `(manifest (name "x") (version "0") (deps ,@sexprs)))))

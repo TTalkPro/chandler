@@ -188,14 +188,32 @@
   ;;
   ;; 按 lock 精确挑正是 chandler 相对 bake 的优势:bake 只能从构建图推断、遇预构建
   ;; 库不下探,故只能整棵命名空间搬;chandler 手里就有精确闭包。
+  ;; N6: chandler 作为 transitive dep 时,只复制 runtime-subset 子库(designs/12 §6.3)。
+  ;; 当前硬编码列表(与 chandler 自身 manifest 的 runtime-subset + base umbrella 一致);
+  ;; 未来可改为 lock 驱动(locked-dep-runtime-subset)。
+  (define chandler-runtime-sublibs
+    '(base runtime-paths hash version util fs sexp layout runtime-detector proc))
+
+  (define (chandler-dev-only-so? rel)
+    ;; rel 形如 "chandler/pack.so" → #t(dev-only);"chandler/hash.so" → #f(runtime)
+    (and (string-prefix? "chandler/" rel)
+         (let* ([sub (strip-prefix "chandler/" rel)]
+                [so-dot (string-search sub ".so")]
+                [stem (if so-dot (substring sub 0 so-dot) sub)])
+           (or (string-contains? stem "/")              ; 嵌套(chandler/cli/main.so)→ dev-only
+               (not (member (string->symbol stem) chandler-runtime-sublibs))))))
+
   (define (copy-dep-trees! obj to locked)
     (let ([nx (string-append "." (so-ext))])
       (for-each
         (lambda (d)
           (let* ([ns (symbol->string (locked-dep-name d))]
                  [um (join-paths obj (string-append ns ".so"))]
-                 [dir (join-paths obj ns)])
-            (when (file-exists? um)
+                 [dir (join-paths obj ns)]
+                 [chandler? (string=? ns "chandler")])
+            ;; chandler.so 是 dev umbrella(export activate 等)——不进 pack;
+            ;; pack 的入口是 chandler/base.so(runtime umbrella)
+            (when (and (file-exists? um) (not chandler?))
               (let ([dst (join-paths to (string-append ns ".so"))])
                 (ensure-parent dst) (copy-file um dst)))
             (when (file-directory? dir)
@@ -203,7 +221,8 @@
                 (lambda (abs)
                   (let ([rel (strip-prefix abs (string-append obj "/"))])
                     (when (and (deliverable? rel)
-                               (or (string-suffix? ".so" rel) (string-suffix? nx rel)))
+                               (or (string-suffix? ".so" rel) (string-suffix? nx rel))
+                               (not (and chandler? (chandler-dev-only-so? rel))))
                       (let ([dst (join-paths to rel)])
                         (ensure-parent dst) (copy-file abs dst)))))
                 (files-under dir)))))
@@ -223,6 +242,34 @@
                    (set! n (+ n 1))))
                (files-under src))
              (> n 0)))))
+
+  ;; M2: share/ — 依赖库的资源(ABI-independent,designs/11 §5)
+  ;; 从项目安装前缀 lib/share/ 复制到 pack 的 share/,不套 .so filter。
+  ;; lock 驱动:只复制 locked-dep-resources 声明的 libref 对应目录。
+  (define (copy-share! project root locked)
+    (let ([share-src (join-paths (project-libdir project) "share")])
+      (when (file-directory? share-src)
+        (for-each
+          (lambda (d)
+            (let ([resources (locked-dep-resources d)])
+              (when resources
+                (for-each
+                  (lambda (entry)
+                    (copy-share-entry share-src root (car entry) (cdr entry)))
+                  resources))))
+          locked))))
+
+  (define (copy-share-entry share-src root libref rel-path)
+    (let* ([libpath (string-join (map symbol->string libref) "/")]
+           [src-dir (join-paths share-src libpath "resources")])
+      (when (file-directory? src-dir)
+        (for-each
+          (lambda (abs)
+            (let* ([rel (strip-prefix abs (string-append src-dir "/"))]
+                   [dst (join-paths root "share" libpath "resources" rel)])
+              (ensure-parent dst)
+              (copy-file abs dst)))
+          (files-under src-dir)))))
 
   ;; ═══════════════════════════════════════════════════════════════════
   ;; §4 native 清点
@@ -762,8 +809,9 @@
             (error 'pack
                    (format "entry library ~a has no compiled object at ~a~%  (pass --entry '(<lib>)', or run `bake build` if it is simply not built)"
                            entry e))))
-        ;; 2) resources/(约定名)
+        ;; 2) resources/(约定名)+ share/(依赖库资源,M2)
         (copy-resources! project root)
+        (copy-share! project root locked)
         ;; bootstrap 在 runtime 定位之前落盘:内容只依赖 entry/mt(target 三元组由它
         ;; 自己从 pack.manifest 读),与捆哪份运行时无关;stock 与 skiff 包同一份
         ;; (designs/10 §3:不再分叉;skiff 启动器在 L2 才换 --script,文件先备好)。
