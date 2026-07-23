@@ -1,20 +1,26 @@
 #!chezscheme
-;;; chandler/install.ss --- vendor/ 物化 + bake install → lib/{src,<mt>} + 生成 setup(designs/01)
+;;; chandler/install.ss --- vendor/ 物化 + 源码安装 → 项目前缀 lib/(designs/01)
 ;;;
 ;;; 依赖模型(Bundler 式,2026-07-22 对齐 bake install 的 src/mt 拆分):
-;;;   git 依赖整仓 checkout → vendor/<name>/;再由 **bake install** 从 vendor 装进 lib/,
-;;;   lib/ 成为一个 Chez 库目录**前缀**,内含 src/mt 拆分(结构同 ~/.local/share/chez):
-;;;     lib/src/          ← 源码(umbrella <name>.ss + <name>/… 各依赖并存)
-;;;     lib/<mt>/         ← 平台绑定产物(编译 .so + native/<lib>/…),chandler build 后填充
+;;;   git 依赖整仓 checkout → vendor/<name>/;chandler 再把源码装进 lib/,
+;;;   lib/ 成为一个 Chez 库目录**前缀**,与 ~/.local/share/chez 及解开的 pack 逐层同构:
+;;;     lib/src/                        ← 源码(umbrella <name>.ss + <name>/… 各依赖并存)
+;;;     lib/<mt>/                       ← 平台绑定产物(编译 .so + native/<lib>/…),
+;;;                                        `chandler build` 后填充
+;;;     lib/share/<libpath>/resources/  ← 资源(依赖声明的 + 本项目自己的 resources/)
+;;;     lib/.chandler/<name>/manifest.ss ← 清单快照(应用名由此可辨,见 runtime-paths)
 ;;;   故库搜索挂**一对** (lib/src . lib/<mt>);消费方一条 pair 同时解析源码与对象。
 ;;;   path 依赖不进 vendor/lib,activate/run 时直挂其源目录(live)。
-;;;   install 生成 chandler-setup.ss:app 主脚本顶部 (load) 它即自动激活(每次执行)。
-;;;   install 依赖 bake 可用。
+;;;
+;;;   **APP_ROOT 即这个前缀**(2026-07-23):`chandler run`/`repl`/`activate` 把它指向
+;;;   <project>/lib,pack 启动器指向包根 —— 三态同一形状,应用代码与 bake 生成的
+;;;   native-loader 都只认 `$APP_ROOT/<mt>/…` 与 `$APP_ROOT/share/<app>/resources/`
+;;;   一种拼法。生成 chandler-setup.ss 的旧做法已取消:启动统一走 `chandler run`。
 
 (library (chandler install)
   (export install verify sync-status list-deps
           vendor-dir lib-dir project-lock-path project-manifest-path
-          library-search-dirs native-load-paths write-setup-file
+          library-search-dirs native-load-paths sync-app-prefix!
           project-libdir project-lib-pair project-obj-dir
           global-prefix global-libdir path-dep-source-dirs
           project-mode? resolved-libdirs)
@@ -37,38 +43,41 @@
   (define (project-libdir root) (join-paths root "lib"))                 ; 安装前缀(base)
   (define (project-lib-pair root) (split-pair (project-libdir root)))    ; (lib/src . lib/<mt>)
   (define (project-obj-dir root) (join-paths (project-libdir root) (current-machine-type))) ; lib/<mt>
-  (define (setup-path root) (join-paths root "chandler-setup.ss"))
 
   ;; ── install:主命令 ──
   ;; opts: (production . bool) (force . bool) (keep-extra . bool) (offline . bool)
+  ;;         (update . bool)   — 强制重解析(忽略旧 lock)
   (define (install root opts)
     (let* ([mpath (project-manifest-path root)]
            [lpath (project-lock-path root)])
       (unless (file-exists? mpath)
-        (error 'install "manifest.ss not found; run `chandler init` first" root))
+        (error 'deps "manifest.ss not found; run `chandler init` first" root))
+      ;; --update:删旧 lock 触发重解析
+      (when (opt opts 'update #f)
+        (when (file-exists? lpath) (delete-file lpath)))
       (parameterize ([offline? (opt opts 'offline #f)])
         (let* ([mf (read-manifest mpath)]
                [lk (obtain-lock root mf mpath lpath opts)]
-               [git-deps (filter (lambda (d)
-                                   (and (eq? 'git (locked-dep-source-kind d))
-                                        (or (not (opt opts 'production #f))
-                                            (not (eq? 'dev (locked-dep-scope d))))))
-                                 (lock-deps lk))])
-          ;; 1) git 依赖整仓 → vendor/<name>
-          (for-each (lambda (d) (sync-dep root d opts)) git-deps)
+               ;; 所有需要 vendor 的依赖(git + path);path dep 从本地拷入 vendor/
+               [deps-to-vendor (filter (lambda (d)
+                                         (and (memq (locked-dep-source-kind d) '(git path))
+                                              (or (not (opt opts 'production #f))
+                                                  (not (eq? 'dev (locked-dep-scope d))))))
+                                       (lock-deps lk))])
+          ;; 1) 依赖 → vendor/<name>(git: clone;path: 本地拷贝)
+          (for-each (lambda (d) (sync-dep root d opts)) deps-to-vendor)
           (clean-orphans root lk opts)
           ;; 2) 源码安装:从 vendor/ 装进 lib/src/(in-process,无 bake 子进程)。
-          ;;    design 13:chandler 全面接管 install;bake 只编译。
-          ;;    install 只发源码(vendor 是干净 checkout,无 _build);编译产物由
-          ;;    `chandler build` 补进 lib/<mt>/。
           (rm-rf (project-libdir root))
-          (install-dep-sources! root git-deps)
-          ;; M1: 复制依赖声明资源到 lib/share/<libpath>/resources/(designs/11 §5)
-          (install-resources root git-deps)
-          ;; 3) 生成 chandler-setup.ss(一行激活文件)
-          (write-setup-file root)
-          (printf "install: ~a ~a vendored, installed to lib/{src,~a}; wrote chandler-setup.ss~%"
-                  (length git-deps) (plural (length git-deps) "dependency" "dependencies")
+          (install-dep-sources! root deps-to-vendor)
+          ;; M1: 复制依赖声明资源到 lib/share/<libpath>/resources/
+          (install-resources root deps-to-vendor)
+          ;; 3) 把项目自己也铺进这个前缀:resources/ → lib/share/<name>/resources/,
+          ;;    manifest 快照 → lib/.chandler/<name>/ —— lib/ 由此是个**完整前缀**,
+          ;;    APP_ROOT 指向它即可,应用四态读同一条路径。
+          (sync-app-prefix! root mf)
+          (printf "deps: ~a ~a vendored, installed to lib/{src,~a}~%"
+                  (length deps-to-vendor) (plural (length deps-to-vendor) "dependency" "dependencies")
                   (current-machine-type))
           0))))
 
@@ -89,23 +98,47 @@
   (define (with-manifest-sha lk sha)
     (make-lock (lock-format lk) sha (lock-chandler lk) (lock-deps lk)))
 
-  ;; ── 单依赖 checkout → vendor/<name>(幂等 + 脏拒动)──
+  ;; ── 单依赖 → vendor/<name>(git: clone;path: 本地拷贝)──
   (define (sync-dep root ld opts)
-    (let ([dir (vendor-dir root (locked-dep-name ld))]
-          [url (locked-dep-source-loc ld)]
+    (let ([dir (vendor-dir root (locked-dep-name ld))])
+      (case (locked-dep-source-kind ld)
+        [(git) (sync-git-dep root ld dir opts)]
+        [(path) (sync-path-dep root ld dir opts)]
+        [else (void)])))
+
+  (define (sync-git-dep root ld dir opts)
+    (let ([url (locked-dep-source-loc ld)]
           [rev (locked-dep-rev ld)])
       (cond
         [(not (file-directory? dir)) (materialize url rev dir)]
         [(dirty? dir)
          (if (opt opts 'force #f)
              (begin (rm-rf dir) (materialize url rev dir))
-             (error 'install
+             (error 'deps
                     (format "~a has local changes; refusing to overwrite (use --force)~%  ~a"
                             (locked-dep-name ld) dir)))]
         [(string=? (head-rev dir) rev) (void)]
         [else
          (unless (has-rev? url rev) (update-mirror url))
-         (checkout-detach dir rev)])))
+          (checkout-detach dir rev)])))
+
+  ;; path 依赖:从本地源目录拷贝到 vendor/<name>/(chandler 自举用)
+  (define (sync-path-dep root ld dir opts)
+    (let ([src (locked-dep-source-loc ld)])
+      (unless (file-directory? src)
+        (error 'deps (format "~a: source path ~a does not exist" (locked-dep-name ld) src)))
+      (when (or (not (file-directory? dir))
+                (opt opts 'force #f))
+        (rm-rf dir)
+        (ensure-dir dir)
+        (for-each
+          (lambda (abs)
+            (let* ([pre (string-append src "/")]
+                   [rel (strip-prefix abs pre)]
+                   [dst (join-paths dir rel)])
+              (ensure-parent dst)
+              (copy-file abs dst)))
+          (files-under src)))))
 
   ;; ── 源码安装:vendor/ → lib/src/(in-process,无 bake 子进程;design 13 §3)──
   ;; chandler 是安装的唯一执行者。每依赖:找 umbrella + 拷整棵源码子树。
@@ -198,7 +231,7 @@
   (define (verify root)
     (let ([lpath (project-lock-path root)])
       (unless (file-exists? lpath)
-        (error 'verify "no manifest.lock; run `chandler install` first" root))
+        (error 'verify "no manifest.lock; run `chandler deps` first" root))
       (let ([lk (read-lock lpath)] [ok #t])
         (for-each
           (lambda (d)
@@ -207,7 +240,7 @@
                 (cond
                   [(not (file-directory? dir))
                    (set! ok #f)
-                   (fprintf (current-error-port) "missing: vendor/~a (run `chandler install`)~%" (locked-dep-name d))]
+                   (fprintf (current-error-port) "missing: vendor/~a (run `chandler deps`)~%" (locked-dep-name d))]
                   [(not (string=? (head-rev dir) (locked-dep-rev d)))
                    (set! ok #f)
                    (fprintf (current-error-port) "rev mismatch: vendor/~a is at ~a, lock says ~a~%"
@@ -219,7 +252,7 @@
         (unless (or (null? (filter (lambda (d) (eq? 'git (locked-dep-source-kind d))) (lock-deps lk)))
                     (file-directory? (car (project-lib-pair root))))   ; lib/src 存在
           (set! ok #f)
-          (fprintf (current-error-port) "missing: lib/src (run `chandler install` to rebuild)~%"))
+          (fprintf (current-error-port) "missing: lib/src (run `chandler deps` to rebuild)~%"))
         ok)))
 
   ;; sync-status:list/tree 用
@@ -303,105 +336,51 @@
   (define (self-loading? f)
     (file-exists? (join-paths (parent-dir (parent-dir f)) "native-loader.so")))
 
-  ;; ── 生成 chandler-setup.ss(位置无关:依入口脚本目录解析 root;src/mt 拆分)──
-  ;;   纯 Chez(无 (chandler) 依赖):挂 lib/ 一对(源.对象)+ path 源目录 + 全局兜底一对。
-  ;;   native 走 designs/24 分层:**挂好对本身就使 bake 生成的 native-loader 自加载生效**
-  ;;   (loader 候选 2 = library-directories 的 obj 侧 = lib/<mt>),故不再预加载有 loader
-  ;;   的库;仅对无 loader 的第三方库运行时扫描兜底(故 install 后再 build 亦生效)。
-  (define (write-setup-file root)
-    (let ([path-rels (relativize root (path-dep-source-dirs root))])
-      (call-with-output-file (setup-path root)
-        (lambda (p) (emit-setup p path-rels))
-        'truncate)))
+  ;; ── 项目自身铺进前缀 lib/(2026-07-23:取代生成 chandler-setup.ss)──
+  ;;   lib/ 与 ~/.local/share/chez、解开的 pack 三态同构,APP_ROOT 恒指向这样一个前缀。
+  ;;   要做到这点,项目自己的两样东西也得进去:
+  ;;     resources/                  → lib/share/<name>/resources/   应用数据
+  ;;     manifest.ss                 → lib/.chandler/<name>/manifest.ss  清单快照
+  ;;   后者顺便让 (chandler runtime-paths) 的 app-name 认出「这个前缀属于谁」——
+  ;;   依赖不写 .chandler/,故项目自己恒是唯一条目。
+  ;;
+  ;;   run/repl 每次启动也调它:资源是开发期高频改动的东西,拷贝陈旧比不拷更糟。
+  ;;   只补新增与更新(mtime 比较),删除由 `chandler deps` 重铺 lib/ 时收敛。
+  (define sync-app-prefix!
+    (case-lambda
+      [(root)
+       (let ([mpath (project-manifest-path root)])
+         (when (file-exists? mpath) (sync-app-prefix! root (read-manifest mpath))))]
+      [(root mf)
+       (let ([name (or (manifest-name mf) (base-name root))])
+         (sync-app-resources! root name)
+         (snapshot-app-manifest! root name))]))
 
-  (define (relativize root paths)
-    (let ([pre (string-append root "/")])
-      (map (lambda (x) (strip-prefix x pre)) paths)))
+  (define (sync-app-resources! root name)
+    (let ([src (join-paths root "resources")])
+      (when (file-directory? src)
+        (let ([pre (string-append src "/")]
+              [dst-base (join-paths (project-libdir root) "share" name "resources")])
+          (for-each
+            (lambda (abs) (copy-if-stale! abs (join-paths dst-base (strip-prefix abs pre))))
+            (files-under src))))))
 
-  (define (emit-setup p path-rels)
-    (put-string p ";;; chandler-setup.ss --- generated by chandler; (load) it at the top of your\n")
-    (put-string p ";;; main script. DO NOT EDIT -- regenerated on every `chandler install`.\n")
-    (put-string p ";;;\n")
-    (put-string p ";;; Resolves the project root from the entry script's own location (this file\n")
-    (put-string p ";;; sits beside it), so the project can be moved and run from any cwd.\n")
-    (put-string p ";;;\n")
-    (put-string p ";;; Library search uses Chez (source-dir . object-dir) PAIRS -- lib/src with\n")
-    (put-string p ";;; lib/<machine-type> (the src/mt split produced by `bake install`).\n")
-    (put-string p ";;;\n")
-    (put-string p ";;; Native (FFI) libraries are layered: mounting that pair is by itself enough\n")
-    (put-string p ";;; for bake-generated `(<lib> native-loader)` libraries to self-load, since a\n")
-    (put-string p ";;; loader locates its .so via the object side of library-directories. That is\n")
-    (put-string p ";;; lazy -- nothing is dlopen'd unless the FFI is actually used. The scan below\n")
-    (put-string p ";;; is only a fallback for third-party libraries built WITHOUT bake (no\n")
-    (put-string p ";;; generated loader), so it skips any library shipping a native-loader.so.\n")
-    (put-string p ";;;\n")
-    (put-string p ";;;\n")
-    (put-string p ";;; APP_ROOT is set to the project root when the environment does not already\n")
-    (put-string p ";;; carry one. It is the single variable a `chandler pack` launcher exports, and\n")
-    (put-string p ";;; everything else in a distribution hangs off it at a convention-fixed path\n")
-    (put-string p ";;; (resources/, lib/<mt>/<lib>/native/). Setting it here means application code\n")
-    (put-string p ";;; reads ONE thing in every state -- source checkout, install, pack -- instead\n")
-    (put-string p ";;; of branching on whether it happens to be deployed. An already-set value wins:\n")
-    (put-string p ";;; inside a pack the launcher got there first and is authoritative.\n")
-    (put-string p ";;;\n")
-    (put-string p ";;; Recommended (location-independent) at the top of your main script:\n")
-    (put-string p ";;;   (load (string-append (let ([d (path-parent (car (command-line)))])\n")
-    (put-string p ";;;                          (if (string=? d \"\") \".\" d)) \"/chandler-setup.ss\"))\n")
-    (put-string p ";;; If you always run from the project root, simply: (load \"chandler-setup.ss\")\n")
-    (pretty-print (setup-datum path-rels) p))
+  (define (snapshot-app-manifest! root name)
+    (let ([mpath (project-manifest-path root)]
+          [dst (join-paths (project-libdir root) ".chandler" name "manifest.ss")])
+      (when (file-exists? mpath) (copy-if-stale! mpath dst))))
 
-  ;; 构造 setup 主体为数据(避免手工字符串转义);machine-type 于**加载期**求值,
-  ;; 故项目跨机亦对(对象目录随 mt 走)。
-  (define (setup-datum path-rels)
-    `(let* ([argv (command-line)]
-            [script (if (pair? argv) (car argv) ".")]
-            [root (let loop ([i (- (string-length script) 1)])
-                    (cond [(< i 0) "."]
-                          [(char=? #\/ (string-ref script i)) (substring script 0 i)]
-                          [else (loop (- i 1))]))]
-            [mt (symbol->string (machine-type))]
-            [J (lambda (rel) (string-append root "/" rel))]
-            [_approot (let ([cur (getenv "APP_ROOT")])
-                        (when (or (not cur) (string=? cur ""))
-                          (putenv "APP_ROOT" root)))]
-            [gpfx (string-append (or (getenv "HOME") ".") "/.local/share/chez")]
-            [bn (lambda (d)
-                  (let loop ([i (- (string-length d) 1)])
-                    (cond [(< i 0) d]
-                          [(char=? #\/ (string-ref d i)) (substring d (+ i 1) (string-length d))]
-                          [else (loop (- i 1))])))]
-            [pd (lambda (d)
-                  (let loop ([i (- (string-length d) 1)])
-                    (cond [(< i 0) "."]
-                          [(char=? #\/ (string-ref d i)) (substring d 0 i)]
-                          [else (loop (- i 1))])))]
-            [ends? (lambda (s suf)
-                     (let ([ls (string-length s)] [lu (string-length suf)])
-                       (and (>= ls lu) (string=? suf (substring s (- ls lu) ls)))))]
-            [nativeso? (lambda (q) (or (ends? q ".so") (ends? q ".dylib") (ends? q ".dll")))]
-            ;; a library that ships <lib>/native-loader.so self-loads its own native
-            [self-loading? (lambda (d) (file-exists? (string-append (pd d) "/native-loader.so")))])
-       ;; Library search: project lib/ pair, then path-dep sources, then the global
-       ;; prefix pair -- project entries first so they win.
-       (library-directories
-         (append (list (cons (J "lib/src") (J (string-append "lib/" mt))))
-                 (map J ',path-rels)
-                 (list (cons (string-append gpfx "/src") (string-append gpfx "/" mt)))
-                 (library-directories)))
-       ;; Native fallback ONLY for libraries with no bake-generated loader:
-       ;; scan lib/<mt>/**/native/*.{so,dylib,dll}, skipping self-loading libraries.
-       (let walk ([dir (J (string-append "lib/" mt))])
-         (when (file-directory? dir)
-           (for-each
-             (lambda (e)
-               (unless (or (string=? e ".") (string=? e ".."))
-                 (let ([q (string-append dir "/" e)])
-                   (cond [(file-directory? q) (walk q)]
-                         [(and (string=? "native" (bn dir))
-                               (nativeso? q)
-                               (not (self-loading? dir)))
-                          (load-shared-object q)]))))
-             (directory-list dir))))))
+  ;; 只在内容可能变了时拷:mtime 严格更新即拷(相等则认为没变 —— 拷贝时 dst 恒不早于 src)
+  (define (copy-if-stale! src dst)
+    (when (or (not (file-exists? dst)) (mtime>? src dst))
+      (ensure-parent dst)
+      (copy-file src dst)))
+
+  (define (mtime>? a b)
+    (let ([ta (file-modification-time a)] [tb (file-modification-time b)])
+      (or (> (time-second ta) (time-second tb))
+          (and (= (time-second ta) (time-second tb))
+               (> (time-nanosecond ta) (time-nanosecond tb))))))
 
   ;; ── 工具 ──
   (define (opt opts k default) (alist-ref opts k default))

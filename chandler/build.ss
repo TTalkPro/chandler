@@ -36,9 +36,9 @@
   (define (build root opts)
     (let* ([lpath (project-lock-path root)])
       (unless (file-exists? lpath)
-        (error 'build "manifest.lock not found; run `chandler install` first" root))
+        (error 'build "manifest.lock not found; run `chandler deps` first" root))
       (unless (file-directory? (car (project-lib-pair root)))   ; lib/src 需在(install 已摊平各依赖源)
-        (error 'build "lib/src missing; run `chandler install` first" root))
+        (error 'build "lib/src missing; run `chandler deps` first" root))
       (let* ([lk (read-lock lpath)]
              [order (topo-order lk)]
              [allow (alist-ref opts 'allow-build)]
@@ -80,7 +80,7 @@
   ;;
   ;;   vendor/<dep>/          ← 依赖自己的仓库根 = 它的搜索根(布局规范)
   ;;     _build/<mt>/         ← bake 编译产物落点,与别的依赖互不干扰
-  ;;   lib/{src,<mt>}/        ← chandler install/build 的落点(src/mt 拆分)
+  ;;   lib/{src,<mt>}/        ← chandler deps/build 的落点(src/mt 拆分)
   ;;
   ;; **拓扑序**要紧:A 依赖 B 时,编 A 需要 B 已经在 lib/ 里。故按 lock 的
   ;; topo-order 逐个编 + 装,并把已装好的部分作为**预构建对象根**挂进去
@@ -94,7 +94,7 @@
            [srcdir (srcdir-join vdir (or (locked-dep-srcdir d) "."))]
            [recipe (join-paths srcdir ".chandler-build.ss")])
       (unless (file-directory? srcdir)
-        (error 'build (format "~a not vendored; run `chandler install` first" srcdir)))
+        (error 'build (format "~a not vendored; run `chandler deps` first" srcdir)))
       (call-with-output-file recipe
         (lambda (p) (emit-dep-recipe p root name srcdir d))
         'truncate)

@@ -2,7 +2,7 @@
 ;;; chandler/runtime-paths.ss --- 应用 + 库资源定位 API(designs/11 §3-4,§7)
 
 (library (chandler runtime-paths)
-  (export app-root app-resource-path find-app-resource-path
+  (export app-root app-name app-resource-path find-app-resource-path
           lib-resource-path find-lib-resource-path
           define-resource-path-resolver)
   (import (chezscheme)
@@ -10,7 +10,9 @@
           (chandler layout)
           (chandler fs))
 
-  ;; APP_ROOT 是部署态权威；未设置时从入口脚本位置推导。
+  ;; APP_ROOT = 进程所依的**库前缀**(全局 ~/.local/share/chez · 项目自己的 lib/ ·
+  ;; 解开的 pack —— 三者同构)。由 `chandler run`/`repl`/`activate` 或 pack 启动器在
+  ;; 起进程前设好;未设置时退回从入口脚本位置推导(此时多半不是前缀,只能尽力)。
   (define (app-root)
     (or (getenv* "APP_ROOT")
         (let ([parent (parent-dir (car (command-line)))])
@@ -34,21 +36,53 @@
       [(string-contains? seg "/")
        (error 'runtime-paths "resource segment with path separator rejected" seg)]))
 
-  ;; 严格与可选查找共用校验和路径构造，只有缺失处理不同。
+  ;; 应用名 —— 部署态资源落在 <app-root>/share/<app>/resources/(P1:与依赖资源
+  ;; share/<libpath>/resources/ 及全局安装前缀逐层同构),故必须回答「我是谁」。三级:
+  ;;   ① APP_NAME 显式(共享前缀里装了多个应用时,启动器传);
+  ;;   ② <app-root>/.chandler/ 下的唯一条目 —— pack 恒只写一个(chandler pack 的
+  ;;      write-app-manifest!),故包内不必再加第二个 env,APP_ROOT 仍是唯一必需变量;
+  ;;   ③ 取不到 → #f,只走源码态的 <app-root>/resources/。
+  (define (app-name)
+    (or (getenv* "APP_NAME")
+        (sole-chandler-entry (app-root))))
+
+  (define (sole-chandler-entry root)
+    (let ([d (join-paths root ".chandler")])
+      (and (file-directory? d)
+           (let ([es (filter (lambda (e) (file-directory? (join-paths d e)))
+                             (dir-entries d))])
+             (and (pair? es) (null? (cdr es)) (car es))))))
+
+  ;; 一种拼法:<prefix>/share/<app>/resources/…。APP_ROOT 恒指向一个**库前缀**,
+  ;; 三态同构(全局装 ~/.local/share/chez · 项目自己的 lib/ · 解开的 pack),故这里
+  ;; 不分支、也没有第二条候选;项目源码里的 resources/ 由 chandler 铺进 lib/share/。
+  ;; 严格与可选查找共用路径构造,只有缺失处理不同。
   (define (build-app-resource-path segs)
     (for-each validate-resource-segment segs)
-    (apply join-paths (append (list (app-root) "resources") segs)))
+    (let ([app (app-name)])
+      (unless app
+        (error 'app-resource-path
+               (string-append
+                 "cannot tell which app this prefix belongs to: no APP_NAME, and "
+                 (join-paths (app-root) ".chandler")
+                 " does not hold exactly one entry (run via `chandler run` or a pack launcher)")))
+      (apply join-paths (append (list (app-root) "share" app "resources") segs))))
 
   (define (app-resource-path . segs)
     (let ([path (build-app-resource-path segs)])
       (if (file-exists? path)
           path
-          (error 'app-resource-path
-                 (string-append "resource not found: " path)))))
+          (error 'app-resource-path (string-append "resource not found: " path)))))
 
+  ;; 可选查找:认不出应用名也只是「找不到」,但**非法 segment 照旧当场拒**
+  ;; (路径穿越不该被降级成 #f 静默放过)。
   (define (find-app-resource-path . segs)
-    (let ([path (build-app-resource-path segs)])
-      (and (file-exists? path) path)))
+    (for-each validate-resource-segment segs)
+    (let ([app (app-name)])
+      (and app
+           (let ([path (apply join-paths
+                              (append (list (app-root) "share" app "resources") segs))])
+             (and (file-exists? path) path)))))
 
   ;; ══════════════════════════════════════════════════════════════════
   ;; lib 资源定位(designs/11 §4):基于 (library-object-filename) 反推 prefix
