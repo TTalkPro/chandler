@@ -15,6 +15,10 @@
 | [07-bake-integration.md](07-bake-integration.md) | **与 bake 的协作接口**(依赖编译闭包/native) | 难点 4、5 |
 | [08-bootstrap-security.md](08-bootstrap-security.md) | 自举、分发与信任模型 | 难点 5、8 |
 | [09-pack.md](09-pack.md) | **`chandler pack`**:无源码分发包(自 bake 移交)。包布局、三条约定、env 去留、boot 模式排单给 bake。 | 难点 4(延伸) |
+| [10-deploy-loader.md](10-deploy-loader.md) | pack 的 deploy loader(bootstrap.ss):runtime-aware 校验 + native 加载 | 难点 4(延伸) |
+| [11-runtime-paths.md](11-runtime-paths.md) | `(chandler runtime-paths)`:应用/库资源定位 API | — |
+| [12-chandler-layering.md](12-chandler-layering.md) | **chandler 分层**:dev-time 工具集 + runtime 公共基础设施(`(chandler base)` umbrella) | — |
+| [13-chandler-owns-install.md](13-chandler-owns-install.md) | **chandler 全面接管安装与卸载**:bake 退化为纯编译引擎,install 不再依赖 bake 在场 | 难点 4(延伸) |
 
 ## 定位回顾(一句话版)
 

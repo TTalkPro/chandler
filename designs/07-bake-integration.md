@@ -4,18 +4,21 @@
 
 > **2026-07-22 对齐真实 bake 能力(重要修订)**:早期设计假定 bake 提供 `compile-tree` / `native` **子命令**(porcelain + `--dir`/`--dest`/`--pkg`/`--spec`)。**真实 bake 无这些子命令**——它只吃 `recipe.ss` 里的任务(`library-task`/`native-task`/`install-task` 等,`bake [-f <recipe>] <task>`)。故协作面改为:**chandler 生成一份临时 recipe,跑真实 bake 任务**。这与 `chandler install` 早已采用的做法(生成含 `install-task` 的 recipe 跑 `bake install-all`)一致。同时 `bake install` 落点改 **src/mt 拆分**(见 [bake designs/21],本仓 [01](01-cli.md)/[05](05-install-registry.md)),native 收进所属库 `<prefix>/<mt>/<lib>/native/`。
 
-## 1. 职责矩阵(裁决悬空点)
+## 1. 职责矩阵(裁决悬空点;design 13 修订)
 
 | 事项 | 归属 | 接口形态 |
 |------|------|----------|
-| 依赖获取/锁定/物化 `lib/` | chandler | `manifest.ss` → `manifest.lock` |
+| 依赖获取/锁定/物化 vendor/ | chandler | `manifest.ss` → `manifest.lock` |
+| **源码布局 `lib/src/`** | **chandler**(design 13:从 bake 移交) | `chandler install` in-process 拷源码 |
 | 应用自身编译 | bake | `recipe.ss` |
-| **依赖闭包编译**(pack 需要) | **bake 执行,chandler 排单** | `chandler build` = 生成 recipe(单根 lib/src + 逐依赖 library-task)跑真实 bake(§2) |
-| **native 构建**(依赖声明的) | **bake 执行,chandler 授权+排单** | 同上;授权的 native 落成生成 recipe 里的 native-task(§3) |
-| 全局安装注册表 | 共享库 `(chandler registry)` | bake install 复用([05 §6](05-install-registry.md)) |
-| pack 组装 | bake | 消费 chandler 的编译闭包产物(§4) |
+| **依赖闭包编译** | **bake 执行,chandler 排单** | `chandler build` = 生成 recipe 跑 `bake build-all`(§2) |
+| **编译产物布局 `lib/<mt>/`** | **chandler**(design 13:从 bake 移交) | chandler 把 `_build/<mt>/` 搬进 `lib/<mt>/` |
+| **native 构建**(依赖声明的) | **bake 执行,chandler 授权+排单** | 生成 recipe 里的 native-task(§3);产物由 chandler 搬运 |
+| 全局安装注册表 | chandler | `(chandler registry)`([05](05-install-registry.md)) |
+| **卸载** | **chandler**(design 13:从 bake 移交) | 按命名空间清旧,不需要文件清单 |
+| pack 组装 | chandler | [09](09-pack.md) |
 
-裁决:pack 规范里的「Chandler 编译闭包」理解为**「chandler 负责让闭包处于已编译状态」**——编译动作本身永远是 bake 的;chandler 只知道「闭包有哪些、顺序如何」,不知道「如何编译一个库」。
+裁决(design 13):**bake 只负责编译**;安装/卸载/文件布局全部归 chandler。bake 的 `install-task`/`uninstall-task` 已删除。
 
 ## 2. `chandler build`:排单协议(生成 recipe → 真实 bake)
 
@@ -29,22 +32,20 @@ chandler build [--allow-build] [--production]:
        (native-task '<soname> (lib <dep>) (dir "<path>") (build <后端>))  ; 已授权项(§3)
        (library-task 'c-<rel> "<rel>") …               ; 该树里的**每一个库**(见下)
        (task 'build-all '(…) …)
-       (install-task   'install   (lib <dep>) (from ".") (needs build-all)
-                       (target (prefix "<项目>/lib")))
-       (uninstall-task 'uninstall (lib <dep>) (target (prefix "<项目>/lib")))
-     先 `bake -f … uninstall`(容错;首次无清单)再 `bake -f … install`
-  4. 应用自身:用户另跑 bake build(recipe.ss)
+       (default-task 'build-all)
+     跑 `bake -f … build-all`(只编译,不安装);chandler 再把 _build/<mt>/ 搬进 lib/<mt>/
+   4. 应用自身:用户另跑 bake build(recipe.ss)
 ```
 
-**分工(2026-07-22 修订)**:**bake 只负责编译,以及安装到指定位置**;chandler 老实遍历 `vendor/`,一个一个交给 bake。搬运不再由 chandler 手做 —— `_build/<mt>/` → `lib/<mt>/` 本来就是 `bake install` 的事(src/mt 拆分,排除项也由它统一)。每个依赖在**自己的树里**构建,各有各的 `_build/<mt>/`,彼此不混。
+**分工(design 13 修订,2026-07-23)**:**bake 只负责编译**;chandler 是安装/卸载的唯一执行者。chandler 遍历 `vendor/`,逐依赖在它自己的树里跑 bake 编译(`bake build-all`),然后 chandler 自己把产物从 `_build/<mt>/` 搬进 `lib/<mt>/`。bake 的 `install-task`/`uninstall-task` 已删除,recipe 只含 `library-task`/`native-task`。详见 [13](13-chandler-owns-install.md)。
 
-**拓扑序要紧**:A 依赖 B 时,编 A 需要 B 已在 `lib/` 里 —— 故逐个装,并把已装好的部分作**预构建对象根** `(prebuilt "<项目>/lib")` 挂进去(bake designs/25:对象式消费,不重编)。
+**拓扑序要紧**:A 依赖 B 时,编 A 需要 B 已经在 `lib/` 里 —— 故逐个编+装,并把已装好的部分作**预构建对象根** `(prebuilt "<项目>/lib")` 挂进去(bake designs/25:对象式消费,不重编)。
 
 **编的是整棵树,不是 umbrella 闭包**:一个库包的整棵源码树就是它的公开面,消费方会 import umbrella 从不引用的子库(chez-markding 的 `extensions/` 全是选择性启用的,umbrella 一个都不 import)。只编 umbrella 闭包,装出来的 `lib/<mt>/` 就残缺 —— **实测 107 个源码库只出 49 个对象**。残缺还会被悄悄掩盖:消费方的 bake 遇到没有对象的库会退回从 `lib/src/` 现编进**应用自己的** `_build/<mt>/`(designs/25 分类第 4 档),同一个依赖被劈成两棵对象树,看着能跑而已。枚举时只收**首个 datum 为 `(library …)`** 的文件 —— 包里的测试程序/脚本交给 bake 会走 `compile-program`,既无意义也可能失败。
 
-- **为何在依赖自己的树里编**:布局规范就是「仓库根 = 搜索根」,在 `vendor/<dep>/` 里 `(define-lib-roots ".")` 正是该依赖作者本来的构建姿势;产物落它自己的 `_build/<mt>/`,再由 `bake install` 按 src/mt 拆分装进项目 `lib/`。跨依赖 import 靠**已装好的** `lib/` 作预构建根解析,这也顺带保证了拓扑序不能乱。bake 的 DAG 按 import 图自排编译序,吃其指纹增量(内容哈希+flags+Chez 版本+mt)。
+- **为何在依赖自己的树里编**:布局规范就是「仓库根 = 搜索根」,在 `vendor/<dep>/` 里 `(define-lib-roots ".")` 正是该依赖作者本来的构建姿势;产物落它自己的 `_build/<mt>/`,再由 chandler 按 src/mt 拆分搬进项目 `lib/`。跨依赖 import 靠**已装好的** `lib/` 作预构建根解析,这也顺带保证了拓扑序不能乱。bake 的 DAG 按 import 图自排编译序,吃其指纹增量(内容哈希+flags+Chez 版本+mt)。
 - **不需要依赖带 `recipe.ss`**——**布局规范就是隐式构建描述**;依赖带 `recipe.ss` 也**不执行**(别人的代码,信任模型见 §3)。
-- 产物落各依赖自己的 `vendor/<dep>/_build/<mt>/`,由 `bake install` 装成 `lib/{src,<mt>}` 对;native 收进所属库 `lib/<mt>/<dep>/native/`(bake native-task 的落点不变量)。**重装前先按 bake 自己的安装清单精确卸载** —— `chandler install` 已经装过一次(只发源码),而 `bake install` 见到已装会 bail。
+- 产物落各依赖自己的 `vendor/<dep>/_build/<mt>/`,由 chandler 搬成 `lib/{src,<mt>}` 对;native 收进所属库 `lib/<mt>/<dep>/native/`(bake native-task 的落点不变量)。chandler 按命名空间精确清旧(`clean-dep-objects!`),不需要文件清单。
 
 ## 3. native 构建:授权与执行的分工
 
@@ -55,14 +56,14 @@ chandler build [--allow-build] [--production]:
 ## 4. pack 时序(全链路)
 
 ```
-chandler install               ; 闭包锁定+物化 → lib/{src,<mt>}(只发源码)
-chandler build --allow-build   ; 依赖闭包编译 + native(生成 recipe,真实 bake 执行)→ lib/<mt>/
+chandler install               ; 闭包锁定+物化 → lib/src/(chandler 直接铺源码,不经 bake)
+chandler build --allow-build   ; 依赖闭包编译(bake build-all)+ chandler 搬产物 → lib/<mt>/
 bake build                     ; 应用自身编译(recipe.ss)
-bake pack                       ; 组装:应用 _build/<mt>/ + 依赖 lib/<mt>/(含各库 native/)
-                               ;      + skiff 运行时 + pack.manifest
+chandler pack                  ; 组装:应用 _build/<mt>/ + 依赖 lib/<mt>/(含各库 native/)
+                               ;      + 运行时 + pack.manifest
 ```
 
-`bake pack` 开始前校验闭包完整:lock 每项在 `lib/<mt>/` 有对应产物,缺 → 报「先跑 chandler build」。
+`chandler pack` 开始前校验闭包完整:lock 每项在 `lib/<mt>/` 有对应产物,缺 → 报「先跑 chandler build」。
 
 ## 5. 共享实现:`(chandler …)` 库族给 bake 复用
 
