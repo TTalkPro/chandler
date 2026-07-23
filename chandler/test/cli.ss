@@ -90,7 +90,7 @@
         (assert-raises
           (lambda () (main (list "-C" app "init" "--lib" "--app" "--name=foo"))))))
 
-    ;; ── 端到端:init→add→install→verify→list 全经 main ──
+    ;; ── 端到端:init→add→deps→list 全经 main ──
     (main-full-workflow
       (parameterize ([cache-root (mktmp)])
         (let* ([greet (make-lib-repo "greet")]
@@ -102,13 +102,14 @@
             (call-with-output-file mp
               (lambda (p) (display "(manifest (format 1) (name \"app\") (version \"0.1.0\") (chez \">=10.0\") (srcdir \".\") (deps))" p))))
           (assert-equal 0 (main (list "-C" app "add" "greet" greet "--branch" "main")))
-          (assert-equal 0 (main (list "-C" app "install")))
-          (assert-equal 0 (main (list "-C" app "verify")))
-          (assert-equal 0 (main (list "-C" app "list")))
-          ;; 新模型:git 依赖 checkout 到 vendor/,bake install 到 lib/{src,<mt>},生成 setup
+          (assert-equal 0 (main (list "-C" app "deps")))
+          (assert-equal 0 (main (list "-C" app "deps" "--list")))
+          ;; 新模型:git 依赖 checkout 到 vendor/,chandler 直接装到 lib/src,生成 setup
           (assert-true (file-exists? (string-append app "/vendor/greet/greet.ss")))     ; checkout
-          (assert-true (file-exists? (string-append app "/lib/src/greet.ss")))          ; bake 装的源(lib/src)
-          (assert-true (file-exists? (string-append app "/chandler-setup.ss"))))))      ; 生成的引入文件
+          (assert-true (file-exists? (string-append app "/lib/src/greet.ss")))          ; chandler 装的源(lib/src)
+          ;; lib/ 是完整前缀:清单快照在 .chandler/<name>/;不再生成 chandler-setup.ss
+          (assert-true (file-exists? (string-append app "/lib/.chandler/app/manifest.ss")))
+          (assert-false (file-exists? (string-append app "/chandler-setup.ss"))))))
 
     ;; ── 库搜索模式判定(run/exec/repl 统一):无 lock/依赖 → 全局;有 → 项目(最高优先)──
     (libdir-mode-detection
@@ -124,9 +125,9 @@
               (lambda (p) (display "(manifest (format 1) (name \"app\") (version \"0.1.0\") (chez \">=10.0\") (srcdir \".\") (deps))" p))))
           (assert-false (project-mode? app))
           (assert-equal (list (global-libdir)) (resolved-libdirs app))
-          ;; add + install → lock 有依赖 → 项目模式
+          ;; add + deps → lock 有依赖 → 项目模式
           (main (list "-C" app "add" "greet" greet "--branch" "main"))
-          (main (list "-C" app "install"))
+          (main (list "-C" app "deps"))
           (assert-true (project-mode? app))
           ;; 项目 libdirs:lib/ 一对 (src . obj) 在前 + 项目根 + 全局兜底(一对)在末尾
           (let ([dirs (resolved-libdirs app)])
@@ -141,7 +142,7 @@
           (when (file-exists? mp) (delete-file mp))
           (call-with-output-file mp
             (lambda (p) (display "(manifest (format 1) (name \"test\") (version \"0.1.0\") (chez \">=10.0\") (srcdir \".\") (deps))" p))))
-        (assert-equal 65 (main (list "-C" app "install" "--strict")))))
+        (assert-equal 65 (main (list "-C" app "deps" "--strict")))))
 
     (install-non-strict-warns-but-not-rejected
       (let ([app (mktmp)])
@@ -149,7 +150,7 @@
           (when (file-exists? mp) (delete-file mp))
           (call-with-output-file mp
             (lambda (p) (display "(manifest (format 1) (name \"test\") (version \"0.1.0\") (chez \">=10.0\") (srcdir \".\") (deps))" p))))
-        (assert-true (not (= 65 (main (list "-C" app "install")))))))
+        (assert-true (not (= 65 (main (list "-C" app "deps")))))))
 
     (install-self-bootstrap-skips-check
       (let ([app (mktmp)])
@@ -157,5 +158,5 @@
           (when (file-exists? mp) (delete-file mp))
           (call-with-output-file mp
             (lambda (p) (display "(manifest (format 1) (name \"chandler\") (version \"0.1.0\") (chez \">=10.0\") (srcdir \".\") (deps))" p))))
-        (assert-true (not (= 65 (main (list "-C" app "install" "--strict")))))))
+        (assert-true (not (= 65 (main (list "-C" app "deps" "--strict")))))))
     ))

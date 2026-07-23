@@ -31,8 +31,10 @@
           ;; bake install 到 lib/{src,<mt>}:源码落 lib/src/(结构同全局前缀 <prefix>/src)
           (assert-true (file-exists? (string-append (car (project-lib-pair app)) "/a.ss")))
           (assert-true (file-exists? (string-append (car (project-lib-pair app)) "/b.ss")))
-          ;; 生成 setup + verify 通过
-          (assert-true (file-exists? (join-paths app "chandler-setup.ss")))
+          ;; lib/ 是个完整前缀:清单快照进 .chandler/<name>/(应用名由此可辨)
+          (assert-true (file-exists? (join-paths (project-libdir app) ".chandler" "app" "manifest.ss")))
+          ;; 不再生成 chandler-setup.ss —— 启动统一走 `chandler run`
+          (assert-false (file-exists? (join-paths app "chandler-setup.ss")))
           (assert-true (verify app)))))
 
     (install-idempotent
@@ -58,17 +60,32 @@
                              "--script" script))])
               (assert-string= "#t" (trim (proc-result-out r))))))))
 
-    (activate-and-import-via-setup
-      ;; Bundler 式:app (load chandler-setup.ss) 后 import,纯 scheme 即可
+    ;; 项目自身的 resources/ 也进前缀:lib/share/<name>/resources/ —— 部署态与
+    ;; pack 里的 share/<app>/resources/ 同一形状,故应用代码只有一种拼法。
+    (app-resources-land-in-project-prefix
       (parameterize ([cache-root (mktmp)])
         (let* ([b (make-lib-repo "b" '())]
                [app (make-app (list (cons 'b b)))])
+          (write-text (join-paths app "resources" "greeting.txt") "hello")
           (install app '())
-          (write-file (string-append app "/main.ss")
-            "(load \"chandler-setup.ss\") (import (b)) (display b-ok)")
-          (let ([r (run-capture "scheme" (list "-q" "--script" "main.ss")
-                                (list (cons 'cwd app)))])
-            (assert-string= "#t" (trim (proc-result-out r)))))))
+          (assert-string= "hello"
+            (read-file (join-paths (project-libdir app) "share" "app" "resources" "greeting.txt"))))))
+
+    ;; resources/ 是开发期高频改动的东西:再次 sync 必须把新内容带过去
+    (app-resources-resync-picks-up-edits
+      (parameterize ([cache-root (mktmp)])
+        (let* ([b (make-lib-repo "b" '())]
+               [app (make-app (list (cons 'b b)))]
+               [src (join-paths app "resources" "greeting.txt")]
+               [dst (join-paths (project-libdir app) "share" "app" "resources" "greeting.txt")])
+          (write-text src "old")
+          (install app '())
+          (assert-string= "old" (read-file dst))
+          ;; mtime 粒度:显式推进一秒,免得同秒改动被判为未变
+          (run-check "sleep" '("1") '())
+          (write-text src "new")
+          (sync-app-prefix! app)
+          (assert-string= "new" (read-file dst)))))
 
     (dirty-refuse
       (parameterize ([cache-root (mktmp)])
