@@ -30,22 +30,19 @@
        (case (string->symbol sub)
          [(version) (print-version) 0]
          [(init)    (cmd-init root flags)]
+         [(deps)    (cmd-deps root flags)]
          [(install) (cmd-install root flags)]
-         [(update)  (cmd-update root flags)]
-         [(build)   (cmd-build root flags)]
-         [(pack)    (cmd-pack root flags)]
-         [(verify-pack) (cmd-verify-pack root flags pos)]
-         [(verify)  (cmd-verify root flags)]
-         [(list)    (cmd-list root flags)]
-         [(tree)    (cmd-tree root flags)]
          [(add)     (cmd-add root flags pos)]
          [(remove)  (cmd-remove root flags pos)]
+         [(build)   (cmd-build root flags)]
          [(run)     (cmd-run root flags pos rest)]
-         [(exec)    (cmd-exec root flags rest)]
+         [(env)     (cmd-env root flags)]
          [(repl)    (cmd-repl root flags)]
-          [(uninstall) (cmd-uninstall root flags)]
-          [(doctor)  (cmd-doctor root flags)]
-          [(-T)      (list-tasks) 0]
+         [(pack)    (cmd-pack root flags)]
+         [(verify-pack) (cmd-verify-pack root flags pos)]
+         [(uninstall) (cmd-uninstall-global root flags)]
+         [(doctor)  (cmd-doctor root flags)]
+         [(-T)      (list-tasks) 0]
          [else
           (fprintf (current-error-port)
                    "unknown command: ~a (run `chandler help` for usage)~%" sub)
@@ -82,23 +79,21 @@
     (printf "  init [--lib|--app] [--name=N]  scaffold a manifest.ss (lib by default)~%")
     (printf "  add <name> <url> [--tag T]   add a dependency (--tag/--rev/--branch/--path)~%")
     (printf "  remove <name>                remove a dependency~%")
-    (printf "  install [--production]       resolve manifest/lock, vendor deps, install to lib/~%")
-    (printf "  update                       ignore the existing lock and re-resolve~%")
-    (printf "  build [--allow-build[=a,b]]  compile deps via bake into lib/<machine-type>/~%")
+    (printf "  deps [--update]              resolve + vendor + install source to lib/src/~%")
+    (printf "                               (--update forces re-resolve; --list/--tree show deps)~%")
+    (printf "  install [--global]           install lib + deps to ~~/.local/share/chez (global)~%")
+    (printf "  build [--allow-build[=a,b]]  compile deps + project to lib/<mt>/~%")
+    (printf "  run --script <s.ss> [args]   run a script with the dependency environment~%")
+    (printf "  env                          output export CHEZSCHEMELIBDIRS=... (eval it)~%")
+    (printf "  repl [--runtime skiff|chez]  interactive shell with library paths mounted~%")
     (printf "  pack [--runtime r]           assemble a source-less, self-contained distribution~%")
     (printf "  verify-pack [--target] <dir> re-hash a pack; --target also checks the target triple~%")
-    (printf "  verify                       check vendor/ against the lock (for CI)~%")
-    (printf "  list | tree                  show locked dependencies~%")
-    (printf "  run <script.ss> [args...]    run a script with the dependency environment~%")
-    (printf "  exec -- <cmd...>             run a command with CHEZSCHEMELIBDIRS set~%")
-    (printf "  repl [--runtime skiff|chez]  interactive shell with library paths mounted~%")
-    (printf "  install --global[=dir]       install this project's library tree globally~%")
     (printf "  uninstall --global --name=N  uninstall a globally installed package~%")
-    (printf "  list --global | doctor --global   inspect the global library prefix~%~%")
+    (printf "  doctor --global              inspect the global library prefix~%~%")
     (printf "Global flags: -C <dir> --offline --production --force --keep-extra --verbose~%~%")
     (printf "Environment:~%")
     (printf "  CHANDLER_RUNTIME=skiff|chez  pick WHICH runtime (run/exec/repl and the~%")
     (printf "                               launcher); --runtime overrides it~%")
     (printf "  CHANDLER_SKIFF=<exe>         which skiff executable (name or path)~%")
     (printf "  CHANDLER_SCHEME=<exe>        which Chez executable (name or path)~%")
-    (printf "  CHANDLER_BAKE=<exe>          which bake executable (install/build delegate to it)~%")))
+    (printf "  CHANDLER_BAKE=<exe>          which bake executable (build delegates to it)~%")))

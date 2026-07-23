@@ -5,9 +5,10 @@
 ;;; 依赖获取/物化归 (chandler install);解析归 (chandler resolve)。
 
 (library (chandler cli commands)
-  (export cmd-init cmd-install cmd-update cmd-verify cmd-list cmd-tree
-          cmd-add cmd-remove cmd-run cmd-exec cmd-repl
-          cmd-uninstall cmd-doctor cmd-build cmd-pack cmd-verify-pack
+  (export cmd-init cmd-deps cmd-install cmd-add cmd-remove cmd-run cmd-env cmd-repl
+          cmd-build cmd-pack cmd-verify-pack
+          cmd-uninstall-global cmd-doctor
+          cmd-deps-list cmd-deps-tree
           ensure-gitignore-lib skeleton-manifest-datum)
   (import (chezscheme)
           (chandler util)
@@ -77,9 +78,19 @@
       (printf "wrote ~a~%" mpath)
       0))
 
-  ;; chandler runtime dep 注入模板(designs/12 §5.3 soft 强制)
+  ;; chandler runtime dep 注入:从本地安装复制到 vendor/,不从 URL 下载
+  ;; 检测 chandler 的本地源码根(CHANDLER_PREFIX/src 或开发 checkout)
+  (define (chandler-local-src)
+    (or (and (getenv* "CHANDLER_PREFIX")
+             (join-paths (getenv* "CHANDLER_PREFIX") "src"))
+        (let ([prog (car (command-line))]
+              [suf "/chandler/cli/main.sps"])
+          (and (string-suffix? suf prog)
+               (substring prog 0 (- (string-length prog) (string-length suf)))))
+        "."))
+
   (define chandler-dep-template
-    `(chandler (git "https://github.com/skiffos/chandler") (version "^0.1.4")))
+    `(chandler (path ,(chandler-local-src))))
 
   (define (skeleton-manifest-datum name)
     `(manifest (format 1) (name ,name) (version "0.1.0") (chez ">=10.0") (srcdir ".")
@@ -93,39 +104,31 @@
        (deps ,chandler-dep-template)
        (app (entry ,entry) (main ,main))))
 
-  ;; ── install / update ──
+  ;; ── deps:resolve + vendor + install source(合并旧 install + update)──
+
   ;; N5:检测项目是否依赖 chandler runtime;缺则 warning(--strict 则拒绝)。
-  ;; 自举例外:项目名 = "chandler" 时跳过(designs/12 §5.2)。
   (define (dep-list-has-chandler? deps)
     (and (pair? deps)
          (exists (lambda (d) (eq? (dep-name d) 'chandler)) deps)))
 
   (define (check-chandler-dep root flags)
-    ;; 返回 #t = 可继续;#f = --strict 拒绝(返回 65)
     (let ([mpath (join-paths root "manifest.ss")])
       (if (not (file-exists? mpath))
           #t
           (let ([mf (read-manifest mpath)])
             (cond
-              [(string=? (or (manifest-name mf) "") "chandler") #t]  ; 自举例外
-              [(dep-list-has-chandler? (manifest-deps mf)) #t]        ; 已声明
+              [(string=? (or (manifest-name mf) "") "chandler") #t]
+              [(dep-list-has-chandler? (manifest-deps mf)) #t]
               [(flag? flags 'strict)
                (fprintf (current-error-port)
                  "chandler: project does not depend on chandler; add (deps (chandler ...)) to manifest.ss\n")
                #f]
-              [else
-               (fprintf (current-error-port)
-                 "warning: project does not depend on chandler; add (deps (chandler ...)) to manifest.ss or run chandler init\n")
-               #t])))))
+               [else
+                (fprintf (current-error-port)
+                  "warning: project does not depend on chandler; add (deps (chandler ...)) to manifest.ss\n")
+                #t])))))
 
   ;; --global:装当前项目库树到全局 libdir(注册表事务,designs/05)
-  (define (cmd-install root flags)
-    (if (flag? flags 'global)
-        (cmd-install-global root flags)
-        (if (check-chandler-dep root flags)
-            (install root (install-opts flags))
-            65)))  ; EX_DATAERR
-
   (define (cmd-install-global root flags)
     (let* ([libdir (target-libdir flags)]
            [mpath (join-paths root "manifest.ss")]
@@ -138,7 +141,95 @@
       (printf "installed ~a ~a globally to ~a~%" name version libdir)
       0))
 
-  (define (cmd-uninstall root flags)
+  (define (cmd-deps root flags)
+    (cond
+      [(flag? flags 'list)  (cmd-deps-list root flags)]
+      [(flag? flags 'tree)  (cmd-deps-tree root flags)]
+      [(flag? flags 'global) (cmd-install-global root flags)]
+      [else
+       (if (check-chandler-dep root flags)
+           (install root (list (cons 'production (flag? flags 'production))
+                               (cons 'force (flag? flags 'force))
+                               (cons 'keep-extra (flag? flags 'keep-extra))
+                               (cons 'offline (flag? flags 'offline))
+                               (cons 'update (flag? flags 'update))))
+            65)]))
+
+  ;; ── install:安装 lib + 依赖 + resources + manifest 到全局前缀 ──
+  (define (cmd-install root flags)
+    (let* ([libdir (target-libdir flags)]
+           [mpath (join-paths root "manifest.ss")]
+           [mf (and (file-exists? mpath) (read-manifest mpath))])
+      (unless mf (error 'install "manifest.ss not found; run `chandler init` first"))
+      (let ([name (or (manifest-name mf) (basename root))]
+            [version (or (manifest-version mf) "0.0.0")])
+        ;; 前置:deps + build 必须已完成
+        (unless (file-directory? (project-libdir root))
+          (error 'install "lib/ not found; run `chandler deps` first"))
+        ;; 1. 安装项目自身(经 registry:冲突检测 + hash 追踪 + 清卸)
+        (let* ([meta (list name version `(path ,root) (now-iso) 'chandler)]
+               [opts (list (cons 'adopt (flag? flags 'adopt))
+                           (cons 'force (flag? flags 'force)))])
+          (install-global root libdir meta opts))
+        ;; 2. 合并依赖源码 + 编译产物 + 资源(从 lib/ → 全局前缀)
+        (merge-lib-to-global! root libdir)
+        ;; 3. 安装项目自身 resources(manifest 声明的)
+        (install-project-resources! root mf libdir)
+        ;; 4. 安装 manifest 到 .chandler/<name>/manifest.ss
+        (let ([manifest-dir (join-paths libdir ".chandler" name)])
+          (ensure-dir manifest-dir)
+          (copy-file mpath (join-paths manifest-dir "manifest.ss")))
+        (printf "installed ~a ~a + dependencies to ~a~%" name version libdir)
+        0)))
+
+  ;; 将 lib/{src,<mt>,share}/** → <global>/(合并,不覆盖同名)
+  (define (merge-lib-to-global! root libdir)
+    (let* ([mt (current-machine-type)]
+           [libdir-proj (project-libdir root)])
+      ;; src/
+      (merge-tree! (join-paths libdir-proj "src") (join-paths libdir "src"))
+      ;; <mt>/
+      (merge-tree! (join-paths libdir-proj mt) (join-paths libdir mt))
+      ;; share/(依赖资源)
+      (merge-tree! (join-paths libdir-proj "share") (join-paths libdir "share"))))
+
+  (define (merge-tree! src-dir dst-dir)
+    (when (file-directory? src-dir)
+      (ensure-dir dst-dir)
+      (let ([pre (string-append src-dir "/")])
+        (for-each
+          (lambda (abs)
+            (let* ([rel (strip-prefix abs pre)]
+                   [dst (join-paths dst-dir rel)])
+              (ensure-parent dst)
+              (unless (file-exists? dst) (copy-file abs dst))))
+          (files-under src-dir)))))
+
+  ;; 安装项目自身的 resources(manifest 的 (resources ...) 声明)
+  (define (install-project-resources! root mf libdir)
+    (let ([resources (manifest-resources mf)]
+          [name (manifest-name mf)])
+      (when resources
+        (for-each
+          (lambda (entry)
+            (let* ([libref (car entry)]
+                   [rel-path (cdr entry)]
+                   [src-dir (join-paths root rel-path)]
+                   [libpath (string-join (map symbol->string libref) "/")]
+                   [dst-dir (join-paths libdir "share" libpath "resources")])
+              (when (file-directory? src-dir)
+                (ensure-dir dst-dir)
+                (let ([pre (string-append src-dir "/")])
+                  (for-each
+                    (lambda (abs)
+                      (let* ([rel (strip-prefix abs pre)]
+                             [dst (join-paths dst-dir rel)])
+                        (ensure-parent dst)
+                        (copy-file abs dst)))
+                    (files-under src-dir))))))
+          resources))))
+
+  (define (cmd-uninstall-global root flags)
     (unless (flag? flags 'global) (error 'uninstall "only --global is supported"))
     (let ([libdir (target-libdir flags)]
           [name (flag flags 'name)])
@@ -171,56 +262,48 @@
               (pad2 (date-hour t)) (pad2 (date-minute t)) (pad2 (date-second t)))))
   (define (pad2 n) (if (< n 10) (format "0~a" n) (format "~a" n)))
 
-  (define (cmd-update root flags)
-    ;; 删 lock 触发重解析(全量);具名 update 的增量留待细化
-    (let ([lpath (project-lock-path root)])
-      (when (file-exists? lpath) (delete-file lpath)))
-    (install root (install-opts flags)))
-
-  (define (install-opts flags)
-    (list (cons 'production (flag? flags 'production))
-          (cons 'force (flag? flags 'force))
-          (cons 'keep-extra (flag? flags 'keep-extra))
-          (cons 'offline (flag? flags 'offline))))
-
-  ;; ── verify ──
-  ;; ── build:排单 → bake(designs/07)──
+  ;; ── build:编译依赖闭包 + 当前项目 ──
+  ;; 1. 依赖:bake build-all per dep → chandler lay out to lib/<mt>/
+  ;; 2. 项目:bake build in project root (if recipe.ss exists)
   (define (cmd-build root flags)
     (build root (list (cons 'allow-build (flag flags 'allow-build))
-                      (cons 'production (flag? flags 'production)))))
+                      (cons 'production (flag? flags 'production))))
+    ;; 编译项目自身(如果有 recipe.ss)
+    (let ([recipe (join-paths root "recipe.ss")])
+      (when (file-exists? recipe)
+        (let ([bake (or (getenv* "CHANDLER_BAKE") "bake")])
+          (printf "build: compiling project via bake...~%")
+          (run-check bake '("build") (list (cons 'cwd root))))))
+    0)
 
-  (define (cmd-verify root flags)
-    (if (verify root)
-        (begin (printf "verify: vendor/ and lib/ match manifest.lock~%") 0)
-        (begin (fprintf (current-error-port) "verify: mismatch (see above)~%") 65)))
+  ;; ── env:输出依赖环境变量(eval "$(chandler env)")──
+  ;;   两个变量:库搜索路径,以及 APP_ROOT(库前缀 —— 资源与 native 都挂它下面)。
+  (define (cmd-env root flags)
+    (let ([dirs (resolved-libdirs root)])
+      (printf "export CHEZSCHEMELIBDIRS=\"~a\"~%" (libdirs->arg dirs))
+      (printf "export APP_ROOT=\"~a\"~%" (cdar (app-root-env root)))
+      0))
 
-  ;; ── list / tree ──
-  (define (cmd-list root flags)
+  ;; ── deps --list / deps --tree ──
+  (define (cmd-deps-list root flags)
     (if (flag? flags 'global)
-        (cmd-list-global flags)
-        (cmd-list-local root flags)))
+        (let ([rows (list-global (target-libdir flags))])
+          (if (null? rows)
+              (printf "(no packages installed in the global library prefix)~%")
+              (for-each (lambda (r) (printf "~a  ~a  [~a]~%" (car r) (cadr r) (caddr r))) rows))
+          0)
+        (let ([rows (list-deps root)])
+          (if (null? rows)
+              (printf "(no locked dependencies; run `chandler deps` first)~%")
+              (for-each
+                (lambda (r)
+                  (printf "~a  ~a  ~a~a~%"
+                          (car r) (cadr r) (caddr r)
+                          (if (eq? 'dev (cadddr r)) "  [dev]" "")))
+                rows))
+          0)))
 
-  (define (cmd-list-global flags)
-    (let ([rows (list-global (target-libdir flags))])
-      (if (null? rows)
-          (printf "(no packages installed in the global library prefix)~%")
-          (for-each (lambda (r) (printf "~a  ~a  [~a]~%" (car r) (cadr r) (caddr r))) rows))
-      0))
-
-  (define (cmd-list-local root flags)
-    (let ([rows (list-deps root)])
-      (if (null? rows)
-          (printf "(no locked dependencies; run `chandler install` first)~%")
-          (for-each
-            (lambda (r)
-              (printf "~a  ~a  ~a~a~%"
-                      (car r) (cadr r) (caddr r)
-                      (if (eq? 'dev (cadddr r)) "  [dev]" "")))
-            rows))
-      0))
-
-  (define (cmd-tree root flags)
-    ;; 简树:根 → 依赖(基于 lock deps 图)
+  (define (cmd-deps-tree root flags)
     (let ([lpath (project-lock-path root)])
       (if (not (file-exists? lpath))
           (begin (printf "(no lock file)~%") 0)
@@ -295,26 +378,40 @@
                field))
          body))
 
-  ;; ── run / exec / repl:库搜索规则统一(install 的 resolved-libdirs,同 repl)──
-  ;; run:组库路径 + 载 native + 跑脚本(生成 preamble,自包含,不需子进程有 (chandler))
+  ;; ── run:库搜索路径 + APP_ROOT + 载 native + 跑脚本(设计同 repl)──
+  ;; chandler run --script <target.ss> [args...]
   (define (cmd-run root flags positionals rest)
-    (let ([script (and (pair? positionals) (car positionals))])
-      (unless script (error 'run "usage: chandler run <script.ss> [args...]"))
+    (let ([script (or (flag flags 'script)
+                      (and (pair? positionals) (car positionals)))])
+      (unless script (error 'run "usage: chandler run --script <script.ss> [args...]"))
+      (sync-app-prefix! root)
       (let* ([dirs (resolved-libdirs root)]
              [natives (native-load-paths root)]
              [preamble (make-preamble root natives (abspath root script))]
              [interp (choose-interp root flags)]
-             [args (append (list "-q" "--libdirs" (path-list dirs)
-                                 "--script" preamble)
-                           (or rest '()) (cdr positionals))])
-        (run-foreground interp args))))
+             ;; 脚本参数 = `--` 之后的一切 + 剩余位置参数(脚本名若来自位置参数则剥掉它)。
+             ;; `--script` 形式下位置参数同样是脚本的:`chandler run --script serve.ss 8099`
+             ;; 里那个端口必须传下去,否则应用静默地拿默认值跑。
+             [script-args (append (or rest '())
+                                  (if (flag flags 'script)
+                                      positionals
+                                      (if (pair? positionals) (cdr positionals) '())))])
+        (run-foreground interp
+                        (append (list "-q" "--libdirs" (path-list dirs)
+                                      "--script" preamble)
+                                script-args)
+                        (list (cons 'env (app-root-env root)))))))
 
-  ;; exec:仅设 CHEZSCHEMELIBDIRS 后跑任意命令(给编辑器/CI)
-  (define (cmd-exec root flags rest)
-    (unless (and rest (pair? rest)) (error 'exec "usage: chandler exec -- <cmd...>"))
-    (let ([dirs (resolved-libdirs root)])
-      (run-foreground (car rest) (cdr rest)
-                      (list (cons 'env (list (cons "CHEZSCHEMELIBDIRS" (path-list dirs))))))))
+  ;; APP_ROOT = 项目库前缀 <root>/lib —— 与全局前缀、解开的 pack 同构(designs/09、11)。
+  ;; 应用读 $APP_ROOT/share/<app>/resources/,bake 生成的 native-loader 读
+  ;; $APP_ROOT/<mt>/<lib>/native/ —— 三态一种拼法,故这里只交接「前缀在哪」。
+  ;; 环境里已有值则不覆盖:外层(pack 启动器 / 用户显式设)先到且权威。
+  ;; 绝对化:APP_ROOT 要交给子进程,相对路径一旦对方换 cwd 就废
+  (define (app-root-env root)
+    (list (cons "APP_ROOT"
+                (or (getenv* "APP_ROOT")
+                    (let ([p (abspath root "lib")])
+                      (if (string-prefix? "/" p) p (join-paths (current-directory) p)))))))
 
   ;; ── repl:交互式 shell,自动挂库搜索路径(与 run/exec 同规则)──
   ;;   项目模式(lock 存在且有依赖):lib/ + path 源目录 + 项目库根 + 全局(项目最高优先)
@@ -324,12 +421,13 @@
            [dirs     (resolved-libdirs root)]
            [natives  (if project? (native-load-paths root) '())]
            [interp   (repl-interp root flags)])
+      (when project? (sync-app-prefix! root))
       (fprintf (current-error-port)
                "chandler repl: ~a mode, ~a library search entries, runtime ~a~%"
                (if project? "project" "global") (length dirs) interp)
       (let ([args (append (list "--libdirs" (path-list dirs))
                           (if (null? natives) '() (list (make-repl-preamble root natives))))])
-        (run-foreground interp args))))
+        (run-foreground interp args (list (cons 'env (app-root-env root)))))))
 
   ;; 运行时:--runtime > CHANDLER_RUNTIME > manifest 声明 skiff-only > 跟随 chandler 当前所在
   (define (repl-interp root flags)
@@ -399,12 +497,11 @@
     (if (and (string? rev) (>= (string-length rev) 10)) (substring rev 0 10) rev))
 
   ;; ── .gitignore / scaffold / basename(init 用)──
-  ;; 忽略 chandler 生成物:vendor/(依赖 checkout)、lib/(bake 装的)、chandler-setup.ss、临时文件
-  ;; chandler/bake 生成物:依赖 checkout(vendor/)、装好的库前缀(lib/)、setup、
-  ;; 各临时 recipe/preamble,以及 `chandler build` 经 bake 产出的 _build/。
+  ;; chandler/bake 生成物:依赖 checkout(vendor/)、装好的库前缀(lib/)、各临时
+  ;; recipe/preamble,以及 `chandler build` 经 bake 产出的 _build/。
   ;; 注:`.chandler-approvals`(native 构建授权记录)**不**入此列——它是信任决定,
   ;; 提交与否属项目策略(提交=团队共享授权;不提交=各人各自授权),由用户自决。
-  (define gitignore-entries '("/vendor/" "/lib/" "/_build/" "chandler-setup.ss"
+  (define gitignore-entries '("/vendor/" "/lib/" "/_build/"
                               ".chandler-run.ss" ".chandler-repl.ss"
                               ".chandler-install.ss" ".chandler-build.ss"))
   (define (ensure-gitignore-lib root)
