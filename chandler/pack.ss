@@ -195,21 +195,8 @@
   ;;
   ;; 按 lock 精确挑正是 chandler 相对 bake 的优势:bake 只能从构建图推断、遇预构建
   ;; 库不下探,故只能整棵命名空间搬;chandler 手里就有精确闭包。
-  ;; N6: chandler 作为 transitive dep 时,只复制 runtime-subset 子库(designs/12 §6.3)。
-  ;; 当前硬编码列表(与 chandler 自身 manifest 的 runtime-subset + base umbrella 一致);
-  ;; 未来可改为 lock 驱动(locked-dep-runtime-subset)。
-  (define chandler-runtime-sublibs
-    '(base runtime-paths hash version util fs sexp layout runtime-detector proc))
-
-  (define (chandler-dev-only-so? rel)
-    ;; rel 形如 "chandler/pack.so" → #t(dev-only);"chandler/hash.so" → #f(runtime)
-    (and (string-prefix? "chandler/" rel)
-         (let* ([sub (strip-prefix "chandler/" rel)]
-                [so-dot (string-search sub ".so")]
-                [stem (if so-dot (substring sub 0 so-dot) sub)])
-           (or (string-contains? stem "/")              ; 嵌套(chandler/cli/main.so)→ dev-only
-               (not (member (string->symbol stem) chandler-runtime-sublibs))))))
-
+  ;; N6: chandler 只有 runtime 子集能进包(designs/12 §6.3)。子集定义与判据都在
+  ;; (chandler install) —— deps 阶段从全局前缀取的是同一份,两处共用免漂移。
   (define (copy-dep-trees! obj to locked)
     (let ([nx (string-append "." (so-ext))])
       (for-each
@@ -229,7 +216,7 @@
                   (let ([rel (strip-prefix abs (string-append obj "/"))])
                     (when (and (deliverable? rel)
                                (or (string-suffix? ".so" rel) (string-suffix? nx rel))
-                               (not (and chandler? (chandler-dev-only-so? rel))))
+                               (not (and chandler? (chandler-dev-only-rel? rel))))
                       (let ([dst (join-paths to rel)])
                         (ensure-parent dst) (copy-file abs dst)))))
                 (files-under dir)))))
@@ -846,6 +833,11 @@
             (error 'pack
                    (format "entry library ~a has no compiled object at ~a~%  (pass --entry '(<lib>)', or run `bake build` if it is simply not built)"
                            entry e))))
+        ;; chandler 的 runtime 子集:它不是 lock 里的依赖(是运行时门,designs/12 §5),
+        ;; 故从**全局前缀**取那一份编译好的进包 —— 包必须自包含,不能指望目标机装了
+        ;; chandler。取的与 deps 阶段铺进 lib/ 的是同一个子集、同一个判据。
+        (when (and mf (manifest-chandler mf))
+          (copy-chandler-into-pack! objdir (manifest-chandler mf)))
         ;; 2) share/<app>/resources/(应用数据)+ share/<dep>/resources/(依赖库资源,M2)
         ;;    + .chandler/<app>/manifest.ss(清单快照)—— 三者都与全局安装前缀同构
         (copy-resources! project root name)
@@ -877,6 +869,34 @@
               (write-pack-manifest! root name version rt entry mainp ver mt #f)))
         (printf "packed ~a ~a -> ~a~%" name version root)
         0)))
+
+  ;; <prefix>/<mt>/chandler/<sub>.so → <pack>/<mt>/chandler/<sub>.so(只 runtime 子集;
+  ;; umbrella chandler.so 是 dev facade,不进)。前缀里没有或版本不合区间即当场停:
+  ;; 这类缺失到启动才暴露的话,报的是 `library (chandler runtime-paths) not found`。
+  (define (copy-chandler-into-pack! objdir range)
+    (let* ([prefix (global-prefix)]
+           [have (installed-chandler-version prefix)]
+           [from (join-paths prefix (current-machine-type) "chandler")])
+      (unless have
+        (error 'pack (format "manifest requires chandler ~s but none is installed at ~a" range prefix)))
+      (unless (version-match? range have)
+        (error 'pack (format "manifest requires chandler ~s, but ~a has ~a" range prefix have)))
+      (unless (file-directory? from)
+        (error 'pack
+               (format "~a has no compiled chandler objects (reinstall chandler so <prefix>/~a/chandler/ exists)"
+                       prefix (current-machine-type))))
+      (let ([n 0])
+        (for-each
+          (lambda (e)
+            (let ([p (join-paths from e)])
+              (when (and (not (file-directory? p))
+                         (string-suffix? ".so" e)
+                         (not (chandler-dev-only-rel? (string-append "chandler/" e))))
+                (let ([dst (join-paths objdir "chandler" e)])
+                  (ensure-parent dst) (copy-file p dst) (set! n (+ n 1))))))
+          (dir-entries from))
+        (when (= n 0)
+          (error 'pack (format "no chandler runtime objects found in ~a" from))))))
 
   (define (copy-exe! src dst)
     (ensure-parent dst)
