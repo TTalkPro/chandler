@@ -199,6 +199,27 @@
           (files-under subtree))))))
 
 ;; ════════════════════════════════════════════════════════════════════
+;; §4b  Manifest snapshot: manifest.ss → <prefix>/.chandler/chandler/
+;;
+;; Every library prefix records what it holds under .chandler/<name>/ (the same
+;; shape a pack and a project's own lib/ use). For chandler this is load-bearing,
+;; not decorative: a project declares `(chandler ">=X")` as a RUNTIME GATE — no
+;; URL, nothing to fetch — and `chandler deps` answers "is the installed one new
+;; enough?" by reading the version out of this snapshot.
+;; ════════════════════════════════════════════════════════════════════
+
+(define (install-manifest!)
+  (let ([src (join-paths here "manifest.ss")]
+        [dst (join-paths prefix ".chandler/chandler/manifest.ss")])
+    (when (file-exists? src)
+      (copy-file src dst)
+      (printf "install ~a~%" dst))))
+
+(define (uninstall-manifest!)
+  (let ([d (join-paths prefix ".chandler/chandler")])
+    (when (file-directory? d) (rm-rf d))))
+
+;; ════════════════════════════════════════════════════════════════════
 ;; §5  Compiled objects: _build/<mt>/** → <prefix>/<mt>/
 ;; ════════════════════════════════════════════════════════════════════
 
@@ -373,6 +394,7 @@
 (define (do-install!)
   (when force? (uninstall-libraries!))
   (install-sources!)
+  (install-manifest!)
   (install-objects!)
   (write-text launcher-path (if (win?) (launcher-ps1) (launcher-sh)))
   (unless (win?)
@@ -387,6 +409,7 @@
 
 (define (do-uninstall!)
   (uninstall-libraries!)
+  (uninstall-manifest!)
   (when (file-exists? launcher-path)
     (delete-file launcher-path) (sweep-empty-parents launcher-path)
     (printf "rm ~a~%" launcher-path))
