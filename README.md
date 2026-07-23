@@ -95,10 +95,11 @@ chandler repl                              # 交互 shell(自动挂库路径)
 myapp/
   manifest.ss  manifest.lock
   vendor/<name>/           ← git 依赖的原始整仓 checkout
-  lib/                     ← bake install 出的 Chez 库前缀(src/mt 拆分,结构同 ~/.local/share/chez)
+  lib/                     ← 项目自己的 Chez 库**前缀**(结构同 ~/.local/share/chez 与解开的 pack)
     src/<name>.ss  src/<name>/…       ← 各依赖源码并存(install 摊平)
     <mt>/<name>.so  <mt>/<name>/…  <mt>/<name>/native/…   ← 编译产物 + native(chandler build 后填充)
-  chandler-setup.ss        ← 生成的「一行激活」文件(Bundler 的 bundler/setup)
+    share/<name>/resources/…          ← 资源(依赖声明的 + 本项目 resources/ 同步过来的)
+    .chandler/<name>/manifest.ss      ← 清单快照(应用名由此可辨)
 ```
 
 - **`chandler install`**:git 依赖整仓 checkout 到 `vendor/`,chandler **直接**把源码摊进 `lib/src/`(不经 bake)。库搜索挂**一对** `lib/src::lib/<mt>`,结构同全局前缀 `~/.local/share/chez`。
@@ -109,24 +110,33 @@ myapp/
 
 bake 会为每个带 native 的库生成 `(<lib> native-loader)`(产物 `lib/<mt>/<lib>/native-loader.so`),该库的 FFI 被引用时 loader **自己**定位并加载 `.so`——其候选之一正是 `library-directories` 的**对象侧**,而 chandler 挂的 `lib/src::lib/<mt>` 对象侧恰是 native 落点,故**挂好对即自动生效**,且是**惰性**的(不碰 FFI 就不 `dlopen`)。
 
-因此 `chandler-setup.ss` / `activate` / `run` / `repl` 的预加载已降级为**兜底**:只为「非 bake 构建、无生成 loader」的第三方库扫描加载,带 `native-loader.so` 的库一律跳过。
+因此 `activate` / `run` / `repl` 的预加载已降级为**兜底**:只为「非 bake 构建、无生成 loader」的第三方库扫描加载,带 `native-loader.so` 的库一律跳过。
 
-### 一行激活(Bundler 式)
+### 启动:统一走 `chandler run`
 
-`chandler install` 生成 `chandler-setup.ss`。在主脚本顶部 `(load)` 它,即挂好 `lib/` 一对(源.对象)(+ path 源目录 + 全局兜底一对)——之后 `(import (dep))` 即通,**纯 skiff/scheme 跑即可,无需 chandler 在场**:
-
-```scheme
-;; 位置无关加载(项目可整体移动、任意 cwd 皆可):
-(load (string-append (let ([d (path-parent (car (command-line)))])
-                       (if (string=? d "") "." d)) "/chandler-setup.ss"))
-(import (http) (json))          ; 已可解析
-(main)
-;; 若总从项目根运行,简写:(load "chandler-setup.ss")
+```sh
+chandler run --script main.ss [args...]
 ```
 
-`chandler-setup.ss` 依**入口脚本(与它同目录)的位置**在运行时解析项目根,不硬编码绝对路径。
+它一次交接两样东西,之后脚本里 `(import (dep))` 即通:
 
-### 库搜索规则(run / exec / repl / setup 一致)
+- **库搜索路径** —— `lib/src::lib/<mt>` 一对(+ path 源目录 + 项目库根 + 全局兜底一对);
+- **`APP_ROOT`** —— 指向项目库前缀 `<project>/lib`。资源与 native 都挂在它下面的固定路径上:
+  `$APP_ROOT/share/<app>/resources/`(应用数据,见 `(chandler runtime-paths)` 的 `app-resource-path`)、
+  `$APP_ROOT/<mt>/<lib>/native/`(bake 生成的 native-loader 自己拼)。
+
+关键在于**三态同一形状**:项目的 `lib/`、全局前缀 `~/.local/share/chez`、解开的 pack ——
+都是同一种前缀,`APP_ROOT` 指向哪一个,应用代码一个字都不用改。
+
+项目自己的 `resources/` 由 `chandler deps` / `run` / `repl` 同步进 `lib/share/<name>/resources/`
+(按 mtime 增量),故开发期改一个资源文件,下次 `chandler run` 即生效。
+
+> 早期版本生成过 `chandler-setup.ss`(Bundler 的 `bundler/setup` 式,由主脚本 `(load)`)。
+> 现已取消:启动器只留 `chandler run` 一条路,省掉「生成物与真实规则可能漂移」这一类问题。
+> 需要在别的进程里挂同一套路径,用 `eval "$(chandler env)"`(它同时导出 `CHEZSCHEMELIBDIRS`
+> 与 `APP_ROOT`);已持有 `(chandler)` 的脚本可直接 `(activate)`。
+
+### 库搜索规则(run / env / repl / activate 一致)
 
 - **项目**(有 lock + 依赖):`lib/src::lib/<mt>` 一对 + path 源目录 + 项目自身库根 + 全局兜底一对(项目最高优先)。
 - **非项目**:直接用全局前缀一对 `~/.local/share/chez/src::~/.local/share/chez/<mt>`。
@@ -219,6 +229,6 @@ bash tests/powershell-run.sh                        # Windows 启动器验收(�
 
 ### 语言约定
 
-- **用户可见输出一律英文**:CLI 帮助、运行期提示/警告/错误(`printf`/`fprintf`/`error` 的消息),以及**生成物**的头注释(`chandler-setup.ss`、`.chandler-build.ss`)——工具面向的用户不限中文。风格取 Unix 诊断惯例:小写、简短、不加句号,如 ``manifest.ss not found; run `chandler init` first``。
+- **用户可见输出一律英文**:CLI 帮助、运行期提示/警告/错误(`printf`/`fprintf`/`error` 的消息),以及**生成物**的头注释(`.chandler-build.ss`、pack 的 `bootstrap.ss`)——工具面向的用户不限中文。风格取 Unix 诊断惯例:小写、简短、不加句号,如 ``manifest.ss not found; run `chandler init` first``。
 - **源码注释(`;;` / `;;;`)与本仓文档保持中文**,便于设计推理的表达密度。
 - 单复数用 `(plural n "dependency" "dependencies")`(`(chandler util)`),避免 `1 dependencies`。

@@ -95,10 +95,11 @@ chandler repl                              # interactive shell (library paths au
 myapp/
   manifest.ss  manifest.lock
   vendor/<name>/           ← raw whole-repo checkout of git dependencies
-  lib/                     ← Chez library prefix produced by bake install (src/mt split, same shape as ~/.local/share/chez)
+  lib/                     ← the project's own Chez library **prefix** (same shape as ~/.local/share/chez and an unpacked pack)
     src/<name>.ss  src/<name>/…       ← each dependency's sources, co-located (flattened by install)
     <mt>/<name>.so  <mt>/<name>/…  <mt>/<name>/native/…   ← compiled artifacts + native (filled in by `chandler build`)
-  chandler-setup.ss        ← generated "one-line activation" file (Bundler's bundler/setup)
+    share/<name>/resources/…          ← resources (declared by dependencies + synced from the project's own resources/)
+    .chandler/<name>/manifest.ss      ← manifest snapshot (this is how the app name is known)
 ```
 
 - **`chandler install`**: git dependencies are checked out whole-repo into `vendor/`, then **bake install** places them into `lib/{src,<mt>}` (sources only). Library search mounts the **pair** `lib/src::lib/<mt>`, same shape as the global prefix `~/.local/share/chez` (install depends on bake).
@@ -109,24 +110,37 @@ myapp/
 
 bake generates a `(<lib> native-loader)` for every library that has native artifacts (product at `lib/<mt>/<lib>/native-loader.so`); when that library's FFI is referenced, the loader locates and `dlopen`s the `.so` **itself** — and one of its candidates is the **object side** of `library-directories`, which is exactly where chandler's `lib/src::lib/<mt>` pair drops native artifacts. So **mounting the pair is enough**, and it's **lazy** (no `dlopen` until the FFI is touched).
 
-The pre-loading in `chandler-setup.ss` / `activate` / `run` / `repl` is therefore demoted to a **fallback**: only third-party libraries that lack a generated loader (not built by bake) get scanned and loaded; libraries with `native-loader.so` are always skipped.
+The pre-loading in `activate` / `run` / `repl` is therefore demoted to a **fallback**: only third-party libraries that lack a generated loader (not built by bake) get scanned and loaded; libraries with `native-loader.so` are always skipped.
 
-### One-line activation (Bundler-style)
+### Launching: always `chandler run`
 
-`chandler install` generates `chandler-setup.ss`. `(load)` it at the top of your main script and the `lib/` pair (source.object) is mounted (+ path source dirs + a global fallback pair) — afterwards `(import (dep))` resolves, **and the script runs on plain skiff/scheme with no chandler present**:
-
-```scheme
-;; Position-independent load (the project can be moved; any cwd works):
-(load (string-append (let ([d (path-parent (car (command-line)))])
-                       (if (string=? d "") "." d)) "/chandler-setup.ss"))
-(import (http) (json))          ; now resolvable
-(main)
-;; If you always run from the project root, the short form: (load "chandler-setup.ss")
+```sh
+chandler run --script main.ss [args...]
 ```
 
-`chandler-setup.ss` resolves the project root at runtime from **the location of the entry script (its sibling)**, with no hardcoded absolute paths.
+It hands over two things, after which `(import (dep))` just resolves in your script:
 
-### Library search rules (shared by run / exec / repl / setup)
+- **library search paths** — the `lib/src::lib/<mt>` pair (+ path-dependency sources + the project's own
+  library root + a global fallback pair);
+- **`APP_ROOT`** — the project's library prefix `<project>/lib`. Resources and native artifacts hang off it
+  at fixed paths: `$APP_ROOT/share/<app>/resources/` (application data — see `app-resource-path` in
+  `(chandler runtime-paths)`) and `$APP_ROOT/<mt>/<lib>/native/` (what a bake-generated native-loader builds).
+
+The point is that **all three states have the same shape**: the project's `lib/`, the global prefix
+`~/.local/share/chez`, and an unpacked pack are the same kind of prefix — whichever one `APP_ROOT` points
+at, application code stays byte-for-byte identical.
+
+The project's own `resources/` is synced into `lib/share/<name>/resources/` by `chandler deps` / `run` /
+`repl` (incrementally, by mtime), so editing a resource during development takes effect on the next
+`chandler run`.
+
+> Earlier versions generated a `chandler-setup.ss` (Bundler's `bundler/setup` style, `(load)`ed by the main
+> script). It is gone: there is exactly one way to start a program, which removes a whole class of
+> "generated file drifted from the real rules" problems. To mount the same paths in another process use
+> `eval "$(chandler env)"` (it exports both `CHEZSCHEMELIBDIRS` and `APP_ROOT`); a script that already has
+> `(chandler)` can just call `(activate)`.
+
+### Library search rules (shared by run / env / repl / activate)
 
 - **Project** (has lock + deps): the `lib/src::lib/<mt>` pair + path source dirs + the project's own library root + a global fallback pair (project wins, highest priority).
 - **Non-project**: just the global prefix pair `~/.local/share/chez/src::~/.local/share/chez/<mt>`.
@@ -223,6 +237,6 @@ The library layout follows the [library layout spec](chez-skiff-library-layout.m
 
 ### Language conventions
 
-- **All user-visible output is English**: CLI help, runtime hints/warnings/errors (`printf` / `fprintf` / `error` messages), and the headers of **generated files** (`chandler-setup.ss`, `.chandler-build.ss`) — the tool's audience is not limited to Chinese readers. Style follows Unix diagnostic conventions: lowercase, terse, no trailing period, e.g. ``manifest.ss not found; run `chandler init` first``.
+- **All user-visible output is English**: CLI help, runtime hints/warnings/errors (`printf` / `fprintf` / `error` messages), and the headers of **generated files** (`.chandler-build.ss`, a pack's `bootstrap.ss`) — the tool's audience is not limited to Chinese readers. Style follows Unix diagnostic conventions: lowercase, terse, no trailing period, e.g. ``manifest.ss not found; run `chandler init` first``.
 - **Source comments (`;;` / `;;;`) and this repo's docs are in Chinese**, for the expressive density that helps design reasoning.
 - Plurals use `(plural n "dependency" "dependencies")` (from `(chandler util)`), avoiding `1 dependencies`.

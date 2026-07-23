@@ -222,3 +222,79 @@ install.sh / install.ps1    薄壳:运行时发现 → chandler install-self(POS
 - 各模块删掉自带的 split/trim/prefix?/contains?/parent-dir/ensure-dir/rm-rf/dir-entries/assq-val 副本,统一走 util/fs(`fetch` 减 ~90 行;`registry` 完全脱离 `proc`)。
 - **测试夹具集中到 `(chandler test fixtures)`**(mktmp/write-file/read-file/trim/git-init!/git-commit!/make-lib-repo/make-native-lib/make-app),消除 7-8 个测试文件各写一份的 boilerplate。
 - 最佳实践:文件操作优先 Chez 原生原语而非 shell;重复的 `(guard (e [#t #f]) …)` 收敛为 `ignore-errors` 宏。全程 `scheme` + `petite` 132 用例保持全绿。
+
+## 进行中任务
+
+### P1 — pack 布局统一为 .local/share/chez 结构 — **已完成(2026-07-23)**
+
+将 pack 输出布局与全局安装前缀 `~/.local/share/chez/` 统一,消除 `lib/<mt>/` 与 `<mt>/` 的分裂。**一个包解开就是一个自带运行时的安装前缀**:`<mt>/` 对象根、`share/<name>/resources/` 资源、`.chandler/<name>/manifest.ss` 清单三层逐一对应。设计见 [09 §包布局](designs/09-pack.md)、[11 §3](designs/11-runtime-paths.md)。
+
+| # | 任务 | 状态 | 文件 |
+|---|------|------|------|
+| 1 | `pack-lib-dir` 去掉 `lib/` 前缀 → `<mt>/` | ✅ 已完成 | `chandler/pack.ss` |
+| 2 | `bootstrap-source` 生成 `library-directories` 指向 `<mt>/` | ✅ 已完成 | `chandler/pack.ss` |
+| 3 | `copy-resources!` 改为 `share/<app>/resources/`(与 dep 资源 `share/<dep>/resources/` 同构) | ✅ 已完成 | `chandler/pack.ss` |
+| 4 | `manifest-head` 的 `(lib-dirs ...)` 更新为 `"<mt>"` | ✅ 已完成 | `chandler/pack.ss` |
+| 5 | `manifest-native-lines` 的 native 路径从 `"lib/<mt>/..."` 改为 `"<mt>/..."` | ✅ 已完成 | `chandler/pack.ss` |
+| 6 | pack 中添加 `.chandler/<app>/manifest.ss`(与全局 install 一致) | ✅ 已完成 | `chandler/pack.ss`(`write-app-manifest!`;源项目无 manifest.ss 时合成最小清单) |
+| 7 | `runtime-paths.ss` 的 `app-resource-path` 从 `$APP_ROOT/resources/` 改为 `$APP_ROOT/share/<app>/resources/` | ✅ 已完成 | `chandler/runtime-paths.ss`(候选序 + 新增 `app-name`) |
+| 8 | 全量测试 + pack 端到端验证 | ✅ 已完成 | `chandler/test/{pack,runtime-paths}.ss` |
+
+**实现期决定**:
+
+- **`app-resource-path` 用候选序而非单一路径**:`share/<app>/resources/`(部署/安装态)优先,回落 `<app-root>/resources/`(源码 checkout —— 资源就摆在项目根,那是应用作者写的目录)。故同一份应用代码四态通用,不必条件分支。
+- **应用名怎么来**:新增 `(app-name)`,三级 —— `APP_NAME` 显式(共享前缀装了多个应用时由启动器传,**可选**)> `<app-root>/.chandler/` 下唯一条目(pack 恒只写一个)> `#f`(只走源码态落点)。**包内不需要第二个 env**,`APP_ROOT` 仍是唯一必需变量;`.chandler/` 多于一个条目即返回 `#f`,不猜。
+- **两处跨仓待跟进**(都不阻塞):① bake `bake/native.ss` 生成的 native-loader 候选 1 仍拼 `$APP_ROOT/lib/<mt>/…`,现恒 miss —— 但候选 2 扫 `(library-directories)` 对象侧,而 bootstrap 挂的正是 `<mt>/`,native 照常自加载(唯一没有 `library-directories` 可依赖的 boot 模式已作废);② skiff 的 `chez-skiff-pack-spec.md` 仍以 `(lib-dirs "lib/<mt>")` 举例,文档宜同步。
+
+**验证**:`scheme`/`petite`/`skiff` 三运行时 **219/219 全绿**(pack suite 由 17 增至 21 用例,runtime-paths 由 13 增至 18);端到端另造一个带资源、以 `(chandler runtime-paths)` 读资源的应用(bake 编译 → `chandler pack --runtime petite`)——clean-env(`env -i`)启动打印出 `share/<app>/resources/hello.txt` 内容、整包 `cp` 到别处后仍命中、`verify-pack --target` 0 bad;`chandler run` 跑源码态同一入口则命中项目根 `resources/`。skiff-demo 仓库的 pack 组装 + `verify-pack --target`(82 ok/0 bad)亦已实跑,但其 `_build/` 是旧 skiff 编译产物,启动报「different compilation instance of (skiff)」——与本次改动无关,需在该仓 `chandler deps && bake build` 后再验;其 `mdserver/app.sls` 仍手写 `$APP_ROOT/resources`,按 [11 §3](designs/11-runtime-paths.md) 迁移到 `(app-resource-path)` 后即可跟随新落点(属该仓改动,未动)。
+
+### P1b — APP_ROOT 即库前缀 + 去掉 chandler-setup.ss — **已完成(2026-07-23)**
+
+P1 之后 `APP_ROOT` 的语义被钉死为**库前缀**,三态逐层同构:全局 `~/.local/share/chez` · 项目自己的 `lib/` · 解开的 pack。于是资源与 native 各只剩**一种拼法**:
+
+```
+$APP_ROOT/share/<app>/resources/…      应用数据
+$APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
+```
+
+| # | 改动 | 文件 |
+|---|------|------|
+| 1 | `chandler run`/`repl` 在 exec 前设 `APP_ROOT=<project>/lib`(已有值不覆盖);`chandler env` 同时导出它 | `chandler/cli/commands.ss` |
+| 2 | `(activate)` 同上(进程内入口) | `chandler/activate.ss` |
+| 3 | **删除 `chandler-setup.ss` 生成**(`write-setup-file`/`setup-datum` 及其 `.gitignore` 条目) | `chandler/install.ss`、`chandler/cli/commands.ss` |
+| 4 | `lib/` 成为**完整前缀**:项目 `resources/` → `lib/share/<name>/resources/`(按 mtime 增量,`deps`/`run`/`repl` 都同步)、manifest 快照 → `lib/.chandler/<name>/manifest.ss` | `chandler/install.ss`(`sync-app-prefix!`) |
+| 5 | `app-resource-path` 收敛为单一形状(去掉 `<app-root>/resources/` 回落);认不出应用名时报的是「这个前缀属于谁」而非「文件不存在」 | `chandler/runtime-paths.ss` |
+| 6 | bake 的 native-loader 候选 1 `$APP_ROOT/lib/<mt>/…` → `$APP_ROOT/<mt>/…`(跨仓;`tests/loader-run.sh` Z4/Z5 同步,35 断言绿) | bake `bake/native.ss` |
+
+**为什么删 setup**:它是**生成物**,把「库搜索规则 + APP_ROOT 约定」复制进了每个项目,规则一改就有两处要同步(P1 改前缀语义时正好撞上)。启动只留 `chandler run` 一条路;别的进程用 `eval "$(chandler env)"`,已持有 `(chandler)` 的脚本用 `(activate)`。设计 [13 §3.4/§6](designs/13-chandler-owns-install.md) 当年「保留 setup」的结论已在原处标注反转,其 §6.2 预见的 launcher 路线就是今天的 `chandler run`。
+
+**验证**:三运行时 **220/220 全绿**;端到端(带资源的应用,`(chandler runtime-paths)` 读资源):`chandler run` 打印 `APP_ROOT=<project>/lib`、命中 `lib/share/resdemo/resources/`,改一个资源文件后再跑即生效;`chandler pack` + `env -i` clean-env 启动命中 `<pack>/share/resdemo/resources/`,`verify-pack --target` 0 bad。
+
+**顺带修掉的两处**(都在验证 skiff-demo 时暴露):
+
+- **`chandler run --script X <args>` 静默丢参数** —— `--script` 分支只取 `--` 之后的 `rest`,位置参数直接扔掉,于是 `chandler run --script serve.ss 8099` 里的端口没传下去、应用拿默认值跑。改为 `rest + 剩余位置参数`(脚本名若来自位置参数才剥掉首个)。
+- **`recipe.ss` 整份加载失败** —— bake 0.1.5 已删除 `install-task`/`uninstall-task`(bake designs/26:install 归 chandler),recipe 里还留着,导致 `bake` 连 `build` 都跑不了(`variable build is not bound`)。四个 install/uninstall 任务已删除;chandler 的安装本就由自含的 `bootstrap.ss` 负责(拷源码 + `_build/<mt>/` + 写启动器),故顺序是 **先 `bake` 编译、再 `scheme --script bootstrap.ss --force`** —— 否则装进前缀的是上一轮的旧对象(本轮就撞上了:前缀里 `install.so` 是改动前编译的,而 `cli/commands.ss` 从源码现编,于是 `sync-app-prefix!` unbound)。
+
+**skiff-demo 已同步**(该仓改动):`mdserver/app.sls` 的 `docs-root` → `(app-resource-path)`;`serve.ss` 去掉 `(load chandler-setup.ss)`;`manifest.ss` 去掉 `(chez ">=10.0")`(它 `import (skiff web)`,本就跑不了 stock chez,而双声明按 [06 §3](designs/06-runtime-compat.md) 是「双跑项目」→ `chandler run` 会选 chez);README/recipe/.gitignore 同步。端到端实跑:`chandler deps → bake → chandler build → chandler run --script serve.ss <port>` 起服务 `/` 与 `/hello` 均 200(docs 落 `lib/share/skiff-demo/resources`);`chandler pack` 后 `env -i` clean-env 启动 `/` 与 `/features` 均 200(docs 落 `<pack>/share/skiff-demo/resources`)、整包 `cp` 到别处仍 200、`verify-pack --target` 125 ok/0 bad。
+
+### P2 — 运行时依赖 vs 开发时依赖分离(dev-deps)
+
+当前 `(deps ...)` 和 `(dev-deps ...)` 区分不严格。chandler 本身应作为 runtime dep(runtime subset 隐式),bake 等纯开发工具应放 `(dev-deps ...)`。
+
+| # | 任务 | 状态 | 文件 |
+|---|------|------|------|
+| 1 | `chandler init` 模板:chandler 留 `(deps ...)`,bake 放 `(dev-deps ...)` | 🔲 待实现 | `chandler/cli/commands.ss` |
+| 2 | `chandler install` 全局安装:只装 `(deps ...)`(runtime),不装 `(dev-deps ...)` | 🔲 待实现 | `chandler/cli/commands.ss` |
+| 3 | `chandler pack`:只打 `(deps ...)`(部署态不需要 dev-deps) | 🔲 待实现 | `chandler/pack.ss` |
+| 4 | 全局 install 也用 `chandler-dev-only-so?` filter(只装 runtime subset) | 🔲 待实现 | `chandler/cli/commands.ss` |
+
+### P3 — app 全局安装时创建命令行入口
+
+当 `chandler install` 的是 app(有 `(app (entry ...) (main ...))`)时,创建启动器到 `~/.local/share/chez/bin/<app>`,并 symlink 到 `~/.local/bin/<app>`,用户裸名调用。
+
+| # | 任务 | 状态 | 文件 |
+|---|------|------|------|
+| 1 | app install 检测:manifest 有 `(app ...)` 时创建 bin/ 启动器 | 🔲 待实现 | `chandler/cli/commands.ss` |
+| 2 | 启动器模板:挂全局 `src::<mt>` 对 + 运行时发现(skiff 优先) | 🔲 待实现 | `chandler/cli/commands.ss` |
+| 3 | symlink `~/.local/bin/<app>` → `~/.local/share/chez/bin/<app>` | 🔲 待实现 | `chandler/cli/commands.ss` |
+| 4 | app uninstall 时也删除 bin/ 启动器 + symlink | 🔲 待实现 | `chandler/cli/commands.ss` |
