@@ -11,7 +11,9 @@
           dir-entries files-under dir-empty?
           rm-rf copy-file move-file
           read-file-string read-lines write-text
-          sweep-empty-parents home-dir)
+          sweep-empty-parents home-dir
+          write-text-if-changed file-byte-size mtime
+          path-swap-ext)
   (import (chezscheme)
           (chandler util))
 
@@ -108,4 +110,25 @@
     (ensure-parent path)
     (call-with-output-file path (lambda (p) (display s p)) 'truncate))
 
-  (define (home-dir) (or (getenv "HOME") (getenv "USERPROFILE") ".")))
+  (define (home-dir) (or (getenv "HOME") (getenv "USERPROFILE") "."))
+
+  ;; ── 写文本(内容不变则跳过,避免 bump mtime)──
+  (define (write-text-if-changed path s)
+    (unless (and (file-exists? path)
+                 (string=? s (read-file-string path)))
+      (write-text path s)))
+
+  ;; 文件字节数(Chez 无直接 file-length port 方法,用 open-file-input-port)
+  (define (file-byte-size f)
+    (call-with-port (open-file-input-port f) (lambda (p) (file-length p))))
+
+  ;; 文件修改时间(返回数值,与 bake 的 mtime 兼容)
+  (define (mtime path)
+    (and (file-exists? path) (file-modification-time path)))
+
+  ;; 替换扩展名:无扩展名时追加 new-ext
+  (define (path-swap-ext p new-ext)
+    (let ([root (path-root p)])
+      (if (string=? root p)
+          (string-append p new-ext)
+          (string-append root new-ext)))))

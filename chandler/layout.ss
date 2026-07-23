@@ -13,17 +13,30 @@
 ;;; native 收进所属库:<prefix>/<mt>/<lib>/native/<soname>.<ext>(与该库编译 .so 同处)。
 
 (library (chandler layout)
-  (export current-machine-type so-ext
+  (export current-machine-type machine-type-string so-ext
+          windows-mt?
           join-paths path-join
           path-sep split-pair entry->arg libdirs->arg
           native-so? lib-native-dir lib-native-path native-so-name
           library-name->path srcdir-join
-          lib-root)
+          lib-root rel-to)
   (import (chezscheme)
           (chandler util))
 
   (define (current-machine-type)
     (symbol->string (machine-type)))
+
+  (define (machine-type-string)
+    (symbol->string (machine-type)))
+
+  (define (windows-mt? mt)
+    (string-suffix? "nt" mt))
+
+  ;; ── rel-to:求 path 相对于 root 的路径 ──
+  (define (rel-to root path)
+    (if (or (string=? root ".") (string=? root ""))
+        path
+        (strip-leading path (string-append root "/"))))
 
   ;; native C 库扩展名随 OS(Chez 编译产物恒 .so,那是另一回事,见 pack 规范 §2)
   (define (so-ext)

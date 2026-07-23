@@ -19,6 +19,7 @@
     string-prefix? string-suffix? string-search string-contains?
     char-index strip-prefix strip-suffix string-join
     alist-ref getenv* ignore-errors plural chandler-version
+    format-object eprintf datum->string string-subst strip-leading
     ;; fs
     parent-dir base-name path-join*
     ensure-dir ensure-parent
@@ -26,17 +27,21 @@
     rm-rf copy-file move-file
     read-file-string read-lines write-text
     sweep-empty-parents home-dir
+    write-text-if-changed file-byte-size mtime
+    path-swap-ext
     ;; sexp
     read-datum-file read-datum-string write-canonical-file canonical-string
     tagged-list? expect-tag
     field field-ref field-ref*
     alist->sorted
     ;; layout
-    current-machine-type so-ext
+    current-machine-type machine-type-string so-ext
+    windows-mt?
     join-paths path-join
     path-sep split-pair entry->arg libdirs->arg
     native-so? lib-native-dir lib-native-path native-so-name
     library-name->path srcdir-join
+    lib-root rel-to
     ;; runtime-detector(designs/06 §3-4)
     current-runtime runtime-version chez-version-string verify-runtime!
     runtime-env-var preferred-runtime parse-runtime-kind

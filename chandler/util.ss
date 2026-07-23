@@ -8,7 +8,8 @@
           string-prefix? string-suffix? string-search string-contains?
           char-index strip-prefix strip-suffix string-join
           alist-ref getenv* ignore-errors plural
-          chandler-version)
+          chandler-version
+          format-object eprintf datum->string string-subst strip-leading)
   (import (chezscheme))
 
   ;; chandler 自身版本 —— 单一出处:umbrella (chandler)、CLI --version、lock 的
@@ -100,4 +101,31 @@
   ;; ── 错误处理宏:求值 body,任何异常返回 #f(替 (guard (e [#t #f]) …))──
   (define-syntax ignore-errors
     (syntax-rules ()
-      [(_ body ...) (guard (e [#t #f]) body ...)])))
+      [(_ body ...) (guard (e [#t #f]) body ...)]))
+
+  ;; ── 格式化与输出 ──
+  (define (format-object v) (format "~a" v))
+
+  (define (eprintf fmt . args)
+    (apply fprintf (current-error-port) fmt args))
+
+  ;; s-expression → 其书面文本(用于生成代码/清单)
+  (define (datum->string d)
+    (let ([p (open-output-string)]) (write d p) (get-output-string p)))
+
+  ;; 替换字符串中每一处 from 为 to(无正则)
+  (define (string-subst s from to)
+    (let ([lf (string-length from)])
+      (let loop ([i 0] [acc '()])
+        (cond
+          [(> (+ i lf) (string-length s))
+           (apply string-append (reverse (cons (substring s i (string-length s)) acc)))]
+          [(string=? (substring s i (+ i lf)) from)
+           (loop (+ i lf) (cons to acc))]
+          [else (loop (+ i 1) (cons (string (string-ref s i)) acc))]))))
+
+  ;; 剥掉前缀(不存在则原样返回)
+  (define (strip-leading s pre)
+    (if (string-prefix? pre s)
+        (substring s (string-length pre) (string-length s))
+        s)))
