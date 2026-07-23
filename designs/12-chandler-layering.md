@@ -170,15 +170,41 @@ lib 写 `(import (chandler base))` 一行拿到全部 runtime 公共能力。**`
 
 dev 入口 `(library (chandler))` 保留 `activate` / `current-runtime` / `chandler-version` 全部 dev API,**加** `(import (chandler base))` 让 dev 工具也能用 runtime subset。这样 `activate` 实现里原本直接用 `(chandler fs)` / `(chandler manifest)` 等显式 import 可保持不变(`(chandler base)` re-export 已覆盖),dev 内部代码不改。
 
-## 5. 强制依赖机制
+## 5. 强制依赖机制 —— **2026-07-23 修订:chandler 是运行时门,不是依赖**
 
-### 5.1 三档强度
+> **本节结论已改**:chandler 不再以 `(deps (chandler …))` 的形式出现。它没有 URL、
+> 不需要 fetch —— 实体永远是**全局前缀** `~/.local/share/chez` 里装好的那一份
+> (由 `bootstrap.ss` 安装)。项目只声明版本区间,与 `(chez …)`/`(skiff …)` 完全同类:
+>
+> ```scheme
+> (manifest (format 1) (name "myapp") (version "0.1.0")
+>   (chez ">=10.0")
+>   (chandler ">=0.1.4")        ; ← 运行时门:只有区间,没有来源
+>   (srcdir ".")
+>   (deps …))                   ; ← chandler 不在这里
+> ```
+>
+> `chandler deps` 据此做三件事:① 读 `<prefix>/.chandler/chandler/manifest.ss` 拿到装
+> 的版本,不合区间即报 expected vs actual;② 把它的 **runtime 子集**(`base` +
+> 9 个库)复制进 `vendor/chandler/` 与 `lib/{src,<mt>}`;③ 于是下游一律照常 ——
+> bake 的 `(prebuilt "lib")` 能解析、`chandler build` 不必特判、`chandler pack` 从
+> **同一个前缀**取同一份子集进包(包必须自包含,不能指望目标机装了 chandler)。
+>
+> 两个理由:**① 它不是可获取物**。给 chandler 编一个 git URL,等于让每个项目去网上
+> 取一份可能与本机 CLI 不同版本的 chandler —— 而真正提供 `(chandler base)` 的,
+> 恒是本机装的那一份。**② 版本一致性**。运行 `chandler run` 的 CLI 与被 import 的
+> 库必须同源,声明区间 + 校验本机装的版本,正好表达这件事。
+>
+> manifest 同时写 `(chandler …)` 与 `(deps (chandler …))` 会被 **validate 直接拒**。
+> 以下原文保留作决策记录。
+
+### 5.1 三档强度(**当时**的形式;今天 soft 档写的是运行时门而非 deps 条目)
 
 | 档 | 机制 | 阻塞? | 适用 |
 |---|---|---|---|
-| **soft(默认)** | `chandler init` 生成的 manifest 模板默认含 `(deps (chandler "^<current>"))` | 不阻塞 | 99% 项目 |
-| **diagnostic** | `chandler install` 检测无 chandler 依赖则 stderr warning | 不阻塞 | 提醒忘记加 |
-| **hard(可选)** | `chandler install --strict` 拒绝无 chandler 依赖 | 阻塞 | CI / 严格仓库 |
+| **soft(默认)** | `chandler init` 生成的 manifest 模板默认含 `(chandler ">=<current>")` | 不阻塞 | 99% 项目 |
+| **diagnostic** | `chandler deps` 检测无 chandler 声明则 stderr warning | 不阻塞 | 提醒忘记加 |
+| **hard(可选)** | `chandler deps --strict` 拒绝无 chandler 声明 | 阻塞 | CI / 严格仓库 |
 
 **推荐组合**:soft + diagnostic,不引入 hard 默认(理由见 §5.2)。
 
@@ -193,19 +219,18 @@ dev 入口 `(library (chandler))` 保留 `activate` / `current-runtime` / `chand
 `chandler init` 生成的 `manifest.ss` 默认包含:
 
 ```scheme
-(deps
-  (chandler
-    (git "https://github.com/skiffos/chandler")   ; 待定 URL
-    (version "^<current>"))                       ; 与 chandler 同版本号
-  ;;; ← 后续由 `chandler add` 追加
-)
+(chandler ">=<current>")        ; 运行时门,与 (chez …)/(skiff …) 并列
+(deps)                          ; ← 依赖列表里没有 chandler
 ```
 
-version caret( `^` )约束表达 [07 §1](#7-版本兼容承诺) 兼容承诺。用户可删;**删了 install 时 warning**。
+用户可删;**删了 `chandler deps` 时 warning**,`--strict` 则拒。
 
-### 5.4 依赖分支路径
+### 5.4 来源只有一个:全局前缀
 
-也存在 path 依赖与 git 依赖两种进口路径:`(path "../chandler")` 给 monorepo 开发用,`(git …)` 给跨仓应用用。**两种都接受**,install 时识别 "name 与 chandler 自身一致" 仍走 runtime 路径。
+不存在 path / git 两种进口路径 —— chandler 没有「来源」这一维。实体恒是
+`~/.local/share/chez`(`CHANDLER_PREFIX` 可覆盖,给非默认前缀与测试用)里装好的那份,
+`chandler deps` 从中取 runtime 子集铺进项目。要换版本就换装的那一份(`bootstrap.ss`),
+而不是改项目里的 URL —— 这正是「运行时门」与「依赖」的分界。
 
 ## 6. chandler 自身 manifest:扩展 `(runtime-subset …)`
 
@@ -291,8 +316,8 @@ lib 用 `(version "^0.2")` caret 区间自动跟 minor。chandler 升级路径:
 | N1 | **rename** `chandler/runtime.ss` 文件不动 / libref 改为 `(chandler runtime-detector)`;`chandler.ss` dev umbrella 的 `(import (chandler runtime))` 改为 `(import (chandler runtime-detector))`;同时扫所有 dev-time 文件的 `(import (chandler runtime))` 改写 |
 | N2 | 新建 `chandler/base.ss` 是 `(library (chandler base))` umbrella,re-export §4.3 列表;`chandler.ss` 加 `(import (chandler base))` 让 dev 工具内部统一用 base |
 | N3 | chandler 自身 manifest 加 `(runtime-subset …)` 字段(§6 形态);`manifest.ss` parser 支持;lock 同步 |
-| N4 | `chandler init` 生成的 manifest 模板默认含 `(deps (chandler "^<current>"))`(soft 强制,自举例外不动) |
-| N5 | `chandler install` 检测无 chandler 依赖时 stderr warning(diagnostic);可选 `--strict` 拒绝 |
+| N4 | `chandler init` 生成的 manifest 模板默认含 `(chandler ">=<current>")` 运行时门(soft 强制,自举例外不动;2026-07-23 前是 `(deps (chandler …))`) |
+| N5 | `chandler deps` 检测无 chandler 声明时 stderr warning(diagnostic);可选 `--strict` 拒绝 |
 | N6 | `bake install` / `chandler pack` 支持 runtime-only install filter(读 lock 的 `runtime-subset`);M4 阶段先全复制,N6 启用 filter |
 | N7 | 文档 + skiff-demo 迁移示范:加 chandler dep,用 `(chandler base)` 替代裸 `getenv "APP_ROOT"`、裸 sha256 计算等 |
 
@@ -311,7 +336,7 @@ lib 用 `(version "^0.2")` caret 区间自动跟 minor。chandler 升级路径:
 | # | 场景 | 期望行为 | 诊断 / 缓解 |
 |---|---|---|---|
 | 1 | **chandler 自举**(`chandler install` 它自己时) | 不因缺 chandler runtime 依赖而失败 | exception 明确写"self-bootstrap exception";dev 机一次性 `bake install` 装完整 chandler 即可 |
-| 2 | lib 用 `(import (chandler base))` 但**没**声明 chandler dep | `chandler install` warning(§5.1 diagnostic);pack 时 lock 缺 chandler → preflight 失败 | 错误信息:"declared importers require runtime-subset, but no chandler dep in manifest.ss — add `(deps (chandler …))`" |
+| 2 | lib 用 `(import (chandler base))` 但**没**声明 chandler 运行时门 | `chandler deps` warning(§5.1 diagnostic);`--strict` 拒;pack 时前缀里也没有 → 报错 | 错误信息:"project does not declare a chandler runtime gate; add `(chandler \">=X\")` to manifest.ss" |
 | 3 | runtime 子库内部 import dev-only 子库(如 `install.ss` import `hash.ss`) | 物理复制时**不能**漏 | 全复制或闭包计算;N1 严格按 §3.1 校验每个成员 import 闭包 ∈ runtime ∪ shared |
 | 4 | `(chandler runtime)` → `(chandler runtime-detector)` rename 漏改一处 | compile-time 立即报 "library not found" | CI 跑 `grep -rn '(chandler runtime)'` 必须除 `runtime-detector.ss` 内 0 命中 |
 | 5 | `(chandler base)` vs `(chandler runtime)` 命名混淆 | 文档与命名保持清晰 | N1 实施时**强制** grep 全仓库 0 处遗留 `(chandler runtime)` libref;命名选定 `(chandler base)` 避免与探测器重名 |

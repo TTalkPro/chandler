@@ -11,6 +11,7 @@
   (version "0.1.0")                   ; 必选:本项目版本(SemVer 三段)
   (chez    ">=10.0")                  ; 可选:要求的 Chez 版本区间(标准 Chez 项目用这条)
   (skiff   ">=0.3")                   ; 可选:要求的 Skiff 版本区间;缺省 = 不要求 Skiff
+  (chandler ">=0.1.4")                ; 可选:要求的 chandler 版本区间(运行时门,见下)
   (srcdir  ".")                       ; 可选:本仓库库搜索根,默认 "."(布局规范默认)
   (deps    …)                         ; 可选:运行时依赖
   (dev-deps …)                        ; 可选:开发/测试期依赖(解析规则见 03)
@@ -20,6 +21,7 @@
 ```
 
 - `chez` 与 `skiff` **正交**:只写 `chez` = 纯 Chez 项目;只写 `skiff` = 只跑在 Skiff 上;都写 = 两边都可跑且各有下界;都不写 = 不设限(见 [06](06-runtime-compat.md))。
+- `chandler` 与前两者**同类:运行时门,不是依赖**(2026-07-23,[12 §5](12-chandler-layering.md))。只有版本区间、没有来源:实体恒是全局前缀 `~/.local/share/chez` 里装好的那一份(`CHANDLER_PREFIX` 可覆盖)。`chandler deps` 校验装的版本合不合区间,并把它的 runtime 子集铺进 `vendor/` 与 `lib/{src,<mt>}`;`chandler pack` 从同一前缀取同一子集进包。**同时写 `(chandler …)` 与 `(deps (chandler …))` 直接拒**——后者意味着「去某个 URL 取一份」,而那份未必是本机正在跑的 chandler。
 - 未知字段:**警告并忽略**(允许新工具字段渐进落地),但 `format` 高于支持版本则整体拒绝。
 
 ### dep 项语法(BNF 风格)

@@ -277,6 +277,30 @@ $APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
 
 **skiff-demo 已同步**(该仓改动):`mdserver/app.sls` 的 `docs-root` → `(app-resource-path)`;`serve.ss` 去掉 `(load chandler-setup.ss)`;`manifest.ss` 去掉 `(chez ">=10.0")`(它 `import (skiff web)`,本就跑不了 stock chez,而双声明按 [06 §3](designs/06-runtime-compat.md) 是「双跑项目」→ `chandler run` 会选 chez);README/recipe/.gitignore 同步。端到端实跑:`chandler deps → bake → chandler build → chandler run --script serve.ss <port>` 起服务 `/` 与 `/hello` 均 200(docs 落 `lib/share/skiff-demo/resources`);`chandler pack` 后 `env -i` clean-env 启动 `/` 与 `/features` 均 200(docs 落 `<pack>/share/skiff-demo/resources`)、整包 `cp` 到别处仍 200、`verify-pack --target` 125 ok/0 bad。
 
+### P1c — chandler 改为运行时门(不是依赖)— **已完成(2026-07-23)**
+
+`(deps (chandler …))` 取消。chandler 与 `(chez …)`/`(skiff …)` 同类:**只声明版本区间,不声明来源**——它没有可 fetch 的 URL,实体恒是全局前缀 `~/.local/share/chez`(`CHANDLER_PREFIX` 可覆盖)里装好的那一份。
+
+```scheme
+(manifest (format 1) (name "myapp") (version "0.1.0")
+  (chez ">=10.0") (chandler ">=0.1.4") (srcdir ".")
+  (deps …))                     ; ← chandler 不在这里
+```
+
+| # | 改动 | 文件 |
+|---|------|------|
+| 1 | manifest 新字段 `(chandler "<range>")` + 区间校验;同时写 `(deps (chandler …))` 直接拒 | `chandler/manifest.ss` |
+| 2 | `chandler deps`:读 `<prefix>/.chandler/chandler/manifest.ss` 拿装的版本 → 区间校验(expected vs actual)→ 把 **runtime 子集**铺进 `vendor/chandler/` 与 `lib/{src,<mt>}`(源码 + 前缀里已编译的对象,不重编) | `chandler/install.ss` |
+| 3 | `chandler pack`:从**同一前缀**取同一子集进 `<pack>/<mt>/chandler/` —— 包必须自包含,不能指望目标机装了 chandler | `chandler/pack.ss` |
+| 4 | `bootstrap.ss` 装 chandler 时写 `<prefix>/.chandler/chandler/manifest.ss`(前缀自描述,版本门据此判定);卸载时删 | `bootstrap.ss` |
+| 5 | `chandler init` 模板写运行时门;N5 检查改判 `(chandler …)` 字段(warning / `--strict` 拒) | `chandler/cli/commands.ss` |
+| 6 | `global-prefix` 支持 `CHANDLER_PREFIX` 覆盖(非默认前缀 + 测试可控) | `chandler/install.ss` |
+| 7 | 版本常量 `chandler-version` 收敛到 `(chandler util)`(原先 umbrella / CLI / resolve 各写一份 "0.1.4") | `chandler/util.ss` 等 |
+
+**修掉一个潜伏 bug**:pack 的 N6 过滤器 `chandler-dev-only-so?` 把 `strip-prefix` 参数写反(`(strip-prefix s pre)`),导致 `chandler/` 下**每个**库都被判成 dev-only —— 即「作为依赖的 chandler 一个库都进不了包」。此前没炸,是因为应用自己的 `_build/` 里也编了一份、经 `copy-obj-tree!` 进了包。现在判据挪到 `(chandler install)` 由 deps/pack 共用,并顺手修正。
+
+**验证**:三运行时 **224/224 全绿**(新增 4 个用例:runtime 子集铺设 + dev-only 不铺、版本过旧报错、前缀无 chandler 报错、vendor/chandler 不被孤儿清理误删)。skiff-demo 全链路实跑:`deps`(铺 10 个 runtime 库到 `lib/{src,ta6le}`,无 cli/pack/build)→ `bake`(`(prebuilt "lib")` 直接消费,`_build/` 里不再重编 chandler)→ `chandler build` → `run` 起服务 200 → `pack`(`<pack>/ta6le/chandler/` 10 个 `.so`)→ `env -i` clean-env 起服务 `/` 与 `/features` 均 200 → `verify-pack --target` **131 ok / 0 bad**。
+
 ### P2 — 运行时依赖 vs 开发时依赖分离(dev-deps)
 
 当前 `(deps ...)` 和 `(dev-deps ...)` 区分不严格。chandler 本身应作为 runtime dep(runtime subset 隐式),bake 等纯开发工具应放 `(dev-deps ...)`。
