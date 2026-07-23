@@ -22,7 +22,8 @@
         (prefix (chandler test registry) registry:)
         (prefix (chandler test build) build:)
          (prefix (chandler test pack) pack:)
-         (prefix (chandler test base) base:))
+         (prefix (chandler test base) base:)
+         (prefix (chandler test task-engine) task-engine:))
 
 (define all-suites
   (list
@@ -43,6 +44,7 @@
     (cons 'registry registry:suite)
     (cons 'build build:suite)
     (cons 'pack pack:suite)
-    (cons 'base base:suite)))
+    (cons 'base base:suite)
+    (cons 'task-engine task-engine:suite)))
 
 (exit (if (run-suites all-suites) 0 1))
