@@ -301,6 +301,18 @@ $APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
 
 **验证**:三运行时 **224/224 全绿**(新增 4 个用例:runtime 子集铺设 + dev-only 不铺、版本过旧报错、前缀无 chandler 报错、vendor/chandler 不被孤儿清理误删)。skiff-demo 全链路实跑:`deps`(铺 10 个 runtime 库到 `lib/{src,ta6le}`,无 cli/pack/build)→ `bake`(`(prebuilt "lib")` 直接消费,`_build/` 里不再重编 chandler)→ `chandler build` → `run` 起服务 200 → `pack`(`<pack>/ta6le/chandler/` 10 个 `.so`)→ `env -i` clean-env 起服务 `/` 与 `/features` 均 200 → `verify-pack --target` **131 ok / 0 bad**。
 
+### P4 — 单一前缀:`lib/` 与 `_build/` 合一 — **分析完成,待决**
+
+分析见 [docs/single-build-prefix.md](docs/single-build-prefix.md)。一句话:`APP_ROOT` 语义反复摇摆只是症状,病根是**一个项目有两个库加载根**(`lib/{src,<mt>}` 与 `_build/<mt>`)——资源要复制、`build` 要把 `_build/<mt>` 同步进 `lib/<mt>`、pack 要从两处拼(还留着 stale 覆盖的坑)、run/repl/activate 要枚举两根。合成一个前缀后这些整段消失,且 `run`/`install`/`pack` 变成同一棵树的三次搬运。
+
+代价:bake 的输出目录写死 `_build/<mt>`(`bake/compile.ss:11`)、`bake -c` 删整棵 `_build/`,故 chandler 的持久状态会落在 bake 的地盘上。建议对策是「前缀缺失就自动从 `_vendor` 重铺」(纯本地拷贝,顺带覆盖新 clone / CI 缓存丢失)。落地分 5 步,前 3 步即可验证收益。
+
+### P5 — bake 与 chandler 是否合并 — **分析完成,待决**
+
+分析见 [docs/bake-chandler-merge.md](docs/bake-chandler-merge.md)。要点:两个工具**零代码共享**(bake 不 import 任何 `(chandler …)`),却共享 5 条不变量(前缀形状 / native 落点 / loader 候选序 / `APP_ROOT` 语义 / mt→so-ext),且各自重复实现了 sha256+util+运行时探测约 900 行 —— 今天一小时内就撞了两次漂移(bake 删 `install-task` 使 chandler 的 recipe 整份加载失败;P1 改包布局使 loader 候选 1 恒 miss)。
+
+结论:**合并概念(清单里写构建)否决** —— 撞 [08 §3](designs/08-bootstrap-security.md) 的「清单只读不求值」红线(解析第三方清单将等于执行其代码);**共享底座(M2)现在就该做** —— bake 声明 `(chandler ">=…")` 运行时门、改用 `(chandler base)`,不变量常量收敛进 `(chandler layout)`,前置条件刚随 P1c 就绪;**单仓单二进制(M1)方向正确但排在其后**。
+
 ### P2 — 运行时依赖 vs 开发时依赖分离(dev-deps)
 
 当前 `(deps ...)` 和 `(dev-deps ...)` 区分不严格。chandler 本身应作为 runtime dep(runtime subset 隐式),bake 等纯开发工具应放 `(dev-deps ...)`。
