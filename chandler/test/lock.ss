@@ -11,13 +11,26 @@
   (define (ld name deps natives . scope)
     (make-locked-dep name 'git (string-append "https://x/" (symbol->string name))
                      'tag "v1.0.0" "abcdef0123456789" "." deps natives
-                     (if (null? scope) 'runtime (car scope))))
+                     (if (null? scope) 'runtime (car scope))
+                     #f))                     ; resources:测试套件按需显式提供
+
+  (define (ldr name deps natives resources . scope)
+    (make-locked-dep name 'git (string-append "https://x/" (symbol->string name))
+                     'tag "v1.0.0" "abcdef0123456789" "." deps natives
+                     (if (null? scope) 'runtime (car scope))
+                     resources))
 
   (define sample
     (make-lock 1 "deadbeef" "0.1.0"
       (list (ld 'http '(json uri) '(llhttp))
             (ld 'json '() '())
             (ld 'uri '(json) '()))))
+
+  (define (index-of lst x)
+    (let loop ([lst lst] [i 0])
+      (cond [(null? lst) -1]
+            [(eq? (car lst) x) i]
+            [else (loop (cdr lst) (+ i 1))])))
 
   (define-suite suite
     ;; ── hash ──
@@ -71,10 +84,24 @@
     (dev-scope-preserved
       (let* ([lk (make-lock 1 "x" "0.1.0" (list (ld 'test '() '() 'dev)))]
              [back (datum->lock (lock->datum lk))])
-        (assert-equal 'dev (locked-dep-scope (lock-ref back 'test))))))
+        (assert-equal 'dev (locked-dep-scope (lock-ref back 'test)))))
 
-  (define (index-of lst x)
-    (let loop ([lst lst] [i 0])
-      (cond [(null? lst) -1]
-            [(eq? (car lst) x) i]
-            [else (loop (cdr lst) (+ i 1))]))))
+    ;; ── resources 字段(designs/11 §6.3 标准化快照)──
+    (resources-roundtrip
+      (let* ([rs (list (cons '(http) "resources")
+                       (cons '(http server) "resources/server"))]
+             [lk (make-lock 1 "x" "0.1.0"
+                   (list (ldr 'http '() '() rs)))]
+             [back (datum->lock (lock->datum lk))])
+        (assert-equal rs (locked-dep-resources (lock-ref back 'http)))))
+
+    (resources-absent-roundtrip
+      ;; 无 resources 字段的 lock(老文件) → 读回 #f(向后兼容)
+      (let* ([lk (make-lock 1 "x" "0.1.0" (list (ld 'http '() '())))]
+             [back (datum->lock (lock->datum lk))])
+        (assert-false (locked-dep-resources (lock-ref back 'http)))))
+
+    (resources-accessor
+      (let ([rs (list (cons '(http) "resources"))])
+        (assert-equal rs (locked-dep-resources
+                          (ldr 'http '() '() rs)))))))

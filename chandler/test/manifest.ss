@@ -110,4 +110,60 @@
     (builtin-prefix-pred
       (assert-true (builtin-prefix? 'chezscheme))
       (assert-true (builtin-prefix? 'skiff))
-      (assert-false (builtin-prefix? 'http)))))
+      (assert-false (builtin-prefix? 'http)))
+
+    ;; ── (resources ...) 字段 ──
+    (resources-simple
+      ;; (resources "data") → 标准化为 ((<pkg-sym>) . "data")
+      (let ([x (m '(manifest (name "mylib") (version "0.1.0")
+                      (resources "data")))])
+        (assert-equal (list (cons '(mylib) "data"))
+                      (manifest-resources x))))
+
+    (resources-multi-lib
+      ;; multi-lib 形保留为 (libref . path) pair 列表
+      (let ([x (m '(manifest (name "suite") (version "0.1.0")
+                      (resources ((mylib) "resources")
+                                 ((mylib parser) "resources/parser"))))])
+        (assert-equal (list (cons '(mylib) "resources")
+                            (cons '(mylib parser) "resources/parser"))
+                      (manifest-resources x))))
+
+    (resources-absent
+      (let ([x (m '(manifest (name "a") (version "0.1.0")))])
+        (assert-false (manifest-resources x))))
+
+    (resources-abs-path
+      (assert-raises
+        (lambda () (m '(manifest (name "a") (version "0.1.0")
+                        (resources "/abs/x"))))))
+
+    (resources-dotdot
+      (assert-raises
+        (lambda () (m '(manifest (name "a") (version "0.1.0")
+                        (resources "a/../b"))))))
+
+    (resources-empty-seg
+      (assert-raises
+        (lambda () (m '(manifest (name "a") (version "0.1.0")
+                        (resources "a//b"))))))
+
+    (resources-dup-libref
+      (assert-raises
+        (lambda () (m '(manifest (name "a") (version "0.1.0")
+                        (resources ((mylib) "p1") ((mylib) "p2")))))))
+
+    ;; ── (runtime-subset ...) 字段 ──
+    (runtime-subset-basic
+      (let ([x (m '(manifest (name "chandler") (version "0.2.0")
+                      (runtime-subset hash util fs)))])
+        (assert-equal '(hash util fs) (manifest-runtime-subset x))))
+
+    (runtime-subset-absent
+      (let ([x (m '(manifest (name "a") (version "0.1.0")))])
+        (assert-false (manifest-runtime-subset x))))
+
+    (runtime-subset-non-symbol
+      (assert-raises
+        (lambda () (m '(manifest (name "a") (version "0.1.0")
+                        (runtime-subset hash "util"))))))))

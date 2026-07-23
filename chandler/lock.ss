@@ -10,7 +10,7 @@
           locked-dep-source-kind locked-dep-source-loc
           locked-dep-pin-kind locked-dep-pin-val
           locked-dep-rev locked-dep-srcdir locked-dep-deps locked-dep-natives
-          locked-dep-scope
+          locked-dep-scope locked-dep-resources
           make-lock lock? lock-format lock-manifest-sha256 lock-chandler lock-deps
           lock->datum datum->lock write-lock read-lock
           manifest-content-sha256 lock-fresh?
@@ -22,8 +22,11 @@
   (define lock-format-version 1)
 
   ;; 一条已锁依赖;scope ∈ {runtime, dev}
+  ;; resources:designs/11 §6 标准化快照 —— #f 表示无声明,否则为 ((libref-list . path) ...)
+  ;; M1/M2 才会从 manifest resources 字段填入,目前 resolve 路径传 #f。
   (define-record-type locked-dep
-    (fields name source-kind source-loc pin-kind pin-val rev srcdir deps natives scope))
+    (fields name source-kind source-loc pin-kind pin-val rev srcdir
+            deps natives scope resources))
 
   (define-record-type lock
     (fields format manifest-sha256 chandler deps))   ; deps = (locked-dep ...)
@@ -49,7 +52,13 @@
        (srcdir ,(locked-dep-srcdir d))
        (deps ,@(locked-dep-deps d))
        (natives ,@(locked-dep-natives d))
-       ,@(if (eq? 'dev (locked-dep-scope d)) '((scope dev)) '())))
+       ,@(if (eq? 'dev (locked-dep-scope d)) '((scope dev)) '())
+       ,@(let ([rs (locked-dep-resources d)])
+           (if rs
+               (list `(resources ,@(map (lambda (p)
+                                          `(,(car p) ,(cdr p)))
+                                        rs)))
+               '()))))
 
   (define (datum->lock datum)
     (let ([body (expect-tag datum 'lock 'datum->lock)])
@@ -72,7 +81,20 @@
         (or (field-ref b 'srcdir) ".")
         (field-ref* b 'deps)
         (field-ref* b 'natives)
-        (if (equal? '(dev) (field-ref* b 'scope)) 'dev 'runtime))))
+        (if (equal? '(dev) (field-ref* b 'scope)) 'dev 'runtime)
+        (parse-locked-resources (field-ref* b 'resources)))))
+
+  ;; lock 里的 resources 已标准化(designs/11 §6.3):((libref-list "path") ...)
+  ;; 字段缺省 → #f(向后兼容老 lock 文件)
+  (define (parse-locked-resources items)
+    (and (not (null? items))
+         (map (lambda (it)
+                (unless (and (pair? it) (= 2 (length it))
+                             (pair? (car it)) (string? (cadr it)))
+                  (error 'datum->locked-dep
+                         "lock resources entry must be ((libref …) \"path\")" it))
+                (cons (car it) (cadr it)))
+              items)))
 
   ;; ── 文件 I/O ──
   (define (write-lock path lk)

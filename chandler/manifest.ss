@@ -10,6 +10,7 @@
           manifest-chez manifest-skiff manifest-srcdir
           manifest-deps manifest-dev-deps manifest-native
           manifest-overrides manifest-scripts
+          manifest-resources manifest-runtime-subset
           manifest-app app? app-entry app-main
           dep? dep-name dep-source-kind dep-source-loc
           dep-pin-kind dep-pin-val dep-srcdir
@@ -18,6 +19,7 @@
           supported-format builtin-prefix?)
   (import (chezscheme)
           (chandler sexp)
+          (chandler util)
           (chandler version))
 
   (define supported-format 1)
@@ -25,7 +27,8 @@
   ;; ── records ──
   (define-record-type manifest
     (fields format name version chez skiff srcdir
-            deps dev-deps native overrides scripts app))
+            deps dev-deps native overrides scripts app
+            resources runtime-subset))
 
   ;; app:这个包是**可分发的应用**时声明入口(designs/09 §CLI)。
   ;;   (app (entry (mdserver)) (main main))
@@ -60,7 +63,80 @@
         (map parse-native (field-ref* body 'native))
         (parse-overrides (field-ref* body 'overrides))
         (field-ref* body 'scripts)
-        (parse-app (field-ref* body 'app)))))
+        (parse-app (field-ref* body 'app))
+        (or (parse-resources (field-ref* body 'resources) (field-ref body 'name)) #f)
+        (parse-runtime-subset (field-ref* body 'runtime-subset)))))
+
+  ;; (resources "rel/path") 或 (resources ((lib) "path") ...) —— designs/11 §6
+  ;; 字段缺省 → #f。simple 形按 package name 标准化为单条;multi-lib 形逐项校验。
+  (define (parse-resources items pkg-name)
+    (and (not (null? items))
+         (let ([entries
+                 (if (and (= 1 (length items)) (string? (car items)))
+                     ;; simple 形:单字符串 → 标准化为 ((<pkg-sym>) . path)
+                     ;; 包名为 #f 时(manifest 缺 (name …))让 string->symbol 自爆,
+                     ;; validate-manifest 仍会在更早时报"name 缺失"。
+                     (let ([path (car items)])
+                       (check-resource-path path 'resources)
+                       (list (cons (list (string->symbol pkg-name)) path)))
+                     ;; multi-lib 形:((libref ...) "path") ...
+                     (map (lambda (it)
+                            (unless (and (pair? it) (= 2 (length it))
+                                         (pair? (car it)) (string? (cadr it)))
+                              (error 'parse-manifest
+                                     "(resources …) entry must be ((libref …) \"path\")"
+                                     it))
+                            (let ([libref (car it)]
+                                  [path   (cadr it)])
+                              (unless (and (pair? libref) (for-all symbol? libref))
+                                (error 'parse-manifest
+                                       "(resources …) libref must be a non-empty symbol list"
+                                       libref))
+                              (check-resource-path path 'resources)
+                              (cons libref path)))
+                          items))])
+           (check-unique-librefs entries)
+           entries)))
+
+  ;; 路径必须相对、不得含空段 / `.` / `..`
+  (define (check-resource-path path who)
+    (when (or (not (string? path)) (absolute-path? path))
+      (error who "resource path must be a relative path" path))
+    (when (string=? "" path)
+      (error who "resource path must not be empty" path))
+    (let loop ([segs (string-split path #\/)])
+      (cond
+        [(null? segs) (void)]
+        [(member "" segs)
+         (error who "resource path must not contain empty segments" path)]
+        [(member "." segs)
+         (error who "resource path must not contain `.` segments" path)]
+        [(member ".." segs)
+         (error who "resource path must not contain `..` segments" path)]
+        [else (void)])))
+
+  ;; multi-lib 形下,同 libref 只能声明一次(designs/11 §6 校验表)
+  (define (check-unique-librefs entries)
+    (let loop ([xs entries] [seen '()])
+      (unless (null? xs)
+        (let ([lr (caar xs)])
+          (when (member lr seen)
+            (error 'parse-manifest
+                   "(resources …) declares the same libref more than once" lr))
+          (loop (cdr xs) (cons lr seen))))))
+
+  ;; (runtime-subset name1 name2 ...) —— designs/12 §6
+  ;; 字段缺省 → #f。每一项必须是 symbol。
+  (define (parse-runtime-subset items)
+    (and (not (null? items))
+         (begin
+           (for-each
+             (lambda (it)
+               (unless (symbol? it)
+                 (error 'parse-manifest
+                        "(runtime-subset …) entries must be symbols" it)))
+             items)
+           items)))
 
   ;; (app (entry (a b)) (main main)) → app record;缺省 main = `main`
   (define (parse-app body)
