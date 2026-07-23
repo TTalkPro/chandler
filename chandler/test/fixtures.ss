@@ -72,8 +72,18 @@
       (git-commit! dir "c1")
       dir))
 
-  ;; app 项目目录(仅 manifest,name "app",deps=((sym . url)…))
-  (define (make-app deps)
-    (let ([dir (mktmp)])
-      (write-file (string-append dir "/manifest.ss") (manifest-text "app" deps))
-      dir)))
+  ;; app 项目目录(仅 manifest,name "app",deps=((sym . url)…))。
+  ;; 可选第二参:插进 manifest 的额外字段文本(如 (chandler ">=0.1.0") 运行时门)。
+  (define make-app
+    (case-lambda
+      [(deps) (make-app deps "")]
+      [(deps extra)
+       (let ([dir (mktmp)])
+         (write-file (string-append dir "/manifest.ss")
+                     (let ([base (manifest-text "app" deps)])
+                       (if (string=? extra "")
+                           base
+                           ;; 塞在收尾右括号之前
+                           (string-append (substring base 0 (- (string-length base) 1))
+                                          " " extra ")"))))
+         dir)])))
