@@ -38,7 +38,6 @@
   (define (project-lib-pair root) (split-pair (project-libdir root)))    ; (lib/src . lib/<mt>)
   (define (project-obj-dir root) (join-paths (project-libdir root) (current-machine-type))) ; lib/<mt>
   (define (setup-path root) (join-paths root "chandler-setup.ss"))
-  (define (bake-command) (or (getenv* "CHANDLER_BAKE") "bake"))
 
   ;; ── install:主命令 ──
   ;; opts: (production . bool) (force . bool) (keep-extra . bool) (offline . bool)
@@ -58,11 +57,12 @@
           ;; 1) git 依赖整仓 → vendor/<name>
           (for-each (lambda (d) (sync-dep root d opts)) git-deps)
           (clean-orphans root lk opts)
-          ;; 2) bake install:从 vendor 装进 lib/{src,<mt>}(先清空 lib/ 重建)。
+          ;; 2) 源码安装:从 vendor/ 装进 lib/src/(in-process,无 bake 子进程)。
+          ;;    design 13:chandler 全面接管 install;bake 只编译。
           ;;    install 只发源码(vendor 是干净 checkout,无 _build);编译产物由
           ;;    `chandler build` 补进 lib/<mt>/。
           (rm-rf (project-libdir root))
-          (bake-install-deps root git-deps)
+          (install-dep-sources! root git-deps)
           ;; M1: 复制依赖声明资源到 lib/share/<libpath>/resources/(designs/11 §5)
           (install-resources root git-deps)
           ;; 3) 生成 chandler-setup.ss(一行激活文件)
@@ -107,31 +107,46 @@
          (unless (has-rev? url rev) (update-mirror url))
          (checkout-detach dir rev)])))
 
-  ;; ── bake install:生成一份含所有 git 依赖 install-task 的 recipe,一次 bake 装进 lib/{src,<mt>} ──
-  (define (bake-install-deps root git-deps)
-    (when (pair? git-deps)
-      (let ([recipe (join-paths root ".chandler-install.ss")])
-        (call-with-output-file recipe
-          (lambda (p)
-            (for-each
-              (lambda (d)
-                (let* ([name (symbol->string (locked-dep-name d))]
-                       [from (srcdir-join (join-paths "vendor" name) (locked-dep-srcdir d))])
-                  ;; (from …) 相对 bake cwd=root;(target (prefix "lib")) → root/lib
-                  (fprintf p "(install-task 'i-~a (lib ~a) (from ~s) (target (prefix \"lib\")))~%"
-                           name name from)))
-              git-deps)
-            (fprintf p "(task 'install-all '(~a) (lambda () (void)))~%"
-                     (string-join (map (lambda (d)
-                                         (string-append "i-" (symbol->string (locked-dep-name d))))
-                                       git-deps) " "))
-            (fprintf p "(default-task 'install-all)~%"))
-          'truncate)
-        (guard (e [#t (delete-if-exists recipe) (raise e)])
-          (run-check (bake-command) (list "-f" recipe "install-all") (list (cons 'cwd root)))
-          (delete-if-exists recipe)))))
+  ;; ── 源码安装:vendor/ → lib/src/(in-process,无 bake 子进程;design 13 §3)──
+  ;; chandler 是安装的唯一执行者。每依赖:找 umbrella + 拷整棵源码子树。
+  ;; 与 bake 旧 run-install 等价(步骤 1-2),但不经过子进程。
+  (define lib-source-extensions '(".chezscheme.sls" ".sls" ".ss" ".sc"))
 
-  (define (delete-if-exists p) (when (file-exists? p) (delete-file p)))
+  (define (find-umbrella-file srcdir name)
+    (let loop ([exts lib-source-extensions])
+      (cond
+        [(null? exts) #f]
+        [else
+         (let ([p (join-paths srcdir (string-append name (car exts)))])
+           (if (file-exists? p) p (loop (cdr exts))))])))
+
+  (define (install-dep-sources! root git-deps)
+    (when (pair? git-deps)
+      (let ([lib-src (join-paths (project-libdir root) "src")])
+        (ensure-dir lib-src)
+        (for-each
+          (lambda (d)
+            (let* ([name (symbol->string (locked-dep-name d))]
+                   [vdir (vendor-dir root (locked-dep-name d))]
+                   [srcdir (srcdir-join vdir (or (locked-dep-srcdir d) "."))]
+                   [from-prefix (string-append srcdir "/")])
+              ;; 1. umbrella: srcdir/<name>.{ext} → lib/src/<name>.{ext}
+              (let ([umb (find-umbrella-file srcdir name)])
+                (when umb
+                  (let ([dst (join-paths lib-src (base-name umb))])
+                    (ensure-parent dst)
+                    (copy-file umb dst))))
+              ;; 2. source subtree: srcdir/<name>/** → lib/src/<name>/**
+              (let ([subtree (join-paths srcdir name)])
+                (when (file-directory? subtree)
+                  (for-each
+                    (lambda (abs)
+                      (let* ([rel (strip-prefix abs from-prefix)]
+                             [dst (join-paths lib-src rel)])
+                        (ensure-parent dst)
+                        (copy-file abs dst)))
+                    (files-under subtree))))))
+          git-deps))))
 
   ;; M1: 复制依赖声明资源到 lib/share/<libpath>/resources/(designs/11 §5)
   ;; 资源是 ABI-independent,落 share/ 层(与 src/ <mt>/ 并列);lock 驱动,不重读 dep manifest。
