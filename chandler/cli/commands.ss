@@ -77,22 +77,54 @@
       (printf "wrote ~a~%" mpath)
       0))
 
+  ;; chandler runtime dep 注入模板(designs/12 §5.3 soft 强制)
+  (define chandler-dep-template
+    `(chandler (git "https://github.com/skiffos/chandler") (version "^0.1.4")))
+
   (define (skeleton-manifest-datum name)
-    `(manifest (format 1) (name ,name) (version "0.1.0") (chez ">=10.0") (srcdir ".") (deps)))
+    `(manifest (format 1) (name ,name) (version "0.1.0") (chez ">=10.0") (srcdir ".")
+       (deps ,chandler-dep-template)))
 
   ;; app 形态:多一个 (app (entry …) (main …)) 字段。entry 是 symbol list(库名),
   ;; main 是 symbol(入口过程名)。这两个就是 pack 的入口契约 —— 声明了就能 pack,
   ;; 没声明(走 skeleton-manifest-datum)就是 lib,pack 会拒绝。
   (define (skeleton-app-manifest-datum name entry main)
-    `(manifest (format 1) (name ,name) (version "0.1.0") (chez ">=10.0") (srcdir ".") (deps)
+    `(manifest (format 1) (name ,name) (version "0.1.0") (chez ">=10.0") (srcdir ".")
+       (deps ,chandler-dep-template)
        (app (entry ,entry) (main ,main))))
 
   ;; ── install / update ──
+  ;; N5:检测项目是否依赖 chandler runtime;缺则 warning(--strict 则拒绝)。
+  ;; 自举例外:项目名 = "chandler" 时跳过(designs/12 §5.2)。
+  (define (dep-list-has-chandler? deps)
+    (and (pair? deps)
+         (exists (lambda (d) (eq? (dep-name d) 'chandler)) deps)))
+
+  (define (check-chandler-dep root flags)
+    ;; 返回 #t = 可继续;#f = --strict 拒绝(返回 65)
+    (let ([mpath (join-paths root "manifest.ss")])
+      (if (not (file-exists? mpath))
+          #t
+          (let ([mf (read-manifest mpath)])
+            (cond
+              [(string=? (or (manifest-name mf) "") "chandler") #t]  ; 自举例外
+              [(dep-list-has-chandler? (manifest-deps mf)) #t]        ; 已声明
+              [(flag? flags 'strict)
+               (fprintf (current-error-port)
+                 "chandler: project does not depend on chandler; add (deps (chandler ...)) to manifest.ss\n")
+               #f]
+              [else
+               (fprintf (current-error-port)
+                 "warning: project does not depend on chandler; add (deps (chandler ...)) to manifest.ss or run chandler init\n")
+               #t])))))
+
   ;; --global:装当前项目库树到全局 libdir(注册表事务,designs/05)
   (define (cmd-install root flags)
     (if (flag? flags 'global)
         (cmd-install-global root flags)
-        (install root (install-opts flags))))
+        (if (check-chandler-dep root flags)
+            (install root (install-opts flags))
+            65)))  ; EX_DATAERR
 
   (define (cmd-install-global root flags)
     (let* ([libdir (target-libdir flags)]

@@ -61,7 +61,10 @@
       (let ([app (mktmp)])
         (assert-equal 0 (main (list "-C" app "init" "--name=foo")))
         (let ([mf (read-manifest (string-append app "/manifest.ss"))])
-          (assert-false (manifest-app mf)))))           ; 默认无 (app ...)
+          (assert-false (manifest-app mf))           ; 默认无 (app ...)
+          ;; N4:init 模板注入 chandler runtime dep
+          (assert-true (exists (lambda (d) (eq? (dep-name d) 'chandler))
+                               (manifest-deps mf))))))
 
     ;; --app:写 (app (entry (name)) (main main)),entry 默认取 name
     (init-app-writes-app-declaration
@@ -93,6 +96,11 @@
         (let* ([greet (make-lib-repo "greet")]
                [app (mktmp)])
           (assert-equal 0 (main (list "-C" app "init" "--name=app")))
+          ;; 测试环境无法 git clone chandler → 覆写为无 chandler dep 的纯净 manifest
+          (let ([mp (string-append app "/manifest.ss")])
+            (delete-file mp)
+            (call-with-output-file mp
+              (lambda (p) (display "(manifest (format 1) (name \"app\") (version \"0.1.0\") (chez \">=10.0\") (srcdir \".\") (deps))" p))))
           (assert-equal 0 (main (list "-C" app "add" "greet" greet "--branch" "main")))
           (assert-equal 0 (main (list "-C" app "install")))
           (assert-equal 0 (main (list "-C" app "verify")))
@@ -109,6 +117,11 @@
                [app (mktmp)])
           ;; 仅 init(有 manifest,无 lock)→ 非项目 → 全局模式
           (main (list "-C" app "init" "--name=app"))
+          ;; 测试环境无法 git clone chandler → 覆写为无 chandler dep 的纯净 manifest
+          (let ([mp (string-append app "/manifest.ss")])
+            (delete-file mp)
+            (call-with-output-file mp
+              (lambda (p) (display "(manifest (format 1) (name \"app\") (version \"0.1.0\") (chez \">=10.0\") (srcdir \".\") (deps))" p))))
           (assert-false (project-mode? app))
           (assert-equal (list (global-libdir)) (resolved-libdirs app))
           ;; add + install → lock 有依赖 → 项目模式
@@ -120,4 +133,29 @@
             (assert-true (>= (length dirs) 2))
             (assert-equal (project-lib-pair app) (car dirs))                     ; lib/ 一对在前
             (assert-equal (global-libdir) (list-ref dirs (- (length dirs) 1)))))))  ; 全局兜底在末尾
+
+    ;; ── N5: chandler dep warning / --strict(designs/12 §5)──
+    (install-strict-rejects-without-chandler-dep
+      (let ([app (mktmp)])
+        (let ([mp (string-append app "/manifest.ss")])
+          (when (file-exists? mp) (delete-file mp))
+          (call-with-output-file mp
+            (lambda (p) (display "(manifest (format 1) (name \"test\") (version \"0.1.0\") (chez \">=10.0\") (srcdir \".\") (deps))" p))))
+        (assert-equal 65 (main (list "-C" app "install" "--strict")))))
+
+    (install-non-strict-warns-but-not-rejected
+      (let ([app (mktmp)])
+        (let ([mp (string-append app "/manifest.ss")])
+          (when (file-exists? mp) (delete-file mp))
+          (call-with-output-file mp
+            (lambda (p) (display "(manifest (format 1) (name \"test\") (version \"0.1.0\") (chez \">=10.0\") (srcdir \".\") (deps))" p))))
+        (assert-true (not (= 65 (main (list "-C" app "install")))))))
+
+    (install-self-bootstrap-skips-check
+      (let ([app (mktmp)])
+        (let ([mp (string-append app "/manifest.ss")])
+          (when (file-exists? mp) (delete-file mp))
+          (call-with-output-file mp
+            (lambda (p) (display "(manifest (format 1) (name \"chandler\") (version \"0.1.0\") (chez \">=10.0\") (srcdir \".\") (deps))" p))))
+        (assert-true (not (= 65 (main (list "-C" app "install" "--strict")))))))
     ))
