@@ -9,15 +9,16 @@
 ;;; 正是闭环所在。
 ;;;
 ;;;   bake            # = bake build,编译 (chandler) 库树为 .so
-;;;   bake test       # 跑全测试套件(138 用例)
+;;;   bake test       # 跑全测试套件
 ;;;   bake test-ps    # PowerShell 启动器验收(需 pwsh,缺则跳过)
-;;;   bake install    # 装 (chandler) 库树 → ~/.local/share/chez/{src,<mt>}(--global 装 /usr/local)
-;;;   bake uninstall  # 据安装清单干净卸载
 ;;;   bake -T         # 列任务
 ;;;
-;;; 2026-07-22 对齐 bake install 改版:install 恒装编译内容,故 install-task 带
-;;; (needs build) 先编译;落点为 src/mt 拆分——源码 → <prefix>/src/、编译产物整棵
-;;; _build/<mt>/ → <prefix>/<mt>/(消费方一对 <prefix>/src::<prefix>/<mt> 解析二者)。
+;;; **安装不在这里**(2026-07-23):bake 0.1.5 已删除 install-task / uninstall-task
+;;; (bake designs/26:install 归 chandler),recipe 里再留着会导致**整份 recipe 加载
+;;; 失败**(`variable build is not bound`),连 `bake build` 都跑不了。chandler 的安装
+;;; 由自含的 `bootstrap.ss` 负责:它拷源码 → <prefix>/src/、拷 _build/<mt>/ →
+;;; <prefix>/<mt>/,并写运行时发现启动器。故顺序是 `bake` 先编译,再
+;;; `scheme --script bootstrap.ss [--force]`——否则装进前缀的是上一轮的旧对象。
 
 (define-lib-roots ".")                       ; 库搜索根 = 仓库根(布局规范:umbrella 在根)
 
@@ -25,8 +26,7 @@
 (library-task 'build '(chandler))
 
 ;; ── test:跑测试套件(解释执行,无需先编译)──
-;;   (build/install/uninstall 是 bake 的 tool-task,不带描述,故不列入 `bake -T`,但可直接调用。)
-(task 'test "跑全测试套件(138 用例)"
+(task 'test "跑全测试套件(220 用例)"
   '()
   (lambda ()
     (run "scheme" "--libdirs" "." "--program" "tests/run-tests.sps")))
@@ -38,29 +38,5 @@
   '()
   (lambda ()
     (run "bash" "tests/powershell-run.sh")))
-
-;; ── install / uninstall:把 (chandler) 库树装进 Chez 库前缀(src/mt 拆分)──
-;;   → (import (chandler …)) 全局可解析(apps 的 (activate) 与 bake 自身都需要)。
-;;   chandler 的自安装(install.sh / install-self)即委托这些任务装库,再补一个
-;;   运行时发现启动器(bin/chandler,挂 <prefix>/src::<prefix>/<mt>);故「自安装基于 bake install」。
-;;   (needs build):bake install 恒装编译内容,先编译使 _build/<mt>/ 当前,启动更快。
-;;   user → ~/.local/share/chez/{src,<mt>};global → /usr/local/share/chez/{src,<mt>}(需 root)。
-(install-task 'install
-  (lib chandler)
-  (from ".")
-  (target user)
-  (needs build))
-(uninstall-task 'uninstall
-  (lib chandler)
-  (target user))
-
-(install-task 'install-global
-  (lib chandler)
-  (from ".")
-  (target global)
-  (needs build))
-(uninstall-task 'uninstall-global
-  (lib chandler)
-  (target global))
 
 (default-task 'build)
