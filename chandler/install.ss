@@ -21,6 +21,8 @@
   (export install verify sync-status list-deps
           vendor-dir lib-dir project-lock-path project-manifest-path
           library-search-dirs native-load-paths sync-app-prefix!
+          chandler-runtime-sublibs chandler-dev-only-rel?
+          installed-chandler-version copy-chandler-runtime!
           project-libdir project-lib-pair project-obj-dir
           global-prefix global-libdir path-dep-source-dirs
           project-mode? resolved-libdirs)
@@ -33,6 +35,7 @@
           (chandler manifest)
           (chandler lock)
           (chandler resolve)
+          (chandler version)
           (chandler fetch))
 
   (define (project-manifest-path root) (join-paths root "manifest.ss"))
@@ -66,10 +69,15 @@
                                        (lock-deps lk))])
           ;; 1) 依赖 → vendor/<name>(git: clone;path: 本地拷贝)
           (for-each (lambda (d) (sync-dep root d opts)) deps-to-vendor)
-          (clean-orphans root lk opts)
+          ;; chandler 是**运行时门**不是依赖:实体取自全局前缀,进 vendor/chandler
+          (when (manifest-chandler mf) (install-chandler-runtime! root (manifest-chandler mf)))
+          (clean-orphans root lk (if (manifest-chandler mf) '("chandler") '()) opts)
           ;; 2) 源码安装:从 vendor/ 装进 lib/src/(in-process,无 bake 子进程)。
           (rm-rf (project-libdir root))
           (install-dep-sources! root deps-to-vendor)
+          ;; chandler 的 runtime 子集:源码 → lib/src,**已编译对象** → lib/<mt>
+          ;; (前缀里那份是同一个 chez/skiff 编好的,不必也不该在这里重编)
+          (when (manifest-chandler mf) (copy-chandler-runtime! root))
           ;; M1: 复制依赖声明资源到 lib/share/<libpath>/resources/
           (install-resources root deps-to-vendor)
           ;; 3) 把项目自己也铺进这个前缀:resources/ → lib/share/<name>/resources/,
@@ -212,11 +220,99 @@
             (copy-file f dst)))
         files)))
 
-  ;; ── 孤儿清理:vendor/ 下有、lock 无的目录 ──
-  (define (clean-orphans root lk opts)
+  ;; ══════════════════════════════════════════════════════════════════
+  ;; chandler 自身:**运行时门,不是依赖**(designs/12 §5)
+  ;;   manifest 写 (chandler ">=0.1.4") —— 只有版本区间,没有 URL:实体是全局前缀
+  ;;   ~/.local/share/chez 里装好的那一份(bootstrap.ss 装的 {src,<mt>})。deps 阶段
+  ;;   把它的 **runtime 子集**复制进 vendor/chandler/ 与 lib/{src,<mt>},于是下游
+  ;;   一律照常走既有路径:bake 的 (prebuilt "lib") 能解析、`chandler build` 不必
+  ;;   特判、`chandler run` 挂的还是那一对。
+  ;;
+  ;;   只复制 runtime 子集:dev-time 的那半边(cli/build/pack/install/…)是**工具**,
+  ;;   不该出现在应用的库搜索路径里,更不该进包(designs/12 §6.3)。
+  ;; ══════════════════════════════════════════════════════════════════
+
+  ;; runtime 子集 = (chandler base) umbrella 及其覆盖的 9 个库(与 chandler 自身
+  ;; manifest 的 (runtime-subset …) 一致)。pack 复用同一份定义,免得两处漂移。
+  (define chandler-runtime-sublibs
+    '(base runtime-paths hash version util fs sexp layout runtime-detector proc))
+
+  ;; rel 形如 "chandler/pack.so" / "chandler/hash.ss" → 是不是 dev-only?
+  ;; 判据与扩展名无关:嵌套(chandler/cli/main.*)一律 dev,顶层看是否在子集里。
+  ;; 注:strip-prefix 是 (strip-prefix s pre) —— 参数写反会让 sub 恒为 "chandler/",
+  ;; 于是**每个** chandler 库都被判成 dev-only(pack 的 N6 过滤器原先正是这个 bug,
+  ;; 被「应用自己的 _build 里也编了一份」掩盖着)。
+  (define (chandler-dev-only-rel? rel)
+    (and (string-prefix? "chandler/" rel)
+         (let* ([sub (strip-prefix rel "chandler/")]
+                [dot (char-index sub #\.)]
+                [stem (if dot (substring sub 0 dot) sub)])
+           (or (string-contains? stem "/")
+               (not (memq (string->symbol stem) chandler-runtime-sublibs))))))
+
+  ;; 装在前缀里的 chandler 版本:读它自己的清单快照 <prefix>/.chandler/chandler/
+  ;; manifest.ss(bootstrap.ss 装时写)。取不到 → #f,由调用方给出「去装」的话。
+  (define (installed-chandler-version prefix)
+    (let ([mpath (join-paths prefix ".chandler" "chandler" "manifest.ss")])
+      (and (file-exists? mpath)
+           (ignore-errors (manifest-version (read-manifest mpath))))))
+
+  (define (install-chandler-runtime! root range)
+    (let* ([prefix (global-prefix)]
+           [have (installed-chandler-version prefix)])
+      (unless have
+        (error 'deps
+               (format "manifest requires chandler ~s, but no chandler is installed at ~a~%  (install it: scheme --script bootstrap.ss  in the chandler repo)"
+                       range prefix)))
+      (unless (version-match? range have)
+        (error 'deps
+               (format "manifest requires chandler ~s, but ~a has ~a~%  (upgrade the installed chandler, or relax the range in manifest.ss)"
+                       range prefix have)))
+      ;; <prefix>/src/chandler/<sub>.ss → vendor/chandler/chandler/<sub>.ss
+      ;; vendor/ 是「依赖源码原样」那一层,chandler 也照此摆,故 verify/清理/阅读
+      ;; 三处都不必为它开特例。umbrella chandler.ss 不来:那是 dev facade
+      ;; (export activate…),应用要的是 (chandler base) 与各 runtime 子库。
+      (let ([src (join-paths prefix "src" "chandler")]
+            [dst (join-paths root "vendor" "chandler" "chandler")])
+        (unless (file-directory? src)
+          (error 'deps (format "~a is missing chandler's sources (reinstall chandler)" prefix)))
+        (rm-rf (join-paths root "vendor" "chandler"))
+        (copy-runtime-subset! src dst ".ss"))))
+
+  ;; 源码 → lib/src,已编译对象 → lib/<mt>(前缀里那份由同一个运行时编出,直接用)
+  (define (copy-chandler-runtime! root)
+    (let ([prefix (global-prefix)]
+          [mt (current-machine-type)])
+      (copy-runtime-subset! (join-paths root "vendor" "chandler" "chandler")
+                            (join-paths (project-libdir root) "src" "chandler")
+                            ".ss")
+      (copy-runtime-subset! (join-paths prefix mt "chandler")
+                            (join-paths (project-obj-dir root) "chandler")
+                            (string-append "." (so-ext)))
+      (copy-runtime-subset! (join-paths prefix mt "chandler")
+                            (join-paths (project-obj-dir root) "chandler")
+                            ".so")))
+
+  ;; 平铺复制 <from>/<sub><ext> —— 只取 runtime 子集,子目录(cli/test)整个不看
+  (define (copy-runtime-subset! from to ext)
+    (when (file-directory? from)
+      (for-each
+        (lambda (e)
+          (let ([p (join-paths from e)])
+            (when (and (not (file-directory? p))
+                       (string-suffix? ext e)
+                       (not (chandler-dev-only-rel? (string-append "chandler/" e))))
+              (let ([dst (join-paths to e)])
+                (ensure-parent dst)
+                (copy-file p dst)))))
+        (dir-entries from))))
+
+  ;; ── 孤儿清理:vendor/ 下有、lock 无的目录(extra-keep:非 lock 来源的合法住户)──
+  (define (clean-orphans root lk extra-keep opts)
     (let ([vd (join-paths root "vendor")])
       (when (file-directory? vd)
-        (let ([keep (map (lambda (d) (symbol->string (locked-dep-name d))) (lock-deps lk))])
+        (let ([keep (append extra-keep
+                            (map (lambda (d) (symbol->string (locked-dep-name d))) (lock-deps lk)))])
           (for-each
             (lambda (entry)
               (let ([full (join-paths vd entry)])
@@ -269,7 +365,9 @@
 
   ;; ── 库搜索路径(src/mt 拆分:lib/ 一对 (src . obj) + path 依赖源目录)──
   ;; 全局安装前缀(bake user target 落点):~/.local/share/chez;下含 src/ 与 <mt>/。
-  (define (global-prefix) (string-append (home-dir) "/.local/share/chez"))
+  ;; CHANDLER_PREFIX 覆盖(装到非默认位置、以及测试用);默认对齐 bake 的 user target。
+  (define (global-prefix)
+    (or (getenv* "CHANDLER_PREFIX") (string-append (home-dir) "/.local/share/chez")))
   ;; 全局库目录条目:一对 (~/.local/share/chez/src . ~/.local/share/chez/<mt>)。
   (define global-libdir
     (case-lambda

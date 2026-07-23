@@ -15,6 +15,35 @@
 
   (define (names root) (map car (list-deps root)))
 
+  ;; 假的全局前缀:装了 <version> 的 chandler,含 runtime 子集与 dev-only 两类库
+  (define (make-fake-chandler-prefix! version)
+    (let* ([prefix (mktmp)]
+           [src (join-paths prefix "src" "chandler")]
+           [obj (join-paths prefix (current-machine-type) "chandler")])
+      (write-text (join-paths prefix ".chandler" "chandler" "manifest.ss")
+                  (string-append "(manifest (format 1) (name \"chandler\") (version \""
+                                 version "\") (chez \">=10.0\") (srcdir \".\") (deps))"))
+      (for-each (lambda (n)
+                  (write-text (join-paths src (string-append n ".ss")) ";; runtime lib")
+                  (write-text (join-paths obj (string-append n ".so")) "OBJ"))
+                '("base" "runtime-paths" "util" "fs" "layout"))
+      (for-each (lambda (n)
+                  (write-text (join-paths src (string-append n ".ss")) ";; dev-only lib")
+                  (write-text (join-paths obj (string-append n ".so")) "OBJ"))
+                '("pack" "install" "build"))
+      (write-text (join-paths src "cli" "main.ss") ";; dev-only nested")
+      (write-text (join-paths prefix "src" "chandler.ss") ";; dev umbrella")
+      prefix))
+
+  ;; Chez 的 putenv 不能删变量,清理时以空值恢复
+  (define (with-chandler-prefix prefix thunk)
+    (let ([old (getenv "CHANDLER_PREFIX")])
+      (dynamic-wind
+        (lambda () (putenv "CHANDLER_PREFIX" prefix))
+        thunk
+        (lambda () (putenv "CHANDLER_PREFIX" (or old ""))))))
+
+
   (define-suite suite
     (install-transitive
       (parameterize ([cache-root (mktmp)])
@@ -86,6 +115,52 @@
           (write-text src "new")
           (sync-app-prefix! app)
           (assert-string= "new" (read-file dst)))))
+
+    ;; ── chandler 运行时门(designs/12 §5):不是依赖,实体取自全局前缀 ──
+    ;; 造一个假前缀:.chandler/chandler/manifest.ss(版本)+ src/chandler/*.ss +
+    ;; <mt>/chandler/*.so,其中混入 dev-only 的库,验证只有 runtime 子集被铺过来。
+    (chandler-gate-copies-runtime-subset-from-prefix
+      (parameterize ([cache-root (mktmp)])
+        (let* ([prefix (make-fake-chandler-prefix! "0.1.4")]
+               [app (make-app '() "(chandler \">=0.1.0\")")])
+          (with-chandler-prefix prefix
+            (lambda ()
+              (assert-equal 0 (install app '()))
+              ;; runtime 子集:源码进 vendor/ 与 lib/src,对象进 lib/<mt>
+              (assert-true (file-exists? (join-paths app "vendor" "chandler" "chandler" "runtime-paths.ss")))
+              (assert-true (file-exists? (join-paths app "lib" "src" "chandler" "runtime-paths.ss")))
+              (assert-true (file-exists? (join-paths app "lib" (current-machine-type) "chandler" "runtime-paths.so")))
+              (assert-true (file-exists? (join-paths app "lib" "src" "chandler" "base.ss")))
+              ;; dev-only 的一律不来(工具不该进应用的库搜索路径)
+              (assert-false (file-exists? (join-paths app "lib" "src" "chandler" "pack.ss")))
+              (assert-false (file-exists? (join-paths app "lib" (current-machine-type) "chandler" "pack.so")))
+              (assert-false (file-directory? (join-paths app "lib" "src" "chandler" "cli"))))))))
+
+    ;; 装的比区间旧 → 当场报错(expected vs actual),不静默用旧的
+    (chandler-gate-rejects-too-old-prefix
+      (parameterize ([cache-root (mktmp)])
+        (let* ([prefix (make-fake-chandler-prefix! "0.1.0")]
+               [app (make-app '() "(chandler \">=9.9\")")])
+          (with-chandler-prefix prefix
+            (lambda () (assert-raises (lambda () (install app '()))))))))
+
+    ;; 前缀里压根没有 chandler → 报「去装」,而不是静默跳过
+    (chandler-gate-requires-installed-chandler
+      (parameterize ([cache-root (mktmp)])
+        (let ([app (make-app '() "(chandler \">=0.1.0\")")])
+          (with-chandler-prefix (mktmp)
+            (lambda () (assert-raises (lambda () (install app '()))))))))
+
+    ;; vendor/chandler 不是 lock 里的依赖 —— 孤儿清理不许把它删掉
+    (chandler-vendor-survives-orphan-cleanup
+      (parameterize ([cache-root (mktmp)])
+        (let* ([prefix (make-fake-chandler-prefix! "0.1.4")]
+               [app (make-app '() "(chandler \">=0.1.0\")")])
+          (with-chandler-prefix prefix
+            (lambda ()
+              (install app '())
+              (install app '())
+              (assert-true (file-exists? (join-paths app "vendor" "chandler" "chandler" "runtime-paths.ss"))))))))
 
     (dirty-refuse
       (parameterize ([cache-root (mktmp)])
