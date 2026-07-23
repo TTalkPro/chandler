@@ -9,6 +9,7 @@
         (prefix (chandler test fs) fs:)
         (prefix (chandler test sexp) sexp:)
         (prefix (chandler test layout) layout:)
+        (prefix (chandler test runtime-paths) runtime-paths:)
         (prefix (chandler test version) version:)
         (prefix (chandler test manifest) manifest:)
         (prefix (chandler test lock) lock:)
@@ -21,7 +22,8 @@
         (prefix (chandler test registry) registry:)
         (prefix (chandler test build) build:)
         (prefix (chandler test pack) pack:)
-        (prefix (chandler test selfinstall) selfinstall:))
+         (prefix (chandler test selfinstall) selfinstall:)
+         (prefix (chandler test base) base:))
 
 (define all-suites
   (list
@@ -29,6 +31,7 @@
     (cons 'fs fs:suite)
     (cons 'sexp sexp:suite)
     (cons 'layout layout:suite)
+    (cons 'runtime-paths runtime-paths:suite)
     (cons 'version version:suite)
     (cons 'manifest manifest:suite)
     (cons 'lock lock:suite)
@@ -41,6 +44,7 @@
     (cons 'registry registry:suite)
     (cons 'build build:suite)
     (cons 'pack pack:suite)
-    (cons 'selfinstall selfinstall:suite)))
+    (cons 'selfinstall selfinstall:suite)
+    (cons 'base base:suite)))
 
 (exit (if (run-suites all-suites) 0 1))
