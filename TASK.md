@@ -116,6 +116,31 @@ install.sh / install.ps1    薄壳:运行时发现 → chandler install-self(POS
 - [x] **闭环验证**:`bake build → test → install → uninstall` 全通(bake 0.1.0 跑在 skiff 0.1.0 上);`bake install` 把 `(chandler …)` 库树装进 `~/.local/share/chez/lib`,`(import (chandler lock/registry/…))` 从安装位置可解析——正是 bake 自身依赖的库面。**skiff 跑 · chandler 管依赖 · bake 装库** 三工具互相支撑,生态闭环达成。
 - [x] **自安装改为基于 `bake install`**:`chandler install-self` 去掉自写的库树拷贝(`install-tree!`),库树完全委托 `bake install`/`bake install-global`(读本仓 recipe.ss 的 install-task),chandler 只补运行时发现启动器;`uninstall-self` 据 bake 的 `.bake-install/chandler.files` 清单删库(不依赖源码)。`recipe.ss` 增 `install-global`/`uninstall-global`(target global)。端到端:`./install.sh`(库经 bake)→ 安装的 chandler 在 skiff 上管理项目 → `uninstall-self` 零残留,全通。
 
+## 阶段 11 — deploy loader 统一(design 10)— **已完成**
+
+- [x] **11.1-11.7 (L0-L6)** deploy loader 移交 chandler:`bootstrap.ss` runtime-aware(stock+skiff 同一份)、`skiff --app` 删除、sysexits + s-expr 诊断、`verify-pack --target`、pack-spec 更新。详见 [10](designs/10-deploy-loader.md)。
+
+## 阶段 12 — runtime-paths:统一资源定位 API(design 11)— **已完成**
+
+- [x] **12.1 (M0)** `chandler/runtime-paths.ss`:`app-root` / `app-resource-path` / `find-app-resource-path`(env `APP_ROOT` + 路径安全校验)。
+- [x] **12.2 (M1)** install 资源复制 → `lib/share/<lib>/resources/` + resolve 传播 `resources` 从 dep manifest → lock。
+- [x] **12.3 (M2)** pack `copy-share!` 从 `lib/share/` → `<pack>/share/`(lock 驱动,不套 `.so` filter)。
+- [x] **12.4 (M3)** `lib-resource-path` / `find-lib-resource-path`:`(library-object-filename)` N+1 反推 prefix + source fallback + `ignore-errors` 容错。
+- [x] **12.5 (M4)** manifest/lock schema `(resources ...)` simple + multi-lib 形 + 校验。
+- [x] **12.6 (M5)** `define-resource-path-resolver` 宏(app + quoted libref 两种 wrapper)。
+- [x] **12.7 (M6)** 文档:TASK.md 更新 + 设计标注完成。
+
+## 阶段 13 — chandler 分层:dev-time 工具 + runtime 公共基础设施(design 12)— **已完成**
+
+- [x] **13.1 (N0)** design 12 文档落地。
+- [x] **13.2 (N1)** rename `(chandler runtime)` → `(chandler runtime-detector)`(文件 `runtime.ss` → `runtime-detector.ss` + 9 处 import 同步)。
+- [x] **13.3 (N2)** `(chandler base)` umbrella re-export 9 runtime subset 库(runtime-paths/hash/version/util/fs/sexp/layout/runtime-detector/proc)。
+- [x] **13.4 (N3)** manifest `(runtime-subset ...)` 字段 + lock 快照。
+- [x] **13.5 (N4)** `chandler init` 模板注入 `(deps (chandler ...))`(soft 强制,自举例外)。
+- [x] **13.6 (N5)** `chandler install` warning(diagnostic)+ `--strict` 拒绝(hard)。
+- [x] **13.7 (N6)** pack runtime-only filter:chandler 作为 transitive dep 时跳过 dev-only 子库(pack/install/build/cli 等),只复制 runtime-subset + base umbrella。
+- [x] **13.8 (N7)** 文档:TASK.md 更新 + 设计标注完成。
+
 ---
 
 ## 里程碑
@@ -126,6 +151,9 @@ install.sh / install.ps1    薄壳:运行时发现 → chandler install-self(POS
 | M2 | 3-5 | `init→add→install→verify` 对本地 git 仓端到端跑通 |
 | M3 | 6-7 | `chandler run app.ss` 激活依赖并运行;完整 CLI |
 | M4 | 8-10 | 全局安装/卸载、bake 排单(mock)、install.sh 自举 |
+| **M5** | **11** | deploy loader 统一(已完成)|
+| **M6** | **12** | runtime-paths:app/lib 资源定位 API + `<prefix>/share/` 层(已完成)|
+| **M7** | **13** | chandler 分层:`(chandler base)` umbrella + 强制依赖 + runtime-only filter(已完成)|
 
 - [x] **repl 命令**:交互 shell,自动挂库路径(规则见下,与 run/exec/setup 统一)。默认运行时跟随 chandler 当前所在(skiff/chez),`--runtime` 可覆盖。
 
@@ -173,13 +201,13 @@ install.sh / install.ps1    薄壳:运行时发现 → chandler install-self(POS
 
 ## 进度
 
-**全部 11 个阶段(0–10)完成,M1–M4 全部达成。** 环境:Chez 10.4.1 / ta6le。
+**阶段 0-13 全部完成,M1-M7 全部达成。** 环境:Chez 10.4.1 / ta6le。
 
-- 测试:`tests/run-tests.sps` **138 用例全绿**(16 个 suite:util/fs/sexp/layout/version/manifest/lock/proc/fetch/resolve/install/activate/cli/registry/build/selfinstall)。**`scheme`、`petite`、已部署的 `skiff` 三运行时均 138/138**——chandler 自身即跑在 skiff 上(启动器能力探测通过后优先 skiff)。src/mt 拆分对齐见本节顶部 2026-07-22 条目。
+- 测试:`tests/run-tests.sps` **219 用例全绿**(18 个 suite:util/fs/sexp/layout/version/manifest/lock/proc/fetch/resolve/install/activate/cli/registry/build/pack/selfinstall/**base**/**runtime-paths**)。**`scheme`、`petite`、已部署的 `skiff` 三运行时均全绿**。
 - **skiff 端到端验证**:skiff 应用(manifest 声明 `(skiff …)`)经 chandler-on-skiff 走 `init→add→install→verify→run` 全通;`chandler run` 依 manifest 自动选运行时(skiff-only→skiff、chez→chez),应用运行期自证落在正确运行时。
 - 端到端验证:`init→add→install→verify→list→tree→run→exec` 经二进制跑通;`(activate)` 真实挂载并 import 依赖;全局 `install/uninstall/list/doctor`;`build` 排单经 mock bake + 授权哈希绑定;`install-self` 装 `~/.local` + 自卸载自洽(启动器 skiff 优先运行时发现)。
-- 实现的库:`(chandler)` umbrella + 底座 `util/fs/hash/proc` + `sexp/layout/version/manifest/lock/fetch/resolve/install/registry/runtime/activate/build/cli.{args,commands,main,selfinstall}`;测试夹具 `(chandler test fixtures)`。
-- 对外共享面(bake 反向依赖):`(chandler lock/registry/layout/sexp)` 导出干净,不 import bake。
+- 实现的库:`(chandler)` umbrella + 底座 `util/fs/hash/proc` + `sexp/layout/version/manifest/lock/fetch/resolve/install/registry/runtime-detector/activate/build/pack` + **`runtime-paths`**(资源定位)+ **`base`**(runtime umbrella)+ `cli.{args,commands,main,selfinstall}`;测试夹具 `(chandler test fixtures)`。
+- 对外共享面(bake 反向依赖):`(chandler lock/registry/layout/sexp)` 导出干净,不 import bake。**(chandler base)** umbrella 对所有 lib/app 提供 runtime 公共能力(资源定位/hash/版本/路径/运行时探测)。
 
 ### 实现期发现/决定(偏离或补充设计处)
 
