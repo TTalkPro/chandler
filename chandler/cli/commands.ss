@@ -339,8 +339,7 @@
           [all (lambda (_) #t)])   ; 源码/对象全拷(对象层暂无 ext 过滤;registry 按包兜)
       (for-each
         (lambda (d)
-          (let* ([src-root (srcdir-join (vendor-dir root (locked-dep-name d))
-                                        (or (locked-dep-srcdir d) "."))]
+          (let* ([src-root (vendor-dir root (locked-dep-name d))]
                  [obj (join-paths src-root "_build" mt)])
             ;; P7:改调共享 copy-tree!。累积前缀 → skip-existing + warn。
             ;; 别包拥有的文件由 registry check-conflicts 兜硬错;warn 抓依赖间同名悄悄丢。
@@ -587,10 +586,10 @@
                                 script-args)
                         (list (cons 'env (env-with-dotenv root flags (app-root-env root))))))))
 
-  ;; **dev 期不设 APP_ROOT**(C0,2026-07-24)。
-  ;;
-  ;; 它现在只服务生成的 native-loader 的候选 1(`$APP_ROOT/<mt>/<libpath>/native/`)。
-  ;; 而 C0 之后 dev 期的 native 分散在各 `_vendor/<dep>/<srcdir>/_build/<mt>/` 里,
+   ;; **dev 期不设 APP_ROOT**(C0,2026-07-24)。
+   ;;
+   ;; 它现在只服务生成的 native-loader 的候选 1(`$APP_ROOT/<mt>/<libpath>/native/`)。
+   ;; 而 C0 之后 dev 期的 native 分散在各 `_vendor/<dep>/_build/<mt>/` 里,
   ;; **没有单一前缀能覆盖** —— 硬造一个只会让候选 1 恒 miss,等于留一条永远走不通的
   ;; 分支。loader 的候选 2(扫 `(library-directories)` 各条目的 obj 侧)恰好命中:
   ;; per-dep 对的 obj 侧正是 native 落点。资源定位(C1)同理已不读它。

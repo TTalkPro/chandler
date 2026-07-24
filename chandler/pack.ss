@@ -287,8 +287,7 @@
 
   ;; 一个依赖在 _vendor 里的源码根(= 它的库搜索根,也是 `chandler build` 的 cwd)
   (define (dep-src-root project d)
-    (srcdir-join (vendor-dir project (locked-dep-name d))
-                 (or (locked-dep-srcdir d) ".")))
+    (vendor-dir project (locked-dep-name d)))
 
   ;; 该依赖的编译产物树:它自己的 _build/<mt>/
   (define (dep-obj-dir project d)

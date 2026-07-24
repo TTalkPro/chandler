@@ -25,7 +25,7 @@
 
   ;; 已选条目(内部;含 depth,便于裁决与调试)
   (define-record-type rentry
-    (fields name source-kind source-loc pin-kind pin-val rev srcdir deps natives scope depth path? resources))
+    (fields name source-kind source-loc pin-kind pin-val rev deps natives scope depth path? resources))
 
   ;; ── 公共入口:默认 git provider ──
   ;; opts: (production . #t) (root-dir . "path")
@@ -34,7 +34,7 @@
       (resolve/provider root-mf (git-provider (alist-ref o 'root-dir ".")) o)))
 
   ;; ── 核心算法(provider 注入)──
-  ;; provider: (name sk sl pk pv) → (values rev srcdir child-deps natives path? resources)
+  ;; provider: (name sk sl pk pv) → (values rev child-deps natives path? resources)
   ;;   child-deps = manifest dep record 列表;natives = symbol 列表;rev=#f 表 path(不入 lock)
   (define (resolve/provider root-mf provider opts)
     (let* ([production? (alist-ref opts 'production #f)]
@@ -83,17 +83,16 @@
   ;; ── 解析单个 spec → rentry ──
   (define (resolve-one spec provider overrides warn!)
     (let ([name (rspec-name spec)])
-      (let-values ([(rev srcdir child-deps natives path? resources)
+      (let-values ([(rev child-deps natives path? resources)
                     (provider name (rspec-source-kind spec) (rspec-source-loc spec)
                               (rspec-pin-kind spec) (rspec-pin-val spec))])
-        ;; override 的 metadata(srcdir/deps/natives)替换上游
+        ;; override 的 metadata(deps/natives)替换上游
         (let* ([ov (assq name overrides)]
-               [srcdir* (or (ov-field ov 'srcdir) srcdir)]
                [deps*   (if (ov-has? ov 'deps) (parse-ov-deps ov) child-deps)]
                [natives* (if (ov-has? ov 'natives) (ov-natives ov) natives)])
           (make-rentry name (rspec-source-kind spec) (rspec-source-loc spec)
                        (rspec-pin-kind spec) (rspec-pin-val spec)
-                       rev srcdir* deps* natives* (rspec-scope spec) (rspec-depth spec) path?
+                       rev deps* natives* (rspec-scope spec) (rspec-depth spec) path?
                        resources)))))
 
   ;; ── 冲突裁决(R1-R4);BFS 下 existing 恒 depth ≤ new,故「首见者胜」──
@@ -136,7 +135,6 @@
       (rentry-source-kind e) (rentry-source-loc e)
       (or (rentry-pin-kind e) 'rev) (or (rentry-pin-val e) (rentry-rev e))
       (rentry-rev e)
-      (rentry-srcdir e)
       (filter-nonpath-names (rentry-deps e))    ; deps 字段:子依赖名(仅名)
       (rentry-natives e)
        (rentry-scope e)
@@ -172,24 +170,24 @@
                  [content (show-file sl rev "chandler-manifest.ss")])
             (if content
                 (let ([mf (parse-manifest (read-datum-string content))])
-                  (values rev (manifest-srcdir mf) (manifest-deps mf)
+                  (values rev (manifest-deps mf)
                           (map native-name (manifest-native mf)) #f
                           (manifest-resources mf)))
-                (values rev "." '() '() #f #f)))]     ; 裸库默认
+                (values rev '() '() #f #f)))]     ; 裸库默认
         [(path)
          (let* ([dir (join-paths root-dir sl)]
                 [mpath (join-paths dir "chandler-manifest.ss")])
            (if (file-exists? mpath)
                (let ([mf (read-manifest mpath)])
-                  (values #f (manifest-srcdir mf) (manifest-deps mf)
+                  (values #f (manifest-deps mf)
                           (map native-name (manifest-native mf)) #t
                           (manifest-resources mf)))
-               (values #f "." '() '() #t)))]
+               (values #f '() '() #t)))]
         [(prebuilt)
          ;; v2 stub:prebuilt source 暂不真正 fetch(留给 v2.4 实现)。
          ;; 返回空闭包 + 默认值,让 resolve 把它记进 chosen 但不 git clone。
          ;; 多版本语义(designs/02 §多版本):每 app 的 lock 独立 resolve,跨 app 不冲突。
-         (values #f "." '() '() #f #f)]
+         (values #f '() '() #f #f)]
         [else (error 'git-provider "unknown source kind" sk)])))
 
   (define (resolve-rev url pk pv)

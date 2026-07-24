@@ -100,7 +100,7 @@
   (define (build-one-dep root d verbose?)
     (let* ([name   (symbol->string (locked-dep-name d))]
            [vdir   (vendor-dir root (locked-dep-name d))]
-           [srcdir (srcdir-join vdir (or (locked-dep-srcdir d) "."))])
+           [srcdir vdir])
       (unless (file-directory? srcdir)
         (error 'build (format "~a not vendored; run `chandler deps` first" srcdir)))
       (build-tree!
@@ -125,8 +125,7 @@
 
   ;; 一个依赖的预构建根 (src . obj):只在它已经有 _build/<mt> 时才算(否则 #f)。
   (define (dep-prebuilt-root root u)
-    (let* ([src (srcdir-join (vendor-dir root (locked-dep-name u))
-                             (or (locked-dep-srcdir u) "."))]
+    (let* ([src (vendor-dir root (locked-dep-name u))]
            [obj (join-paths src "_build" (current-machine-type))])
       (and (file-directory? obj) (prebuilt src obj))))
 

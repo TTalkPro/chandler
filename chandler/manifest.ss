@@ -13,7 +13,7 @@
           manifest-resources manifest-runtime-subset
           manifest-app app? app-entry app-main
           dep? dep-name dep-source-kind dep-source-loc
-          dep-pin-kind dep-pin-val dep-srcdir
+          dep-pin-kind dep-pin-val
           native? native-name native-source-kind native-source-loc
           native-pin-kind native-pin-val native-build native-chez-api? native-produces
           supported-format builtin-prefix?)
@@ -43,7 +43,7 @@
 
   ;; dep:source-kind ∈ {git,path};pin-kind ∈ {tag,rev,branch,version,#f}
   (define-record-type dep
-    (fields name source-kind source-loc pin-kind pin-val srcdir))
+    (fields name source-kind source-loc pin-kind pin-val))
 
   (define-record-type native
     (fields name source-kind source-loc pin-kind pin-val build chez-api? produces))
@@ -164,7 +164,7 @@
           [fs   (cdr item)])
       (let-values ([(sk sl) (extract-source fs name)]
                    [(pk pv) (extract-pin fs name)])
-        (make-dep name sk sl pk pv (extract-srcdir fs)))))
+        (make-dep name sk sl pk pv))))
 
   (define (extract-source forms who)
     (let ([git       (find-tagged forms 'git)]

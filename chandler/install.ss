@@ -344,7 +344,7 @@
   ;; 资源同理:各依赖的 <srcdir>/resources/<libpath>/ 被 resource-path 的 src 侧
   ;; 扫描直接读到,不必先拷进某个前缀。
   (define (dep-src-dir root d)
-    (srcdir-join (vendor-dir root (locked-dep-name d)) (or (locked-dep-srcdir d) ".")))
+    (vendor-dir root (locked-dep-name d)))
 
   (define (dep-pair root d)
     (let ([src (dep-src-dir root d)])

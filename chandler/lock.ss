@@ -1,7 +1,7 @@
 #!chezscheme
 ;;; chandler/lock.ss --- 读写 manifest.lock + 拓扑序(designs/02 §2, 03 §3-4)
 ;;;
-;;; lock 是机器生成的可复现之源:每依赖记确切 rev + 来源 + pin + srcdir + deps + natives。
+;;; lock 是机器生成的可复现之源:每依赖记确切 rev + 来源 + pin + deps + natives。
 ;;; canonical 写(字典序 + 固定缩进,来自 (chandler sexp))保证「同输入 → 同字节」。
 ;;; bake 反向依赖本库读 lock 排 native/编译序(designs/07 §5)。
 
@@ -9,7 +9,7 @@
   (export make-locked-dep locked-dep? locked-dep-name
           locked-dep-source-kind locked-dep-source-loc
           locked-dep-pin-kind locked-dep-pin-val
-          locked-dep-rev locked-dep-srcdir locked-dep-deps locked-dep-natives
+          locked-dep-rev locked-dep-deps locked-dep-natives
           locked-dep-scope locked-dep-resources
           make-lock lock? lock-format lock-manifest-sha256 lock-chandler lock-deps
           lock->datum datum->lock write-lock read-lock
@@ -25,7 +25,7 @@
   ;; resources:designs/11 §6 标准化快照 —— #f 表示无声明,否则为 ((libref-list . path) ...)
   ;; M1/M2 才会从 manifest resources 字段填入,目前 resolve 路径传 #f。
   (define-record-type locked-dep
-    (fields name source-kind source-loc pin-kind pin-val rev srcdir
+    (fields name source-kind source-loc pin-kind pin-val rev
             deps natives scope resources
             provenance))   ; v2:记录来源详情(git rev 字符串 | prebuilt 列表 | #f)
 
@@ -50,7 +50,6 @@
        (source (,(locked-dep-source-kind d) ,(locked-dep-source-loc d)))
        (pin (,(locked-dep-pin-kind d) ,(locked-dep-pin-val d)))
        (rev ,(locked-dep-rev d))
-       (srcdir ,(locked-dep-srcdir d))
        (deps ,@(locked-dep-deps d))
        (natives ,@(locked-dep-natives d))
        ,@(if (eq? 'dev (locked-dep-scope d)) '((scope dev)) '())
@@ -81,7 +80,6 @@
         (and src (car src)) (and src (cadr src))
         (and pin (car pin)) (and pin (cadr pin))
         (field-ref b 'rev)
-        (or (field-ref b 'srcdir) ".")
         (field-ref* b 'deps)
         (field-ref* b 'natives)
         (if (equal? '(dev) (field-ref* b 'scope)) 'dev 'runtime)
