@@ -1,6 +1,6 @@
 # Chandler 实现任务清单
 
-> 本仓库正在**吸收 bake**(阶段 B 进行中),吸收后 chandler 成为包管理器 + 构建器。阶段 B 完成前,编译动作仍由 bake 子进程执行(以 mock bake 测试,见阶段 10)。
+> bake 已全吸收进 chandler(P6 阶段 B1–B6 完成):chandler 现在是**包管理器 + 构建器**,编译在进程内完成(不再 spawn bake)。B7(删 bake 仓)已取消。
 >
 > **资源定位 + per-dep 库路径 + .env** 的后续架构见 [design 14](designs/14-unified-resources.md)(统一 `resource-path`、dev 期无 `lib/`、`.env` 项目配置),替代原 P6 阶段 C 的 assembled + CHANDLER_DEV_ROOT 方案。
 >
@@ -40,10 +40,9 @@ chandler/
 bin/chandler                开发期入口 wrapper(运行时发现:skiff 优先)
 tests/
   run-tests.sps             汇总跑 chandler/test/*
-  mock-bake.sh              build 测试用的 mock bake
   powershell-run.sh         Windows(.ps1)启动器验收:渲染后用 pwsh 实跑
 manifest.ss  manifest.lock  Chandler 自身依赖清单(自举:零外部依赖)
-recipe.ss                   bake 构建描述(另仓 bake 消费)
+chandler-tasks.ss           chandler 自身的构建任务描述(`chandler make` 消费)
 install.sh / install.ps1    薄壳:运行时发现 → chandler install-self(POSIX / Windows)
 ```
 
@@ -155,6 +154,8 @@ install.sh / install.ps1    薄壳:运行时发现 → chandler install-self(POS
 | **M5** | **11** | deploy loader 统一(已完成)|
 | **M6** | **12** | runtime-paths:app/lib 资源定位 API + `<prefix>/share/` 层(已完成)|
 | **M7** | **13** | chandler 分层:`(chandler base)` umbrella + 强制依赖 + runtime-only filter(已完成)|
+| **M8** | **P6-B** | bake 全吸收:chandler = 包管理器 + 构建器(进程内编译,已完成)|
+| **M9** | **BUG-1/P7** | pack 编译实例一致性 + install/pack 物化层重用(已完成)|
 
 - [x] **repl 命令**:交互 shell,自动挂库路径(规则见下,与 run/exec/setup 统一)。默认运行时跟随 chandler 当前所在(skiff/chez),`--runtime` 可覆盖。
 
@@ -202,13 +203,17 @@ install.sh / install.ps1    薄壳:运行时发现 → chandler install-self(POS
 
 ## 进度
 
-**阶段 0-13 全部完成,M1-M7 全部达成。** 环境:Chez 10.4.1 / ta6le。
+**阶段 0-13 全部完成,M1-M7 全部达成;BUG-1 / P7 / `--prefix` 修复完成。** 环境:Chez 10.4.1 / ta6le。
 
-- 测试:`tests/run-tests.sps` **259 用例全绿**(21 个 suite:util/fs/sexp/layout/version/manifest/lock/proc/fetch/resolve/install/activate/cli/registry/build/pack/base/runtime-paths/**task-engine**/**miniregex**/**recipe**)。**`scheme`、`petite`、已部署的 `skiff` 三运行时均全绿**。
-- **skiff 端到端验证**:skiff 应用(manifest 声明 `(skiff …)`)经 chandler-on-skiff 走 `init→add→install→verify→run` 全通;`chandler run` 依 manifest 自动选运行时(skiff-only→skiff、chez→chez),应用运行期自证落在正确运行时。
-- 端到端验证:`init→add→install→verify→list→tree→run→exec` 经二进制跑通;`(activate)` 真实挂载并 import 依赖;全局 `install/uninstall/list/doctor`;`build` 排单经 mock bake + 授权哈希绑定;`install-self` 装 `~/.local` + 自卸载自洽(启动器 skiff 优先运行时发现)。
-- 实现的库:`(chandler)` umbrella + 底座 `util/fs/hash/proc` + `sexp/layout/version/manifest/lock/fetch/resolve/install/registry/runtime-detector/activate/build/pack` + **`runtime-paths`**(资源定位)+ **`base`**(runtime umbrella)+ `cli.{args,commands,main,selfinstall}`;测试夹具 `(chandler test fixtures)`。
-- 对外共享面(bake 反向依赖):`(chandler lock/registry/layout/sexp)` 导出干净,不 import bake。**(chandler base)** umbrella 对所有 lib/app 提供 runtime 公共能力(资源定位/hash/版本/路径/运行时探测)。
+- 测试:`tests/run-tests.sps` **363 用例全绿**(`scheme`/`petite`/`skiff` 三运行时)。suite:util/fs/sexp/layout/version/manifest/lock/proc/fetch/resolve/install/activate/cli/registry/build/pack/base/runtime-paths/task-engine/miniregex/recipe/import-graph/compile/native-build/env/cli-bake/cli-make。
+- **bake 全吸收**(P6 阶段 B1–B6):编译引擎整体搬进 chandler dev-time 层,`chandler build`/`chandler make` 进程内编译(不再 spawn bake);bake CLI 表面合入 `chandler bake [-f/-T/-A/-P/-j/-n/-c/-q/-t]`。B7(删 bake 仓)已取消,D1/D2 待重新评估(见下)。
+- **C0–C5 完成**:per-dep `(src . obj)` pairs、`_vendor/` 替代汇总 `lib/`、统一 `resource-path`(扫 library-directories 两侧,去 `APP_ROOT`)、`.env`(run/repl/env 消费,刻意不碰 build/deps/install 保可复现)、资源落 `src/resources/<ns>/`、`APP_ROOT` 即库前缀。
+- **BUG-1 修复**(2026-07-24):pack 运行期"不同编译实例"——根因是 Chez R6RS 语义(`library-list` 已加载库优先于 `library-directories`,chandler 自己在跑时 `(chandler …)` 已在内存),改为 copy CHANDLER_HOME 对象(= 内存实例的物理文件)而非就地重编。端到端 clean-env 启动 OK。
+- **P7 物化层重用**(2026-07-24):提取共享 `copy-tree!` 原语(参数化 `skip-dirs`/`file-filter`/`policy`/`warn?`),消除 install/pack 三处树拷贝重复(`merge-tree!`/`copy-obj-tree!`/`copy-dep-trees!` 内层);补 `merge-tree!` 静默 skip 的 latent bug(现打警告)。事务层(registry vs fresh-dir)不统一。
+- **`--prefix` 修复**(2026-07-24):`target-libdir` 接 `--prefix=DIR`(原先只认 `--system`),优先级 `--prefix > --system > --user`。
+- 端到端:`init→deps→build→pack` 全链路经 `dist/bin/chandler` 跑通;pack 产物 clean-env(`env -i`)启动 + 整包搬走仍工作 + `verify-pack --target` 全 ok。
+- 实现的库:`(chandler)` umbrella + 底座 `util/fs/hash/proc` + 域模块 `sexp/layout/version/manifest/lock/fetch/resolve/install/registry/runtime-detector/activate/build/pack/runtime-paths/base/env` + dev-time 编译引擎 `task-engine/recipe/miniregex/import-graph/compile/native-build` + `cli.{args,commands,main,bake}`;测试夹具 `(chandler test fixtures)`。
+- 对外共享面:`(chandler base)` umbrella 对 lib/app 提供 runtime 公共能力(资源定位/hash/版本/路径/运行时探测);`(chandler lock/registry/layout/sexp)` 导出干净,不 import bake。
 
 ### 实现期发现/决定(偏离或补充设计处)
 
@@ -363,7 +368,7 @@ $APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
 | B6a | **`chandler build` 改进程内编译**(不再 spawn bake);`chandler deps/build/run` 在无 bake 的环境全通 | ✅ 已完成 | `chandler/build.ss`、`chandler/cli/commands.ss` |
 | B6b | **`recipe.ss` 变可选**:没有它就从 manifest 推导构建((name)/(srcdir)/(native …)) | ✅ 已完成 | `chandler/build.ss` |
 | B6c | bake CLI 表面合入:`chandler bake [-f/-T/-A/-P/-j/-n/-c/-q/-t]`(自带 argv 语法);`bake init` **不搬** | ✅ 已完成 | `chandler/cli/bake.ss`(新)、`chandler/cli/main.ss` |
-| B7 | 删除 bake 仓;统一一套 bootstrap + 启动器;skiff-demo 端到端 | 🔲 待实现 | 删 `/home/david/workspace/bake`;`bootstrap.ss` |
+| ~~B7~~ | *(已取消)* | — | — |
 
 **执行约定(2026-07-24)**:阶段 B **只从 bake 仓读取搬运,不改 bake 仓** —— 能力吸收完即 B7 删仓,给作废物打补丁是纯浪费。故 A2 记的「bake 侧保守删改」到此为止,不再有 bake 侧改动。
 
@@ -450,7 +455,7 @@ $APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
 | C3 | `.env` 读取模块(`chandler/env.ss`);`run`/`repl`/`env` 消费(**不碰 build/deps/install**,保住可复现) | P3 | ✅ 已完成 | `chandler/env.ss`(新)、`chandler/cli/{commands,args,main}.ss` |
 | C4 | install 落点:resources → `src/resources/<namespace>/`(替代 `share/<namespace>/resources/`) | P5 | ✅ 已完成 | `chandler/layout.ss`、`chandler/install.ss`、`chandler/runtime-paths.ss`、`chandler/cli/commands.ss` |
 | C5 | pack 输出 resources 在 `src/resources/<ns>/`(「pack 来源改 `_vendor/`」那半依赖未采纳的 C0,未做) | P6 | ✅ 已完成 | `chandler/pack.ss` |
-| C6 | 文档 + skiff-demo 迁移 + `chandler init` 模板加 `.env` 骨架 | 🟡 skiff-demo 已迁移;本仓 README + init 模板待做 | 跨仓 `skiff-demo/*`;`README.md`、`chandler/cli/commands.ss` |
+| C6 | 文档 + skiff-demo 迁移 + `chandler init` 模板加 `.env` 骨架 | ✅ 已完成(skiff-demo 早期迁移;本仓 README 对齐新模型 + init .env 骨架 + designs/11 C1 反转标注) | 跨仓 `skiff-demo/*`;`README.md`、`chandler/cli/commands.ss`、`designs/11-runtime-paths.md` |
 
 **C4/C5 实现期决定(2026-07-24)**:
 
@@ -599,39 +604,57 @@ $APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
 - ~~C4 `run`/`repl` 自动触发 assembled~~ — 消除:run/repl 直接用 per-dep pairs,无 assembled 可触发。
 - ~~C5 `CHANDLER_DEV_ROOT`~~ — 消除:src-scan 直接从 `<src>/resources/` 读,无需 env var。
 
-#### 阶段 D — 收尾(bootstrap/launcher 合一,可同期 B7)
+#### 阶段 D — 收尾(bootstrap/launcher 合一)— ✅ 无需(bake 已作废)
+
+> **2026-07-24 确认:bake 仓已作废。** chandler 自含编译引擎(B6a 进程内编译),`bootstrap.ss` 已是唯一安装器,启动器也只有 chandler 自己的一套。D1/D2 的"两套合一"前提不成立——没有第二套要合。标记过时。
 
 | # | 任务 | 状态 | 文件 |
 |---|------|------|------|
-| D1 | 两套 bootstrap 合一(chandler `bootstrap.ss` 统一安装编译引擎 + 包管理) | 🔲 待实现 | `bootstrap.ss` |
-| D2 | 两套启动器合一(不再有独立 bake 启动器) | 🔲 待实现 | `bootstrap.ss` |
+| D1 | 两套 bootstrap 合一(chandler `bootstrap.ss` 统一安装编译引擎 + 包管理) | ✅ 过时(bake 作废,无第二套)| `bootstrap.ss` |
+| D2 | 两套启动器合一(不再有独立 bake 启动器) | ✅ 过时(bake 作废)| `bootstrap.ss` |
 | D3 | `chandler init` 生成 `chandler-tasks.ss`(2026-07-24 反转:改为**主动生成**一份起手模板,含 build/test 任务 + default-task);编译入口按 name/app-entry;已有则不覆盖 | ✅ 已完成 | `chandler/cli/commands.ss`、`chandler/cli/args.ss` |
 
 **发布节奏**:A 已完成(消灭漂移);B 逐模块吸收(B1–B5 串行,B6–B7 一次合仓);C0–C3 可先于 B 落地(per-dep pairs + 统一 resource-path + .env,过渡期 bake 子进程仍跑);C4–C6 依赖 B4(进程内编译);D 是 B7 延伸。
 
-### P2 — 运行时依赖 vs 开发时依赖分离(dev-deps)
+### P2 — dev-deps 分离 — ✅ 已取消(2026-07-24)
 
-当前 `(deps ...)` 和 `(dev-deps ...)` 区分不严格。chandler 本身应作为 runtime dep(runtime subset 隐式),bake 等纯开发工具应放 `(dev-deps ...)`。
+> 决定:不引入 `(dev-deps …)` 区分。需要的开发工具直接用全局装的,不进项目 manifest。简化模型——manifest 只有 `(deps …)`(运行时依赖);开发工具是**环境**的事,不是**依赖**的事。
+
+### P3 — app 全局安装时创建命令行入口 — **已完成(2026-07-24)**
+
+`chandler install` 装 app(manifest 有 `(app (entry …) (main …))`)时,生成命令行入口到 bin/,装完即可裸名调用。**用本机运行时**(不打包 binary/boot——那是 pack 的事)。
+
+**重新规划**(2026-07-24):install 与 pack 的 launcher 根本不同——pack 自包含(自带 binary+boot+bootstrap.ss 校验层),install 用本机运行时(只挂全局前缀 + 跑极简 runner)。故 install 的 launcher 对称于 **chandler 自己的启动器**(bootstrap.ss 生成的,也是"本机运行时 + 挂前缀"模式),而非 pack 的自包含 launcher。
+
+**两样产物**:
+1. **app runner**(`<prefix>/.chandler/<app>/run.sps`):极简 `(import (<entry>)) (<main> (cdr (command-line)))`——pack 的 bootstrap.ss 末尾同构,但无 target 校验(pack 独有,install 环境已知)、无 native 预扫(build 生成的 native-loader 自加载)。
+2. **launcher**(`~/.local/bin/<app>` POSIX / `%LOCALAPPDATA%\chez\bin\<app>.ps1` Windows):本机运行时发现(skiff 优先) + 挂全局前缀 `src::<mt>` 对 + `--program runner.sps`。
+
+**方案 A**:bootstrap.ss 的 launcher 模板**不提取**(保自含红线——designs/08,bootstrap 须零 chandler 依赖防库坏了也能装)。launcher 模板在 chandler 里重写一份,接受少量重复。
+
+**前置 gotcha 已解决**:C1 后资源用 `resource-path`(库名),不靠 `app-name`/唯一 manifest → 全局前缀装多 app 不冲突。
 
 | # | 任务 | 状态 | 文件 |
 |---|------|------|------|
-| 1 | `chandler init` 模板:chandler 留 `(deps ...)`,bake 放 `(dev-deps ...)` | 🔲 待实现 | `chandler/cli/commands.ss` |
-| 2 | `chandler install` 全局安装:只装 `(deps ...)`(runtime),不装 `(dev-deps ...)` | 🔲 待实现 | `chandler/cli/commands.ss` |
-| 3 | `chandler pack`:只打 `(deps ...)`(部署态不需要 dev-deps) | 🔲 待实现 | `chandler/pack.ss` |
-| 4 | 全局 install 也用 `chandler-dev-only-so?` filter(只装 runtime subset) | 🔲 待实现 | `chandler/cli/commands.ss` |
+| 1 | `cmd-install` 检测 `(app …)` → 生成 runner(`.chandler/<app>/run.sps`)+ launcher | ✅ 已完成 | `chandler/cli/commands.ss` |
+| 2 | launcher 模板(sh + ps1):本机运行时发现(CHANDLER_RUNTIME/SKIFF/SCHEME + skiff 优先)+ 挂前缀对 + `--program runner` | ✅ 已完成 | `chandler/cli/commands.ss` |
+| 3 | 落点:POSIX `~/.local/bin/<app>`(wrapper 脚本);Windows `%LOCALAPPDATA%\chez\bin\<app>.ps1` | ✅ 已完成 | `chandler/cli/commands.ss`、`chandler/registry.ss`(`default-*-bindir`) |
+| 4 | `cmd-uninstall` 同步删 launcher + runner(runner 在 `.chandler/<app>/` 不经 registry,须单独删) | ✅ 已完成 | `chandler/cli/commands.ss` |
+| 5 | 测试 + 三运行时全绿 + 端到端(install app → 裸名调用 → uninstall 干净) | ✅ 已完成 | — |
 
-### P3 — app 全局安装时创建命令行入口
+**实现期决定(2026-07-24)**:
 
-当 `chandler install` 的是 app(有 `(app (entry ...) (main ...))`)时,创建启动器到 `~/.local/share/chez/bin/<app>`,并 symlink 到 `~/.local/bin/<app>`,用户裸名调用。
+1. **runner 要 `(import (chezscheme) (<entry>))`**——launcher 用 `--program` 跑 runner(R6RS 严格作用域),`cdr`/`command-line` 不在 entry 库的 export 里,必须从 `(chezscheme)` 引入。pack 的 bootstrap.ss 用 `--script`(interaction-environment,chezscheme 绑定自带)故不需;install 的 runner 走 `--program`(与 chandler 自己的 main.sps 一致,更"正确"),故补 `(chezscheme)`。
+2. **方案 A 落地**:bootstrap.ss 的 launcher 模板不提取(保自含红线),在 `(chandler cli commands)` 重写 `app-launcher-sh`/`app-launcher-ps1`。运行时发现逻辑简化(无 self-probe 能力探测——install 环境已知有运行时,且 app 跑不了会报可操作的 import 错;探测是 chandler 自举防"假 skiff"的,app 场景风险低)。接受与 bootstrap.ss 的 launcher 模板少量重复。
+3. **uninstall 顺手清 `.chandler/<name>/`**:原本 manifest 快照(L4)不经 registry、uninstall 后变孤儿(pre-existing)。P3 的 runner 同在此目录。cmd-uninstall 现在 `rm-rf` 整个 `.chandler/<name>/`(manifest 快照 + runner 一起清),uninstall 更干净。
+4. **bindir 平台感知**:`default-user-bindir` POSIX `~/.local/bin`(XDG 惯例,不在前缀内)、Windows `%LOCALAPPDATA%\chez\bin`(前缀子目录,与 libdir 同根)。`--prefix=DIR` 模式 → `<prefix>/bin`(测试隔离,与前缀同根)。
 
-| # | 任务 | 状态 | 文件 |
-|---|------|------|------|
-| 1 | app install 检测:manifest 有 `(app ...)` 时创建 bin/ 启动器 | 🔲 待实现 | `chandler/cli/commands.ss` |
-| 2 | 启动器模板:挂全局 `src::<mt>` 对 + 运行时发现(skiff 优先) | 🔲 待实现 | `chandler/cli/commands.ss` |
-| 3 | symlink `~/.local/bin/<app>` → `~/.local/share/chez/bin/<app>` | 🔲 待实现 | `chandler/cli/commands.ss` |
-| 4 | app uninstall 时也删除 bin/ 启动器 + symlink | 🔲 待实现 | `chandler/cli/commands.ss` |
+**验证**:三运行时 **363/363 全绿**(无新增用例——P3 是 CLI 层端到端功能,测试夹具难造全局前缀 + PATH;靠端到端实跑验证)。端到端(自造 app 项目:`(app (entry (myapp)) (main main))`,`myapp` 导出 `main` 接 args,用 `dist/bin/chandler` 跑):
+- `install --prefix=/tmp/p3-out` → 生成 runner(`(import (chezscheme) (myapp)) (main (cdr (command-line)))`)+ launcher(`bin/myapp`)。
+- **裸名调用** `/tmp/p3-out/bin/myapp hello world` → `p3 app OK: args=((hello world))`(退出码 0);无参 → `args=(())`。
+- `uninstall --name=myapp --prefix=/tmp/p3-out` → `bin/myapp` 删(bin/ 空)、`.chandler/myapp/` 删(runner + manifest 快照一起清)。
 
-### BUG-1 — pack 运行期「不同编译实例」:build 与 pack 对 chandler 对象的来源不一致(Plan B)
+### BUG-1 — pack 运行期「不同编译实例」:build 与 pack 对 chandler 对象的来源不一致 — **已修复(2026-07-24)**
 
 **症状**:装好的包一启动即
 ```
@@ -650,10 +673,57 @@ instance of (chandler runtime-paths) from that required by compiled (mdserver ap
 
 | # | 任务 | 状态 | 文件 |
 |---|------|------|------|
-| 1 | `chandler deps`:不再从全局前缀拷 `.so`——改为把 vendored 的 chandler 源码(`_vendor/chandler/chandler/*.ss`,已由 `install-chandler-runtime!` 铺好)**编译进 `_vendor/chandler/_build/<mt>/`**;删除/替换 `copy-chandler-runtime!` | 🔲 待实现 | `chandler/install.ss` |
-| 2 | `build-project` / `build-one-dep`:清单声明 `(chandler …)` 且 `_vendor/chandler` 在场时,把它作为**预构建(只给对象)根**挂进构建根(排在全局兜底之前),与锁定依赖同形 | 🔲 待实现 | `chandler/build.ss` |
-| 3 | 加固 `classify-libref`:运行时门的库引用**永不**静默回落到 `resolve-lib-path` 从前缀源码重编——预构建对象缺失即硬错(把「实例对不上」提前成「构建期报错」) | 🔲 待实现 | `chandler/import-graph.ss` |
-| 4 | `chandler pack`:`copy-chandler-into-pack!` 从与 build 同一棵树(`_vendor/chandler/_build/<mt>/`)交付——确认来源与任务 1 产物一致,无第二条路径 | 🔲 待实现 | `chandler/pack.ss` |
-| 5 | 端到端回归:skiff-demo 全清(`rm -rf _build _vendor`)→ `deps`/`build`/`pack` → 装好的包 `env -i ./bin/skiff-demo` 起服务 200;断言 `app.so` 与包内 `chandler/runtime-paths.so` 属同一实例(能加载即证) | 🔲 待实现 | `chandler/test/*.ss`、skiff-demo |
+| 1 | `chandler deps`:不再从全局前缀拷 `.so`——改为把 vendored 的 chandler 源码(`_vendor/chandler/chandler/*.ss`,已由 `install-chandler-runtime!` 铺好)**编译进 `_vendor/chandler/_build/<mt>/`**;删除/替换 `copy-chandler-runtime!` | ✅ 已完成(见下方「实现期决定」——方案从「编译」改为「copy CHANDLER_HOME 对象」)| `chandler/install.ss`、`chandler/build.ss`、`chandler/cli/commands.ss` |
+| 2 | `build-project` / `build-one-dep`:清单声明 `(chandler …)` 且 `_vendor/chandler` 在场时,把它作为**预构建(只给对象)根**挂进构建根(排在全局兜底之前),与锁定依赖同形 | ✅ 已完成(`gate-prebuilt-roots`)| `chandler/build.ss` |
+| 3 | 加固 `classify-libref`:运行时门的库引用**永不**静默回落到 `resolve-lib-path` 从前缀源码重编——预构建对象缺失即硬错(把「实例对不上」提前成「构建期报错」) | ✅ 已完成 | `chandler/import-graph.ss` |
+| 4 | `chandler pack`:`copy-chandler-into-pack!` 从与 build 同一棵树(`_vendor/chandler/_build/<mt>/`)交付——确认来源与任务 1 产物一致,无第二条路径 | ✅ 已完成(原已从此处取,注释更新)| `chandler/pack.ss` |
+| 5 | 端到端回归:skiff-demo 全清(`rm -rf _build _vendor`)→ `deps`/`build`/`pack` → 装好的包 `env -i ./bin/skiff-demo` 起服务 200;断言 `app.so` 与包内 `chandler/runtime-paths.so` 属同一实例(能加载即证) | ✅ 已完成(自造最小项目验证:chandler 门 + `(chandler runtime-paths)` 读资源,clean-env 启动 + 整包搬走 + verify-pack 18 ok/0 bad/0 extra)| — |
 
 **注**:Plan A(保留前缀→vendor 拷贝、仅把 `_vendor/chandler` 加进构建根)改动更小,但仍依赖前缀有对象——正是本次坑到的点,故不取。
+
+**实现期决定(2026-07-24)**:
+
+1. **关键转折:Plan B 的「就地编译」行不通,改为「copy CHANDLER_HOME 对象」**。Plan B 原文设想「就地从 vendored 源码编一次」让 build 与 pack 同源。但实测发现 **Chez 编译时遵循 R6RS 语义:`(library-list)` 里已加载的库优先于 `(library-directories)`**。chandler 自己就在跑,`(chandler runtime-paths)` 等已活在进程内存里——Chez 编译 app(import `(chandler …)`)时用的是**这个内存实例**,其编译实例 UID = CHANDLER_HOME/`<mt>`/chandler/runtime-paths.so 的 UID。就地重编 `_vendor/chandler/_build/` 产生的是**另一个**实例,Chez 根本不看它;pack 交付重编那份,启动即报 "different compilation instance"。改为 **copy CHANDLER_HOME 的已编译对象**(= 内存实例的物理文件)进 `_vendor/chandler/_build/`,build 用的实例 = pack 交付的实例 = 同一个物理对象文件 → 一致。
+2. **install 只铺源码,对象由 build 层 copy**。`install-chandler-runtime!` 保留(从 CHANDLER_HOME/src/chandler 拷源码进 `_vendor/chandler/chandler/`);删掉旧的 `copy-chandler-runtime!`(它从 `global-prefix` 拷对象,时机和职责纠缠在 install 里)。新函数 `build-chandler-runtime!` 在 `(chandler build)` 层,由 `cmd-deps` 在 install 成功后触发(经 cli 层编排,避开 install↔build 循环依赖)。函数名沿用作 cli 入口,语义是「确保 chandler runtime 对象就位」。
+3. **`gate-prebuilt-roots` 防 import-graph 误判**(任务 2):build 时把 `_vendor/chandler` 作为 `(prebuilt src obj)` 根挂进 lib-roots(排在 fallback 前)。于是 `classify-libref` 对 `(chandler …)` 命中 `'prebuilt` → import-graph 不下降、不把 chandler 当可编译节点。但这**不控制 Chez 用哪个实例**(Chez 总用内存实例),只控制 import-graph 的图构建行为。
+4. **`classify-libref` 加固**(任务 3):`(chandler …)` 库引用若走到 `resolve-lib-path`(即 builtin/own-source/prebuilt 都没命中),且 resolve-lib-path **会命中**(有源码可回落)→ 硬错,不重编。若源码也不在(完全解析不到)→ 保持 `#f`,由 build-graph 报 "cannot locate"(同样是可操作的错)。条件带 `(resolve-lib-path ref)` 避免误伤「无源码无对象」的测试场景(`chandler-libs-are-not-builtin` 用 `/nonexistent-root`)。
+5. **Petite 跳过**:`cmd-deps` 用 `compiler-available?` 守卫——Petite 无编译器时只铺源码、不调 `build-chandler-runtime!`(反正 Petite 跑不了应用,pack 也需编译器)。`build-chandler-runtime!` 本身不编译(copy 操作),但守卫在 cli 层更内聚。
+6. **测试调整**:`test/install.ss` 的 `chandler-gate-copies-runtime-subset-from-prefix` 不再断言 `.so` 存在(install 不负责对象),改为断言 `_build/` 目录不存在(install 后尚无对象)。三运行时 **363/363 全绿**。
+
+**验证**(自造最小项目 `/tmp/bug1-test`:manifest 声明 `(chandler ">=0.1.4")` 门 + `(app (entry (myapp)))`,`myapp.ss` import `(chandler runtime-paths)` 读资源,用 `dist/bin/chandler` 经 `chandler make && bootstrap --dev` 造的 chandler 跑):
+- `deps`(copy CHANDLER_HOME 对象 → `_vendor/chandler/_build/ta6le/chandler/` 10 个 `.so`)→ `build`(myapp.so 编译,Chez 用内存实例)→ `pack`。
+- **clean-env** `env -i ./bin/myapp` → `bug1-test OK: hello from bug1-test resource`(退出码 0,**不再报 different compilation instance**)。
+- **整包 `cp` 到别处**仍 OK;**`verify-pack --target`** 18 ok / 0 bad / 0 extra。
+
+### P7 — install/pack 物化层重用:提取共享 `copy-tree!` 原语 — **已完成(2026-07-24)**
+
+`cmd-install --global` 与 `pack` 在"物化到前缀"层 ~80% 同构(对象 → `<prefix>/<mt>/`、资源 → `src/resources/<ns>/`、manifest 快照 → `.chandler/<name>/`),但树拷贝原语重复 3 处:`merge-tree!`(install,skip-existing 全拷)、`copy-obj-tree!`(pack,overwrite + ext-filter)、`copy-dep-trees!` 内层(pack,overwrite + ext-filter + chandler 过滤)。本次提取一个参数化 `copy-tree!` 原语消除重复。事务层(registry staging vs fresh-dir `rm-rf`)**不统一**——耦合太深,共享的是 copy 不是 commit。
+
+**架构分析**(4 路 explore + Oracle):resolve 三层保证单次安装无同名;但全局前缀是**累积存储不是程序**,R6RS 单命名空间不跨安装边界 → registry 的**包所有权**模型才对(check-conflicts:别包拥有=硬错,同包=升级,无主=拒/adopt)。故共享原语带 `#:policy`:`skip-existing`(install,累积前缀)vs `overwrite`(pack,隔离目标)。`merge-tree!` 今天的静默 skip 是 latent bug(依赖间同名文件悄悄丢),本次补警告。
+
+| # | 任务 | 状态 | 文件 |
+|---|------|------|------|
+| 1 | 新增 `copy-tree!` 原语:`(src dst skip-dirs file-filter policy warn?)` — skip-dirs 跳首段、file-filter 谓词、policy {skip-existing,overwrite}、warn? skip 命中时警告 | ✅ 已完成 | `chandler/install.ss` |
+| 2 | install 接入:`merge-tree!` → `copy-tree!`(policy skip-existing + warn);`merge-lib-to-global!` 保持 src+obj 双拷结构 | ✅ 已完成 | `chandler/cli/commands.ss` |
+| 3 | pack 接入:`copy-obj-tree!` + `copy-dep-trees!` 内层 → `copy-tree!`(policy overwrite + deliverable?/ext-filter);chandler/per-dep-umbrella 特殊逻辑保留在 pack 侧 | ✅ 已完成 | `chandler/pack.ss` |
+| 4 | 测试调整 + 三运行时全绿 + 端到端(install --global + pack 产物结构不变) | ✅ 已完成 | — |
+
+**实现期决定(2026-07-24)**:
+
+1. **只统一 copy 原语,不统一编排器/事务**。`copy-dep-trees!` 的 chandler-dev-only 过滤 + per-dep-umbrella 跳过让"materialize-objects! 编排器"参数膨胀(要传 chandler? 谓词、namespace 提取、umbrella 处理),收益不抵复杂度。`copy-tree!` 原语消除三处手写树遍历(`merge-tree!`/`copy-obj-tree!`/`copy-dep-trees!` 内层 for-each)——共享的是 copy,不是 commit(registry staging vs fresh-dir `rm-rf` 耦合太深,Oracle 分析确认不统一)。
+2. **`copy-dep-trees!` 的 chandler filter 要补 "chandler/" 前缀**。原 `copy-dep-trees!` 的 rel 相对 **obj**(`_build/<mt>`,形如 `"chandler/foo.so"`);`copy-tree!` 的 rel 相对 **src**(= `obj/<ns>`,形如 `"foo.so"`)。`chandler-dev-only-rel?` 检查 `"chandler/"` 前缀,故 filter 里补 `(string-append "chandler/" rel)`。`base-obj?`(deliverable? + ext-suffix)只看后缀/basename,不受 rel 形式影响。
+3. **Point 2(R6RS 单命名空间→覆盖)结论:错**。resolve 三层保证单次安装无同名(manifest 去重 → chosen hashtable → R4 跨 host 硬错);但全局前缀是**跨安装累积存储,不是 R6RS 单程序**——两个独立项目可各自传递依赖同名库,resolve 永不把它们一起裁决。覆盖会 DLL hell(后装覆盖先装,先装消费者崩)。registry 的**包所有权**模型(check-conflicts:别包拥有=硬错、同包=升级、无主=拒/adopt)才对。故 `copy-tree!` 带 `#:policy`:install/global 用 `skip-existing`+warn,pack 用 `overwrite`(目标是 `rm-rf` 过的隔离目录,无累积污染)。
+4. **补掉一个 latent bug**:`merge-tree!` 原先 skip-existing 时**静默无警告**(`unless (file-exists? dst) (copy-file …)`),依赖间同名文件悄悄丢一个。`copy-tree!` 的 `warn?` 在 install 路径打开,现打出 `warning: skip existing file (name collision): <path>`。
+
+**验证**:三运行时 **363/363 全绿**(无新增用例——copy-tree! 是内部原语替换,行为等价)。端到端(自造项目:git 依赖 b + chandler 门 + app entry + verbatim 资源,用 `dist/bin/chandler` 跑):
+- **install --global**(临时 HOME 隔离前缀):src/ 有 b.ss + myapp.ss(源码)、ta6le/ 有 b.so + myapp.so(对象)、.chandler/myapp/manifest.ss(快照)——copy-tree!(skip-existing)替换 merge-tree! 后结构不变。注:resources 未进前缀是预期——install 走 manifest `(resources …)` 声明模型,本项目用 verbatim 约定(资源层模型差异,本次不统一)。
+- **pack**:ta6le/ 有 b.so + myapp.so + chandler/(copy-dep-trees! 含 chandler 过滤)、src/resources/myapp/hello.txt(verbatim);**clean-env** `env -i ./bin/myapp` → `p7 OK: b=42, resource-hello`(b 库 + chandler runtime + 资源全通);**verify-pack** 19 ok / 0 bad / 0 extra。
+
+**发现的 pre-existing bug(非 P7 引入,记录在案)**:`--prefix=DIR` 旗标在 args.ss 声明了,但 `target-libdir` 只认 `--system`,忽略 `--prefix`——`chandler install --prefix=/tmp/x` 实际装到默认 `~/.local/share/chez`。TASK.md 2026-07-24 记录的"`--global=DIR` 改名 `--prefix=DIR`"只改了旗标名,target-libdir 从未接它。
+
+**`--prefix` bug 已修复(2026-07-24)**:`target-libdir` 改为 `(cond [(flag flags 'prefix) => values] [(flag? flags 'system) ...] [else ...])`,优先级 `--prefix > --system > --user`。端到端:`install --prefix=/tmp/x` → 装到 /tmp/x(src/源码 + .chandler/快照)、import 从自定义前缀解析成功、`uninstall --prefix=/tmp/x` 干净卸载。三运行时 363/363。
+
+**不包含**(后续单独立项):
+- app install 建 launcher(Point 4):需先验证全局前缀多 app 时 `app-resource-path` 消歧(靠 launcher 声明 app 名,而非"唯一 manifest");POSIX `~/.local/bin`、Windows `%LOCALAPPDATA%\chez\bin`。
+- `materialize-objects!` 编排器:`copy-dep-trees!` 的 chandler-dev-only 过滤 + per-dep-umbrella 跳过让编排器参数膨胀;`copy-tree!` 统一后再评估是否值得。
+- 资源层统一:install 读 manifest `(resources …)` 声明 vs pack verbatim 约定,模型不同,强合引入复杂度。
