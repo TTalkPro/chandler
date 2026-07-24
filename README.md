@@ -1,16 +1,15 @@
 # Chandler
 
-> git-first 的 Chez Scheme 库管理器,**Skiff** 运行时生态里的包供应商(船具商)。读 `manifest.ss`,把 git 仓库里的 R6RS 库装进项目 `lib/`,一行 `(activate)` 挂载整个依赖环境。标准 Chez 与 Skiff **双运行时**皆可用。
+> git-first 的 Chez Scheme 包管理器 + 构建器,**Skiff** 运行时生态里的包供应商(船具商)。读 `manifest.ss`,把 git 仓库里的 R6RS 库装进项目,一行 `chandler run` 挂载整个依赖环境并运行。标准 Chez 与 Skiff **双运行时**皆可用。
 
 **中文 | [English](README.en.md)** — 设计文档见 [designs/](designs/);实现任务与进度见 [TASK.md](TASK.md)。
 
 ## 定位
 
-- **Skiff**(轻舟)= 运行时(Chez + libuv);**Chandler**(船具商)= 包管理器,管**依赖获取与激活**;**bake** = 构建工具(另仓),管**编译**。
+- **Skiff**(轻舟)= 运行时(Chez + libuv);**Chandler**(船具商)= 包管理器 + 构建器,管**依赖获取、编译、激活、打包**。
 - git-first:依赖来源(URL + tag/rev/branch pin)写在 `manifest.ss`,无需中心 registry。
-- 依赖 = 整仓 checkout 到 `vendor/<name>/`,再由 **chandler 直接**摊平进 `lib/{src,<mt>}`(src/mt 拆分);`manifest.lock` 锁确切 commit,可复现。
-
-> **2026-07-22 对齐 bake install 改版**:`bake install` 落点由扁平 `lib/` 改为 **src/mt 拆分**——源码 → `<prefix>/src/`、平台绑定产物(编译 `.so` + native)整棵 `_build/<mt>/` → `<prefix>/<mt>/`。消费方用一条 Chez 库目录**对** `<prefix>/src::<prefix>/<mt>`(`::` = 源::对象)同时解析源码与对象;native 收进所属库 `<prefix>/<mt>/<lib>/native/`。
+- 依赖 = 整仓 checkout 到 `_vendor/<name>/`,各依赖**就地编译**(产物留在它自己的 `_build/<mt>/`);`manifest.lock` 锁确切 commit,可复现。
+- 消费方用 Chez 库目录**对** `<src>::<obj>`(`::` = 源::对象)同时解析源码与对象;native 收进所属库 `<obj>/<lib>/native/`。
 
 ## 安装
 
@@ -18,19 +17,18 @@
 
 | 需要 | 说明 |
 |------|------|
-| **Scheme 运行时** | **skiff**(优先)或 **Chez Scheme ≥ 10.0**。二者装一个即可;都在则默认用 skiff。**Petite 不够**——它没有编译器,而 `bake install` 要编译库树。 |
+| **Scheme 运行时** | **skiff**(优先)或 **Chez Scheme ≥ 10.0**。二者装一个即可;都在则默认用 skiff。**Petite 不够**——它没有编译器,而 `chandler build`/`chandler make` 要编译库树。 |
 | **git** | 依赖获取靠它(`git` 需在 PATH 上)。 |
-| **bake** | 生态里的构建工具。`chandler build` 委托 bake 编译依赖闭包。**`chandler install` 不需要 bake**(只拷源码)。bake 仅 `chandler build` 时需要。 |
 | PowerShell | **仅 Windows 需要**(启动器与安装脚本是 `.ps1`)。Windows 10/11 自带;或 `mise use powershell`。 |
 
-装 bake 前若尚无运行时,先装 skiff 或 Chez;`mise` 用户可 `mise use chezscheme`。
+若尚无运行时,先装 skiff 或 Chez;`mise` 用户可 `mise use chezscheme`。
 
 ### POSIX(Linux / macOS)
 
 ```sh
 git clone <this-repo> chandler && cd chandler
-scheme --script bootstrap.sh               # chandler 铺库 → ~/.local/share/chez/{src,<mt>};启动器 → ~/.local/bin/chandler
-skiff --script bootstrap.sh --system        # 装到 /usr/local(需 root)
+scheme --script bootstrap.ss               # chandler 铺库 → ~/.local/share/chez/{src,<mt>};启动器 → ~/.local/bin/chandler
+skiff --script bootstrap.ss --system        # 装到 /usr/local(需 root)
 
 export PATH="$HOME/.local/bin:$PATH"        # 若尚未在 PATH 上(脚本会提示这行)
 chandler --version                          # → chandler 0.1.4 (skiff 0.1.2) (chez 10.4.1)
@@ -40,8 +38,8 @@ chandler --version                          # → chandler 0.1.4 (skiff 0.1.2) (
 
 ```powershell
 git clone <this-repo> chandler; cd chandler
-scheme --script bootstrap.sh                 # 启动器 → %USERPROFILE%\.local\bin\chandler.ps1
-scheme --script bootstrap.sh --system        # 系统级(需管理员)
+scheme --script bootstrap.ss                 # 启动器 → %LOCALAPPDATA%\chez\bin\chandler.ps1
+scheme --script bootstrap.ss --system        # 系统级(需管理员)
 
 $env:PATH = "$HOME\.local\bin;$env:PATH"
 chandler --version
@@ -82,11 +80,12 @@ chandler make -T         # 列任务
 ## 快速上手
 
 ```sh
-chandler init --name=myapp                 # 生成骨架 manifest.ss(vendor/ lib/ setup 入 .gitignore)
+chandler init --name=myapp                 # 生成骨架 manifest.ss + chandler-tasks.ss(_vendor/ 入 .gitignore)
 chandler add http https://github.com/x/http --tag v1.2.0
-chandler install                           # 解析 → 写 lock → git 依赖到 vendor/ → chandler 直接铺源码到 lib/src/
+chandler deps                              # 解析 → 写 lock → git 依赖整仓 checkout 到 _vendor/
+chandler build                             # 进程内编译依赖闭包 → 各 _vendor/<dep>/_build/<mt>/
 chandler list                              # 看已锁依赖
-chandler verify                            # CI:校验 vendor/ 与 lock 一致
+chandler verify                            # CI:校验 _vendor/ 与 lock 一致
 chandler repl                              # 交互 shell(自动挂库路径)
 ```
 
@@ -95,23 +94,24 @@ chandler repl                              # 交互 shell(自动挂库路径)
 ```
 myapp/
   manifest.ss  manifest.lock
-  vendor/<name>/           ← git 依赖的原始整仓 checkout
-  lib/                     ← 项目自己的 Chez 库**前缀**(结构同 ~/.local/share/chez 与解开的 pack)
-    src/<name>.ss  src/<name>/…       ← 各依赖源码并存(install 摊平)
-    <mt>/<name>.so  <mt>/<name>/…  <mt>/<name>/native/…   ← 编译产物 + native(chandler build 后填充)
-    share/<name>/resources/…          ← 资源(依赖声明的 + 本项目 resources/ 同步过来的)
-    .chandler/<name>/manifest.ss      ← 清单快照(应用名由此可辨)
+  _vendor/<name>/                    ← git 依赖整仓 checkout(源码 live)
+    <srcdir>/_build/<mt>/            ← chandler build 就地编译产物(留在原地)
+  _vendor/chandler/                  ← 运行时门(deps 从 CHANDLER_HOME copy)
+    chandler/<sub>.ss                ← runtime subset 源码
+    _build/<mt>/chandler/<sub>.so    ← 对象
+  resources/<libpath>/               ← 项目自己的资源(verbatim)
 ```
 
-- **`chandler install`**:git 依赖整仓 checkout 到 `vendor/`,chandler **直接**把源码摊进 `lib/src/`(不经 bake)。库搜索挂**一对** `lib/src::lib/<mt>`,结构同全局前缀 `~/.local/share/chez`。
-- **`chandler build`**:于项目根生成一份 recipe(`define-lib-roots "lib/src"` + 逐依赖 `library-task`/授权的 `native-task`),跑**真实 bake** 编译进 `_build/<mt>/`,再拷进 `lib/<mt>/` 补齐对(编译产物 + native)。
-- **path 依赖** `(path "../x")`:不进 vendor/lib,直挂其源目录(live,改一行立即生效)。
+- **`chandler deps`**:git 依赖整仓 checkout 到 `_vendor/<name>/`(源码 live);chandler 运行时门从 CHANDLER_HOME copy 进 `_vendor/chandler/`。
+- **`chandler build`**:按 lock 拓扑序逐依赖**就地编译**(cwd = 该依赖 srcdir,产物留 `_vendor/<dep>/<srcdir>/_build/<mt>/`),已编好的上游作为**预构建根** `(prebuilt src obj)` 挂入。进程内编译,不再 spawn 子进程。
+- **path 依赖** `(path "../x")`:不进 _vendor,直挂其源目录(live,改一行立即生效)。
+- **库搜索**:`resolved-libdirs` 为每个依赖挂一条 `(src . obj)` 对 —— 源在 `_vendor/<dep>/<srcdir>`,对象在它自己的 `_build/<mt>`。不再有汇总的 `lib/`。
 
 ### native 加载:自加载优先,统一加载兜底
 
-bake 会为每个带 native 的库生成 `(<lib> native-loader)`(产物 `lib/<mt>/<lib>/native-loader.so`),该库的 FFI 被引用时 loader **自己**定位并加载 `.so`——其候选之一正是 `library-directories` 的**对象侧**,而 chandler 挂的 `lib/src::lib/<mt>` 对象侧恰是 native 落点,故**挂好对即自动生效**,且是**惰性**的(不碰 FFI 就不 `dlopen`)。
+`chandler build` 为每个带 native 的库生成 `(<lib> native-loader)`(产物 `<obj>/<lib>/native-loader.so`),该库的 FFI 被引用时 loader **自己**定位并加载 `.so`——其候选之一正是 `(library-directories)` 的**对象侧**,而 resolved-libdirs 挂的各依赖 obj 侧恰是 native 落点,故**挂好对即自动生效**,且是**惰性**的(不碰 FFI 就不 `dlopen`)。
 
-因此 `activate` / `run` / `repl` 的预加载已降级为**兜底**:只为「非 bake 构建、无生成 loader」的第三方库扫描加载,带 `native-loader.so` 的库一律跳过。
+因此 `activate` / `run` / `repl` 的预加载已降级为**兜底**:只为「无生成 loader」的第三方库扫描加载,带 `native-loader.so` 的库一律跳过。
 
 ### 启动:统一走 `chandler run`
 
@@ -119,48 +119,39 @@ bake 会为每个带 native 的库生成 `(<lib> native-loader)`(产物 `lib/<mt
 chandler run --script main.ss [args...]
 ```
 
-它一次交接两样东西,之后脚本里 `(import (dep))` 即通:
+它交接一样东西:**库搜索路径**(`resolved-libdirs` 的 per-dep `(src . obj)` 对 + path 源目录 + 项目库根 + 全局兜底)。之后脚本里 `(import (dep))` 即通。
 
-- **库搜索路径** —— `lib/src::lib/<mt>` 一对(+ path 源目录 + 项目库根 + 全局兜底一对);
-- **`APP_ROOT`** —— 指向项目库前缀 `<project>/lib`。资源与 native 都挂在它下面的固定路径上:
-  `$APP_ROOT/share/<app>/resources/`(应用数据,见 `(chandler runtime-paths)` 的 `app-resource-path`)、
-  `$APP_ROOT/<mt>/<lib>/native/`(bake 生成的 native-loader 自己拼)。
+**资源定位不依赖环境变量**:`(chandler runtime-paths)` 的 `resource-path` / `find-resource-path` 扫 `(library-directories)` 的 src/obj 两侧(`<side>/resources/<libpath>/<file>`),进程对着哪些前缀跑,资源就在那里——不再需要 `APP_ROOT`。
 
-关键在于**三态同一形状**:项目的 `lib/`、全局前缀 `~/.local/share/chez`、解开的 pack ——
-都是同一种前缀,`APP_ROOT` 指向哪一个,应用代码一个字都不用改。
+`.env`(项目根)由 `run`/`repl`/`env` 消费(`.env` 覆盖进程环境);刻意**不碰** `build`/`deps`/`install`,保住可复现。
 
-项目自己的 `resources/` 由 `chandler deps` / `run` / `repl` 同步进 `lib/share/<name>/resources/`
-(按 mtime 增量),故开发期改一个资源文件,下次 `chandler run` 即生效。
-
-> 早期版本生成过 `chandler-setup.ss`(Bundler 的 `bundler/setup` 式,由主脚本 `(load)`)。
-> 现已取消:启动器只留 `chandler run` 一条路,省掉「生成物与真实规则可能漂移」这一类问题。
-> 需要在别的进程里挂同一套路径,用 `eval "$(chandler env)"`(它同时导出 `CHEZSCHEMELIBDIRS`
-> 与 `APP_ROOT`);已持有 `(chandler)` 的脚本可直接 `(activate)`。
+> 早期版本生成过 `chandler-setup.ss`(Bundler 的 `bundler/setup` 式)与 `APP_ROOT` 环境变量,均已取消:启动只留 `chandler run` 一条路,资源与库住在同一个前缀里。
+> 需要在别的进程里挂同一套路径,用 `eval "$(chandler env)"`;已持有 `(chandler)` 的脚本可直接 `(activate)`。
 
 ### 库搜索规则(run / env / repl / activate 一致)
 
-- **项目**(有 lock + 依赖):`lib/src::lib/<mt>` 一对 + path 源目录 + 项目自身库根 + 全局兜底一对(项目最高优先)。
+- **项目**(有 lock + 依赖):各依赖的 `(src . obj)` per-dep 对 + path 源目录 + 项目自身库根 + 全局兜底一对(项目最高优先)。
 - **非项目**:直接用全局前缀一对 `~/.local/share/chez/src::~/.local/share/chez/<mt>`。
 
 ## 命令一览
 
 | 命令 | 作用 |
 |------|------|
-| `init [--lib\|--app] [--name=N]` | 生成骨架 `manifest.ss`(默认 lib;`--app` 写 `(app …)` 使其可 pack) |
+| `init [--lib\|--app] [--name=N]` | 生成骨架 `manifest.ss` + `chandler-tasks.ss`(默认 lib;`--app` 写 `(app …)` 使其可 pack) |
 | `add <name> <url> [--tag/--rev/--branch/--path]` | 添加依赖 |
 | `remove <name>` | 移除依赖 |
-| `install [--production] [--offline] [--force]` | 解析并物化到 `lib/{src,<mt>}` |
-| `update` | 忽略旧 lock 重解析 |
-| `build [--allow-build[=a,b]]` | 生成 recipe → 真实 bake 编译依赖闭包 + native → `lib/<mt>/` |
-| `verify` | 校验 `vendor/` 与 lock 一致 + `lib/src` 在(CI) |
+| `deps [--production] [--offline] [--force] [--update]` | 解析 → 写 lock → git 依赖 checkout 到 `_vendor/` + chandler 运行时门就位 |
+| `build [--allow-build[=a,b]]` | 进程内编译依赖闭包 + native → 各 `_vendor/<dep>/_build/<mt>/` |
+| `verify` | 校验 `_vendor/` 与 lock 一致(CI) |
 | `list` / `tree` | 显示已锁依赖 |
-| `run <script.ss> [args…]` | 激活环境后跑脚本 |
+| `run <script.ss> [args…]` | 挂库搜索路径后跑脚本 |
 | `exec -- <cmd…>` | 设 `CHEZSCHEMELIBDIRS` 后跑命令 |
-| `repl [--runtime skiff\|chez]` | 交互 shell,自动挂库路径:**项目有 lock+依赖 → 项目 `lib/`(最高优先)+ 全局兜底;否则 → 全局** |
-| `install [--user\|--system]` | 装当前项目库 + 依赖到全局前缀(`--user` 默认 `~/.local/share/chez`;`--system` = `/usr/local/share/chez`。注册表事务) |
-| `uninstall --name=<n>` | 据文件清单干净卸载 |
+| `repl [--runtime skiff\|chez]` | 交互 shell,自动挂库路径(项目优先 + 全局兜底) |
+| `make [task]` | 跑 `chandler-tasks.ss` 的任务(`build`/`test`/…);无任务文件时从 manifest 推导 |
+| `install [--user\|--system\|--prefix=DIR]` | 装项目库 + 依赖到全局前缀(注册表事务)。**app 自动建命令行入口** `~/.local/bin/<app>`(POSIX)/ `%LOCALAPPDATA%\chez\bin\<app>.ps1`(Windows) |
+| `uninstall --name=<n>` | 干净卸载(含 app 的命令行入口) |
 | `list --global` / `doctor` | 列出/体检全局已装包 |
-| `pack [--runtime r] [--out dir]` | 组装自包含分发包 |
+| `pack [--runtime r] [--out dir]` | 组装自包含分发包(自带运行时) |
 
 全局旗标:`-C <dir>` `--offline` `--production` `--force` `--keep-extra` `--verbose`。
 
@@ -174,7 +165,6 @@ chandler run --script main.ss [args...]
 | `CHANDLER_RUNTIME=skiff\|chez` | 选**哪一种**运行时,默认 skiff;非法值报错(退出码 64),不静默忽略 |
 | `CHANDLER_SKIFF=<exe>` | skiff 的可执行文件(名或路径) |
 | `CHANDLER_SCHEME=<exe>` | Chez 的可执行文件(名或路径) |
-| `CHANDLER_BAKE=<exe>` | bake 的可执行文件(build 委托它编译;install 不需要) |
 
 **优先级**(`run` / `exec` / `repl`、**启动器**、**安装脚本**共用一套):
 

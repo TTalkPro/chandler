@@ -1,6 +1,8 @@
 # 11 — runtime-paths:统一的资源定位 API
 
 > 状态:**设计中(2026-07-23)**,K 标号见 §8。
+>
+> **⚠️ 本设计已被 [C1 反转(2026-07-24)](../TASK.md)**:资源定位改为统一 `(resource-path '(lib) "file")`,扫 `(library-directories)` 的 src/obj 两侧(`<side>/resources/<libpath>/<file>`),不依赖任何环境变量。`app-resource-path` / `lib-resource-path` 及其 find 变体**删除**;`APP_ROOT` **退出资源通路**(pack 的 native-loader 仍用);资源落点 `share/<ns>/resources/` → `src/resources/<ns>/`;`define-resource-path-resolver` 收敛成一种形式。**本文以下为历史设计,保留作决策记录。**
 > 前置:[09](09-pack.md)(pack producer 已落地,APP_ROOT 唯一 env 约定)· [10](10-deploy-loader.md)(deploy loader 已统一)· [02](02-manifest-lock-spec.md)(manifest/lock schema,本设计扩展)。
 > 上游规范:[chez-skiff-pack-spec.md](../../skiff/chez-skiff-pack-spec.md)(资源落点约定)。
 
