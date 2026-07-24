@@ -630,3 +630,30 @@ $APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
 | 2 | 启动器模板:挂全局 `src::<mt>` 对 + 运行时发现(skiff 优先) | 🔲 待实现 | `chandler/cli/commands.ss` |
 | 3 | symlink `~/.local/bin/<app>` → `~/.local/share/chez/bin/<app>` | 🔲 待实现 | `chandler/cli/commands.ss` |
 | 4 | app uninstall 时也删除 bin/ 启动器 + symlink | 🔲 待实现 | `chandler/cli/commands.ss` |
+
+### BUG-1 — pack 运行期「不同编译实例」:build 与 pack 对 chandler 对象的来源不一致(Plan B)
+
+**症状**:装好的包一启动即
+```
+Exception: loading …/ta6le/chandler/runtime-paths.so yielded a different compilation
+instance of (chandler runtime-paths) from that required by compiled (mdserver app)
+```
+
+**根因**:Chez 对**每次** `compile-library` 盖一个全新的「编译实例」印章(实测:同源编两次字节不同、instance 不同)。故 `app.so` 与随包发出的 `runtime-paths.so` 必须是**同一个物理对象文件**才能加载。而 build 与 pack 各取一处、并不一致:
+
+1. **`chandler build` 把 chandler 从源码重编进应用自己的 `_build/<mt>/chandler/`**,`app.so` 遂链到这个新实例 **S′**。出在 `classify-libref`(`import-graph.ss:285`):`prebuilt-lib-obj` 未命中预构建对象时回落 `resolve-lib-path`,在**前缀 `src` 侧**找到 chandler 源码 → 当可编译节点;又因项目根 `"."` 在 `library-directories` 里排第一,编 `app.so` 时 Chez 从 `_build/<mt>/chandler/runtime-paths.so` 解析该库。
+2. **`chandler pack` 从不交付那个对象**:`copy-chandler-into-pack!`(`pack.ss:890`)从 `_vendor/chandler/_build/<mt>/` 取,而这一份是 `copy-chandler-runtime!`(`install.ss:209`)**从全局前缀拷**来的另一实例 **S**。`app.so` 要 S′,包里给 S → 失败。
+
+**触发条件放大**:chandler 从一个没有 `_build/` 的工作副本重装时,`install-objects!` 只铺源码、前缀 `<home>/<mt>/chandler/*.so` 缺失 → build **每次**都从源码重编(S′);`copy-chandler-runtime!` 无对象可拷 → `_vendor/chandler/_build` 空 → pack 直接报 `chandler runtime not vendored`。
+
+**Plan B —— chandler 对 build+pack 作「普通编译依赖」,「门」只管版本**:让 build 把应用链到 pack 要交付的**同一批对象**上,来源统一为 `_vendor/chandler`,且**就地从 vendored 源码编一次**,彻底摆脱「前缀必须有对象」这个前提。
+
+| # | 任务 | 状态 | 文件 |
+|---|------|------|------|
+| 1 | `chandler deps`:不再从全局前缀拷 `.so`——改为把 vendored 的 chandler 源码(`_vendor/chandler/chandler/*.ss`,已由 `install-chandler-runtime!` 铺好)**编译进 `_vendor/chandler/_build/<mt>/`**;删除/替换 `copy-chandler-runtime!` | 🔲 待实现 | `chandler/install.ss` |
+| 2 | `build-project` / `build-one-dep`:清单声明 `(chandler …)` 且 `_vendor/chandler` 在场时,把它作为**预构建(只给对象)根**挂进构建根(排在全局兜底之前),与锁定依赖同形 | 🔲 待实现 | `chandler/build.ss` |
+| 3 | 加固 `classify-libref`:运行时门的库引用**永不**静默回落到 `resolve-lib-path` 从前缀源码重编——预构建对象缺失即硬错(把「实例对不上」提前成「构建期报错」) | 🔲 待实现 | `chandler/import-graph.ss` |
+| 4 | `chandler pack`:`copy-chandler-into-pack!` 从与 build 同一棵树(`_vendor/chandler/_build/<mt>/`)交付——确认来源与任务 1 产物一致,无第二条路径 | 🔲 待实现 | `chandler/pack.ss` |
+| 5 | 端到端回归:skiff-demo 全清(`rm -rf _build _vendor`)→ `deps`/`build`/`pack` → 装好的包 `env -i ./bin/skiff-demo` 起服务 200;断言 `app.so` 与包内 `chandler/runtime-paths.so` 属同一实例(能加载即证) | 🔲 待实现 | `chandler/test/*.ss`、skiff-demo |
+
+**注**:Plan A(保留前缀→vendor 拷贝、仅把 `_vendor/chandler` 加进构建根)改动更小,但仍依赖前缀有对象——正是本次坑到的点,故不取。
