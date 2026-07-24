@@ -23,8 +23,8 @@
     ;; 注册器
     register-task! register-rule! register-default-task!
     ;; recipe 加载 + 目标调用
-    load-recipe recipe-environment-libs recipe-environment register-recipe-library!
-    recipe-reset-hooks register-recipe-reset!
+    load-recipe reset-registries! recipe-environment-libs recipe-environment
+    register-recipe-library! recipe-reset-hooks register-recipe-reset!
     invoke-task normalize-target select-targets
     ;; forward-reference 钩子(B5 native 注册)
     current-native-prescan
@@ -305,15 +305,21 @@
         (unless (procedure? f) (error 'current-native-prescan "not a procedure"))
         f)))
 
-  (define (load-recipe path)
+  ;; 把任务/规则登记表与全局构建状态清干净。load-recipe 的前奏,但**单独导出** ——
+  ;; `chandler build` 是直接调 library-task/native-task 排单的(没有 recipe 文件可
+  ;; 加载),它同样需要每轮从干净状态起步。
+  (define (reset-registries!)
     (hashtable-clear! task-registry)
     (hashtable-clear! rule-registry)
     (rule-order-counter 0)
     (default-task-name #f)
-    (*current-recipe* path)
     (*rule-depth* 0)
     (*exit-code* exit-ok)
-    (for-each (lambda (p) ((cdr p))) (recipe-reset-hooks))
+    (for-each (lambda (p) ((cdr p))) (recipe-reset-hooks)))
+
+  (define (load-recipe path)
+    (reset-registries!)
+    (*current-recipe* path)
     (with-exception-handler
       (lambda (e)
         (cond

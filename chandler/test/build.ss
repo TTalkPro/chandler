@@ -1,5 +1,11 @@
 #!chezscheme
-;;; chandler/test/build.ss --- (chandler build) 排单/授权测试(mock bake)
+;;; chandler/test/build.ss --- (chandler build) 排单/授权/**进程内编译**测试
+;;;
+;;; 2026-07-24(P6 阶段 B6):bake 子进程没了,mock bake 与 `CHANDLER_BAKE` 随之作废。
+;;; 断言从「生成的 recipe 文本里有没有 library-task」改成看**真产物**:
+;;; 依赖被编进 `lib/<mt>/`、native 落在 `<lib>/native/<soname>.<ext>`。
+;;; 授权那几条不变 —— 它们本来就不依赖谁来执行构建,而吸收之后反而更要紧:
+;;; 依赖的构建不再隔在子进程里,而是在本进程执行。
 
 (library (chandler test build)
   (export suite)
@@ -8,44 +14,32 @@
           (chandler test fixtures)
           (chandler fetch)
           (chandler fs)
+          (chandler layout)
           (chandler install)
+          (chandler compile)
           (chandler build))
 
-  (define (mock-bake) (string-append (current-directory) "/tests/mock-bake.sh"))
+  ;; 编译产物断言需要真编译器;Petite 没有,那几条断言在它上面跳过
+  ;; (授权逻辑照跑 —— 它在编译之前就完成了)。
+  (define (when-compiler proc) (when (compiler-available?) (proc)))
 
-  ;; 用 mock bake 跑 thunk;结束后**恢复** CHANDLER_BAKE(否则污染后续测试)
-  (define (with-mock log thunk)
-    (let ([old-bake (getenv "CHANDLER_BAKE")] [old-log (getenv "MOCK_BAKE_LOG")])
-      (putenv "CHANDLER_BAKE" (mock-bake))
-      (putenv "MOCK_BAKE_LOG" log)
-      (guard (e [#t (restore-env old-bake old-log) (raise e)])
-        (let ([r (thunk)]) (restore-env old-bake old-log) r))))
-
-  (define (restore-env bake log)
-    ;; Chez putenv 无法删除变量;还原为原值,原本无则置空串(bake-command 视空为无 → 回退 "bake")
-    (putenv "CHANDLER_BAKE" (or bake ""))
-    (putenv "MOCK_BAKE_LOG" (or log "")))
+  (define (obj app rel) (join-paths app "lib" (current-machine-type) rel))
 
   (define-suite suite
-    ;; 无 native 的依赖:build 直接排单,无需授权
+    ;; 无 native 的依赖:build 直接排单,无需授权,产物落 lib/<mt>/
     (build-plain-no-auth
-      (parameterize ([cache-root (mktmp)])
-        (let* ([b (make-lib-repo "b")]
-               [app (make-app (list (cons 'b b)))]
-               [log (string-append (mktmp) "/log")])
-          (install app '())
-          (with-mock log
-            (lambda ()
-              (assert-equal 0 (build app '()))
-              ;; mock 收到生成的 recipe:含 library-task(真实 bake 任务)
-              (let ([l (read-file log)])
-                (assert-true (substr? l "-f"))
-                (assert-true (substr? l "library-task"))))))))
+      (when-compiler (lambda ()
+  (parameterize ([cache-root (mktmp)])
+          (let* ([b (make-lib-repo "b")]
+                 [app (make-app (list (cons 'b b)))])
+            (install app '())
+            (assert-equal 0 (build app '()))
+            (assert-true (file-exists? (obj app "b.so"))))))))
 
     ;; 编的是依赖树里的**每一个库**,不只 umbrella 闭包。
     ;; 回归钉:曾经只发 (library-task 'c-<dep> '(<dep>)),于是 umbrella 从不 import 的
     ;; 子库(chez-markding 的 extensions/ 全是选择性启用的)一个都没编 —— 装出来的
-    ;; lib/<mt>/ 残缺(实测 107 源码库只出 49 个对象),而消费方的 bake 会退回从
+    ;; lib/<mt>/ 残缺(实测 107 源码库只出 49 个对象),而消费方会退回从
     ;; lib/src/ 现编进应用自己的 _build/,把同一个依赖劈成两棵对象树。
     (build-enumerates-every-library-not-just-the-umbrella
       (let ([tree (mktmp)])
@@ -55,54 +49,121 @@
         (ensure-dir (string-append tree "/b"))
         (write-file (string-append tree "/b/opt.sls")
                     "(library (b opt) (export opt-ok) (import (chezscheme)) (define opt-ok #t))")
-        ;; 不是库的文件(测试脚本)必须被跳过,否则 bake 会当 program 编
+        ;; 不是库的文件(测试脚本)必须被跳过,否则会被当 program 编
         (write-file (string-append tree "/b/run-tests.ss") "(display \"not a library\")(newline)")
         (let ([files (tree-library-files tree "b")])
           (assert-true  (find (lambda (f) (substr? f "b/opt.sls")) files))
           (assert-true  (find (lambda (f) (substr? f "b.ss")) files))
           (assert-false (find (lambda (f) (substr? f "run-tests.ss")) files)))))
 
-    ;; 有 native 的依赖:无授权 → 报错(pending)
+    ;; 子库同样要出对象(上一条验排单,这条验真编出来了)
+    (build-compiles-sublibraries
+      (when-compiler (lambda ()
+        (parameterize ([cache-root (mktmp)])
+          (let* ([b (make-lib-repo "b")]
+                 [app (make-app (list (cons 'b b)))])
+            ;; 给依赖加一个 umbrella 从不 import 的子库
+            (ensure-dir (string-append b "/b"))
+            (write-file (string-append b "/b/opt.sls")
+                        "(library (b opt) (export opt-ok) (import (chezscheme)) (define opt-ok #t))")
+            (git-commit! b "add sublib")
+            (install app '())
+            (assert-equal 0 (build app '()))
+            (assert-true (file-exists? (obj app "b.so")))
+            (assert-true (file-exists? (obj app "b/opt.so"))))))))
+
+    ;; 有 native 的依赖:无授权 → 报错(pending),且**一次构建也不能发生**
     (build-native-needs-auth
       (parameterize ([cache-root (mktmp)])
         (let* ([n (make-native-lib "n" "libn")]
-               [app (make-app (list (cons 'n n)))]
-               [log (string-append (mktmp) "/log")])
+               [app (make-app (list (cons 'n n)))])
           (install app '())
-          (with-mock log
-            (lambda ()
-              (assert-raises (lambda () (build app '()))))))))
+          (assert-raises (lambda () (build app '())))
+          ;; 授权判定在排单**之前**:被拒时不该已经编出任何东西
+          (assert-false (file-exists? (obj app "n.so"))))))
 
-    ;; --allow-build → 执行 + 写 approvals + native 先于 compile-tree
+    ;; --allow-build → 真跑 native 后端,产物落在不变量位置,授权落盘
     (build-native-authorized
-      (parameterize ([cache-root (mktmp)])
-        (let* ([n (make-native-lib "n" "libn")]
-               [app (make-app (list (cons 'n n)))]
-               [log (string-append (mktmp) "/log")])
-          (install app '())
-          (with-mock log
-            (lambda ()
-              (assert-equal 0 (build app (list (cons 'allow-build #t))))
-              (let ([l (read-file log)])
-                (assert-true (substr? l "native-task"))
-                (assert-true (substr? l "library-task")))
-              ;; approvals 落盘
-              (assert-true (file-exists? (string-append app "/.chandler-approvals")))
-              ;; 再 build 无需 --allow-build(已授权且描述未变)
-              (assert-equal 0 (build app '())))))))
+      (when-compiler (lambda ()
+  (parameterize ([cache-root (mktmp)])
+          (let* ([n (make-native-lib "n" "libn")]
+                 [app (make-app (list (cons 'n n)))])
+            (install app '())
+            (assert-equal 0 (build app (list (cons 'allow-build #t))))
+            ;; native 落点不变量:<lib>/native/<soname>.<ext>
+            (assert-true (file-exists?
+                           (obj app (string-append "n/native/libn." (so-ext)))))
+            (assert-true (file-exists? (obj app "n.so")))
+            ;; approvals 落盘
+            (assert-true (file-exists? (string-append app "/.chandler-approvals")))
+            ;; 再 build 无需 --allow-build(已授权且描述未变)
+            (assert-equal 0 (build app '())))))))
+
+    ;; 白名单粒度:--allow-build=<别的包> 不该放行本包
+    (build-allow-list-is-scoped
+      (when-compiler (lambda ()
+  (parameterize ([cache-root (mktmp)])
+          (let* ([n (make-native-lib "n" "libn")]
+                 [app (make-app (list (cons 'n n)))])
+            (install app '())
+            (assert-raises (lambda () (build app (list (cons 'allow-build "other")))))
+            (assert-equal 0 (build app (list (cons 'allow-build "n")))))))))
 
     ;; 描述变更(掉包)→ 已有授权失效,重新需要 --allow-build
     (build-approval-invalidated-on-change
-      (parameterize ([cache-root (mktmp)])
-        (let* ([n (make-native-lib "n" "libn")]
-               [app (make-app (list (cons 'n n)))]
-               [log (string-append (mktmp) "/log")])
-          (install app '())
-          (with-mock log
-            (lambda ()
-              (build app (list (cons 'allow-build #t)))
-              ;; 改依赖 lib/n/manifest.ss 的 native 描述 → 哈希变
-              (write-file (string-append (lib-dir app 'n) "/manifest.ss")
-                "(manifest (format 1) (name \"n\") (version \"0.1.0\") (srcdir \".\") (native (libn (path \"native/libn\") (build (script \"evil.sh\")))))")
-              ;; 未重新授权 → 报错
-              (assert-raises (lambda () (build app '()))))))))))
+      (when-compiler (lambda ()
+  (parameterize ([cache-root (mktmp)])
+          (let* ([n (make-native-lib "n" "libn")]
+                 [app (make-app (list (cons 'n n)))])
+            (install app '())
+            (build app (list (cons 'allow-build #t)))
+            ;; 改依赖 lib/n/manifest.ss 的 native 描述 → 哈希变
+            (write-file (string-append (lib-dir app 'n) "/manifest.ss")
+              "(manifest (format 1) (name \"n\") (version \"0.1.0\") (srcdir \".\") (native (libn (path \"native/libn\") (build (script \"evil.sh\")))))")
+            ;; 未重新授权 → 报错
+            (assert-raises (lambda () (build app '()))))))))
+
+    ;; ── 根项目自己的编译(B6:recipe.ss 可选)──
+
+    ;; 没有 recipe.ss → 从 manifest 推导:(name) 给库名、(srcdir) 给搜索根
+    (build-project-without-recipe
+      (when-compiler (lambda ()
+        (let ([app (mktmp)])
+          (write-file (join-paths app "manifest.ss")
+                      "(manifest (format 1) (name \"myapp\") (version \"0.1.0\") (srcdir \".\"))")
+          (write-file (join-paths app "myapp.ss")
+                      "(library (myapp) (export ok) (import (chezscheme)) (define ok #t))")
+          (ensure-dir (join-paths app "myapp"))
+          (write-file (join-paths app "myapp/sub.sls")
+                      "(library (myapp sub) (export s) (import (chezscheme)) (define s 1))")
+          (build-project app #f)
+          (let ([bdir (join-paths app "_build" (current-machine-type))])
+            (assert-true (file-exists? (join-paths bdir "myapp.so")))
+            (assert-true (file-exists? (join-paths bdir "myapp/sub.so"))))))))
+
+    ;; 有 recipe.ss → 跑它的 default-task,且**只跑它**(test 之类不该被 build 带跑)
+    (build-project-with-recipe-runs-default-task-only
+      (when-compiler (lambda ()
+        (let ([app (mktmp)])
+          (write-file (join-paths app "manifest.ss")
+                      "(manifest (format 1) (name \"myapp\") (version \"0.1.0\") (srcdir \".\"))")
+          (write-file (join-paths app "myapp.ss")
+                      "(library (myapp) (export ok) (import (chezscheme)) (define ok #t))")
+          (write-file (join-paths app "recipe.ss")
+                      (string-append
+                        "(define-lib-roots \".\")\n"
+                        "(library-task 'build '(myapp))\n"
+                        "(task 'test (lambda () (write-text \"RAN-TEST\" \"x\")))\n"
+                        "(default-task 'build)\n"))
+          (build-project app #f)
+          (assert-true (file-exists?
+                         (join-paths app "_build" (current-machine-type) "myapp.so")))
+          (assert-false (file-exists? (join-paths app "RAN-TEST")))))))
+
+    ;; 没有 manifest.ss 也没有 recipe.ss → 什么都不做,不报错
+    (build-project-noop-without-manifest
+      (let ([app (mktmp)])
+        (build-project app #f)
+        (assert-false (file-exists? (join-paths app "_build")))))
+
+    ))

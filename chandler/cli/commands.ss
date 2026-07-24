@@ -261,14 +261,14 @@
   ;; 1. 依赖:bake build-all per dep → chandler lay out to lib/<mt>/
   ;; 2. 项目:bake build in project root (if recipe.ss exists)
   (define (cmd-build root flags)
-    (build root (list (cons 'allow-build (flag flags 'allow-build))
-                      (cons 'production (flag? flags 'production))))
-    ;; 编译项目自身(如果有 recipe.ss)
-    (let ([recipe (join-paths root "recipe.ss")])
-      (when (file-exists? recipe)
-        (let ([bake (or (getenv* "CHANDLER_BAKE") "bake")])
-          (printf "build: compiling project via bake...~%")
-          (run-check bake '("build") (list (cons 'cwd root))))))
+    (let ([verbose? (flag? flags 'verbose)])
+      (build root (list (cons 'allow-build (flag flags 'allow-build))
+                        (cons 'production (flag? flags 'production))
+                        (cons 'verbose verbose?)))
+      ;; 编译项目自身:有 recipe.ss 就跑它的 default-task,没有就从 manifest 推导。
+      ;; 进程内编译(P6 阶段 B6)—— 不再 spawn bake。
+      (printf "build: compiling project...~%")
+      (build-project root verbose?))
     0)
 
   ;; ── env:输出依赖环境变量(eval "$(chandler env)")──

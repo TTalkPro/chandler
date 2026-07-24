@@ -11,6 +11,7 @@
           make-lib-repo make-native-lib make-app)
   (import (chezscheme)
           (chandler util)
+          (chandler fs)
           (chandler proc))
 
   ;; ── 临时目录 / 文件 ──
@@ -62,13 +63,20 @@
          dir)]))
 
   ;; 带 native 声明的库仓(build 授权测试用)
+  ;; 带 native 的依赖。后端用 **script** 且脚本只按落点契约产出文件(`: > $NATIVE_OUT/…`)
+  ;; —— 不需要 C 编译器:这些用例要验的是授权、落点不变量与产物搬运,不是 cc。
+  ;; (2026-07-24 之前后端写的是 `make`、也没有 native/ 目录,那时构建被 mock bake
+  ;; 挡着从不真跑;进程内编译后它会真的去执行,故补成一个真能跑的最小后端。)
   (define (make-native-lib name soname)
     (let ([dir (mktmp)])
       (git-init! dir)
       (write-file (string-append dir "/manifest.ss")
-        (format "(manifest (format 1) (name ~s) (version \"0.1.0\") (srcdir \".\") (native (~a (path \"native/~a\") (build make))))"
+        (format "(manifest (format 1) (name ~s) (version \"0.1.0\") (srcdir \".\") (native (~a (path \"native/~a\") (build (script \"build.sh\")))))"
                 name soname soname))
       (write-file (string-append dir "/" name ".ss") (lib-umbrella-text name))
+      (ensure-dir (string-append dir "/native/" soname))
+      (write-file (string-append dir "/native/" soname "/build.sh")
+                  (string-append ": > \"$NATIVE_OUT/" soname ".$SOEXT\"\n"))
       (git-commit! dir "c1")
       dir))
 

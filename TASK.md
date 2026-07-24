@@ -360,7 +360,9 @@ $APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
 | B3 | `deps`(312) → `(chandler import-graph)`(R6RS import 解析 + 库闭包 + 环检测) | ✅ 已完成 | `chandler/import-graph.ss`(新) |
 | B4 | `compile`(612) → `(chandler compile)`(library-task/program-task/boot-task/指纹/并行 `-j`/prebuilt/clean);**B2 遗留验收**:`load-recipe` 本仓 `recipe.ss` + `(invoke-task 'build)` 跑通自编译 | ✅ 已完成 | `chandler/compile.ss`(新) |
 | B5 | `native`(427) → `(chandler native-build)`;注册 `current-native-prescan`;native(script/make/cmake)端到端(miniregex 已于 B2 完成) | ✅ 已完成 | `chandler/native-build.ss`(新) |
-| B6 | bake CLI(`dispatch` 65 + `cli` 235 + `init` 113 + `main` 29)合入 chandler CLI;保留 `chandler bake` 别名;`chandler bake build` ≡ 旧 `bake build` | 🔲 待实现 | `chandler/cli/{args,commands,main}.ss` |
+| B6a | **`chandler build` 改进程内编译**(不再 spawn bake);`chandler deps/build/run` 在无 bake 的环境全通 | ✅ 已完成 | `chandler/build.ss`、`chandler/cli/commands.ss` |
+| B6b | **`recipe.ss` 变可选**:没有它就从 manifest 推导构建((name)/(srcdir)/(native …)) | ✅ 已完成 | `chandler/build.ss` |
+| B6c | bake CLI 表面合入(`cli` 235 + `init` 113:`-T/-P/-j/-n/-c/-f/--trace`、`bake init` 脚手架);保留 `chandler bake` 别名 | 🔲 待实现 | `chandler/cli/{args,commands,main}.ss` |
 | B7 | 删除 bake 仓;统一一套 bootstrap + 启动器;skiff-demo 端到端 | 🔲 待实现 | 删 `/home/david/workspace/bake`;`bootstrap.ss` |
 
 **执行约定(2026-07-24)**:阶段 B **只从 bake 仓读取搬运,不改 bake 仓** —— 能力吸收完即 B7 删仓,给作废物打补丁是纯浪费。故 A2 记的「bake 侧保守删改」到此为止,不再有 bake 侧改动。
@@ -400,6 +402,21 @@ $APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
 8. **新增 `compiler-available?`** —— Petite 把 `compile-library` 绑着但一调就抛 `compile package is not loaded`,错在很深处、话也难懂。探测一次(真编一个最小库到临时文件)后记住,`compile-lib` 入口给出可操作的话:「this runtime has no compiler (Petite does not ship one) — build with `scheme` or `skiff`」。测试里真编译的用例据此在 Petite 上**跳过**而非放宽断言。
 
 **验证**:三运行时 **297/297 全绿**(新增 compile 20 用例;真在临时目录编真库,含 `-j` 真起子进程)。自编译端到端:`load-recipe` 本仓 `recipe.ss` → `invoke-task 'build` → 17 个 `.so`,把 `_build/ta6le` 单独作唯一库根 `(import (chandler))` 成功、整套测试跑在这批对象上 277/277。
+
+**B6a/B6b 实现期决定(2026-07-24)**:
+
+1. **`chandler build` 不再 spawn bake**。旧路径是「在依赖树里生成 `.chandler-build.ss` → `run-check bake -f … build-all` → 删文件」;新路径直接调 `library-task` / `native-task*` 排单、`invoke` 就地编译。少一次子进程往返、少一个写进依赖树的临时文件,错误也不必从子进程 stderr 里捞。**`CHANDLER_BAKE` 与 `tests/mock-bake.sh` 随之作废**(mock 已从测试里移除,文件留待 B7 一并清理)。
+2. **授权判定必须在排单之前**(原本就是,但吸收后更要紧):依赖的 native 构建不再隔在子进程里,而是在**本进程** exec。新增回归用例「被拒时一个对象都不该编出来」。
+3. **`recipe.ss` 变可选(B6b)** —— 它是**程序**(加载即求值),只对根项目有意义(依赖的 recipe.ss 永不执行,[08 §3](designs/08-bootstrap-security.md))。而大多数项目的 build 段完全可以从清单推出来:`(name)` 给库名与 umbrella、`(srcdir)` 给搜索根、`(native …)` 给 native 任务(**你自己**清单里的 native 是可信的,不需 `--allow-build`)。故:有 `recipe.ss` → 跑它的 `default-task`(且**只跑它**,`test` 之类不被 build 带跑);没有 → 从 manifest 推导。**清单与 recipe 因此不必合并成一个文件**:数据仍只 `read` 不求值,程序仍是可选的单独文件,而「一个文件说清一个项目」在常见场合已经成立。
+4. **修掉一处假错**:`build` 原先无条件要求 `lib/src` 存在,而零依赖项目的 `chandler deps` 本就什么都不装 —— 报「lib/src missing; run `chandler deps` first」是假的(deps 明明跑过)。改为只在 lock 里**有依赖**时才检查。自举项目(chandler 自己)正是零依赖,B6 之前 build 不编根项目才没暴露。
+5. **测试夹具 `make-native-lib` 补成真能跑的后端**:原先声明 `(build make)` 且没有 `native/` 目录 —— 那时构建被 mock bake 挡着从不真跑。改为 `script` 后端且脚本只按落点契约产出文件(`: > $NATIVE_OUT/…`),**不需要 C 编译器**:这些用例验的是授权、落点不变量与产物搬运,不是 cc。
+6. **两个测试改掉「断言全局默认值」的反模式**(`task-engine` 的 `parameter-defaults` / `hooks-default`):`default-task-name`、`rule-order-counter`、各钩子都属于**构建会话**状态,别的 suite 跑完会留下值 —— 断言默认值等于断言测试顺序。改为断言**语义**(可 parameterize、退出即还原、值是过程)。
+
+**验证**:三运行时 **317/317 全绿**。端到端(**PATH 里没有 bake**):
+- 造依赖仓(umbrella + umbrella 从不 import 的子库 + `script` 后端的真 native)→ `chandler deps` → `chandler build --allow-build` → `chandler run`,打印 `(answer 7)`;产物 `lib/<mt>/{b.so, b/opt.so, b/native/libb.so}` 齐全,根项目**无 recipe.ss**、从 manifest 推导出 `_build/<mt>/myapp.so`。
+- **chandler 编译自己**:仓库副本 + 无 bake 的 PATH → `chandler build` 出 17 个 `.so`,再用这批产物作对象根跑全套测试 **317/317**。
+
+**顺带发现(非本阶段引入,未修)**:branch 依赖在**没有 lock** 时仍可能命中陈旧的 git 镜像缓存 —— 上游 `main` 已经有新提交,`chandler deps` 却物化出旧内容,清掉 `~/.cache/chandler` 后才对。`resolve-branch` 的「尽量走缓存零网络」对 tag/rev 成立,对 branch 不成立(分支会移动)。
 
 **B5 实现期决定(2026-07-24)**:
 

@@ -42,16 +42,28 @@
       (assert-equal 'v (hashtable-ref task-registry "k" #f))
       (hashtable-clear! task-registry))
 
-    (parameter-defaults
-      ;; mutable globals 是 parameter(R6RS library 不能 export assigned variable)。
-      (assert-false (*dry-run*))
-      (assert-false (*quiet*))
-      (assert-true  (*verbose*))
-      (assert-false (*trace*))
-      (assert-equal exit-ok (*exit-code*))
-      (assert-equal 0 (*rule-depth*))
-      (assert-false (default-task-name))
-      (assert-equal 0 (rule-order-counter)))
+    (parameters-are-parameters
+      ;; 被 set! 的全局改成了 parameter(R6RS library 不能 export assigned variable)。
+      ;; 断言的是**语义**(可 parameterize、可读写),不是「此刻的全局值」——
+      ;; default-task-name / rule-order-counter 属于**构建会话**状态,别的 suite
+      ;; (build / recipe / compile)跑完会留下值,断言默认值等于断言测试顺序。
+      (parameterize ([*dry-run* #t] [*quiet* #t] [*trace* #t]
+                     [default-task-name 'x] [rule-order-counter 3])
+        (assert-true  (*dry-run*))
+        (assert-true  (*quiet*))
+        (assert-true  (*trace*))
+        (assert-equal 'x (default-task-name))
+        (assert-equal 3 (rule-order-counter)))
+      ;; parameterize 退出即还原(证明它们真是 parameter 而非全局变量)
+      (let ([saved (*dry-run*)])
+        (parameterize ([*dry-run* (not saved)]) (void))
+        (assert-equal saved (*dry-run*)))
+      ;; 退出码常量表(designs/04 §退出码)
+      (assert-equal 0  exit-ok)
+      (assert-equal 1  exit-exec-error)
+      (assert-equal 2  exit-config-error)
+      (assert-equal 64 exit-usage-error)
+      (assert-equal 70 exit-internal))
 
     (parameter-set-get
       ;; access (*x*) / set (*x* v) — parameter 语义。
