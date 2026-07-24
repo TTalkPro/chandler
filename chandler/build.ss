@@ -8,11 +8,12 @@
 ;;; 少一次子进程往返、少一个写进依赖树里的临时文件,错误也不必再从子进程的 stderr
 ;;; 里捞。`CHANDLER_BAKE` 与 mock bake 随之作废。
 ;;;
-;;; 每个依赖仍在**它自己的 vendor/ 树**里编(cwd = 该树,搜索根 = "."):
-;;;   vendor/<dep>/_build/<mt>/   ← 编译产物落点,依赖之间互不干扰
-;;;   lib/{src,<mt>}/             ← chandler 的落点;作为**预构建根**挂进去,
-;;;                                 已编好的上游按对象消费、不重编(designs/25)
-;;; 按 lock 的 topo-order 逐个编 + 搬产物,故 A 依赖 B 时 B 已在 lib/ 里。
+;;; **C0(2026-07-24):不再有汇总的 lib/**。每个依赖在**它自己的 _vendor/ 树**里
+;;; 就地编(cwd = 该树,搜索根 = "."),产物留在原地:
+;;;   _vendor/<dep>/<srcdir>/_build/<mt>/   ← 编译产物,依赖之间互不干扰
+;;; 按 lock 的 topo-order 逐个编,已编好的上游作为**预构建根** `(prebuilt src obj)`
+;;; 挂进来(compile 里变 (obj . obj),只给对象、不重编,designs/25),故 A 依赖 B
+;;; 时 B 的对象已就位。末尾再挂全局前缀作兜底(chandler 运行时门住在那)。
 ;;;
 ;;; 安全:依赖的 native 构建 = 别人的代码 = RCE,须 --allow-build 授权,且授权绑
 ;;; 「构建描述哈希」写入 .chandler-approvals —— 描述变了(脚本掉包)则授权失效重提示。
@@ -44,17 +45,23 @@
   ;; opts: (allow-build . (#t | "a,b,..")) (production . bool) (verbose . bool)
   (define (build root opts)
     (let* ([lpath (project-lock-path root)])
-      (unless (file-exists? lpath)
-        (error 'build "manifest.lock not found; run `chandler deps` first" root))
-      (let* ([lk (read-lock lpath)]
-             [order (topo-order lk)]
-             [allow (alist-ref opts 'allow-build)]
-             [approvals-path (join-paths root ".chandler-approvals")]
-             [approvals (read-approvals approvals-path)])
-        ;; C0 之后没有 lib/ 可查 —— 每个依赖的 _vendor 树在不在,由 build-one-dep
-        ;; 逐条报(带上是哪个依赖),比这里一句笼统的前置检查更可操作。
-        ;; 1) 收集需授权的 native 构建 + 校验授权
-        (let ([pending '()] [to-record '()])
+      ;; 没有 lock = 没有依赖要编(零依赖项目如 chandler 自身从不跑 deps)。
+      ;; 不是错:直接跳过依赖编译,让 cmd-build 接着编项目自身。先前无条件要求
+      ;; lock,零依赖项目只能靠上一轮残留的 lock 蒙混过关(C0 e2e 时暴露)。
+      (if (not (file-exists? lpath))
+          0
+          (build-with-lock root opts lpath))))
+
+  (define (build-with-lock root opts lpath)
+    (let* ([lk (read-lock lpath)]
+           [order (topo-order lk)]
+           [allow (alist-ref opts 'allow-build)]
+           [approvals-path (join-paths root ".chandler-approvals")]
+           [approvals (read-approvals approvals-path)])
+      ;; C0 之后没有 lib/ 可查 —— 每个依赖的 _vendor 树在不在,由 build-one-dep
+      ;; 逐条报(带上是哪个依赖),比这里一句笼统的前置检查更可操作。
+      ;; 1) 收集需授权的 native 构建 + 校验授权
+      (let ([pending '()] [to-record '()])
           (for-each
             (lambda (d)
               (let ([name (symbol->string (locked-dep-name d))])
@@ -72,27 +79,20 @@
               (error 'build
                      (format "these dependencies need native library builds (running their build scripts means trusting their code): ~a~%  authorize with: --allow-build (all) or --allow-build=~a (these only)"
                              (string-join names ", ") (string-join names ",")))))
-          ;; 2) 按拓扑序逐个依赖:在它自己的 vendor/ 树里编译 + 搬产物 → lib/
-          (build-deps root order (and (alist-ref opts 'verbose) #t))
-          ;; 4) 落授权(描述哈希绑定)
-          (unless (null? to-record)
-            (write-approvals approvals-path
-                             (merge-approvals approvals (reverse to-record))))
-          (unless (null? order)
-            (printf "build: ~a ~a compiled to lib/~a/~%"
-                    (length order) (plural (length order) "dependency" "dependencies")
-                    (current-machine-type)))
-          0))))
+        ;; 2) 按拓扑序逐个依赖:就地在它自己的 _vendor/<dep>/…/_build/<mt>/ 编译
+        (build-deps root order (and (alist-ref opts 'verbose) #t))
+        ;; 4) 落授权(描述哈希绑定)
+        (unless (null? to-record)
+          (write-approvals approvals-path
+                           (merge-approvals approvals (reverse to-record))))
+        (unless (null? order)
+          (printf "build: ~a ~a compiled into _vendor/~%"
+                  (length order) (plural (length order) "dependency" "dependencies")))
+        0)))
 
-  ;; ── 逐个依赖:在**它自己的 vendor/ 树里**就地编译,chandler 搬产物 ──
-  ;;
-  ;;   vendor/<dep>/          ← 依赖自己的仓库根 = 它的搜索根(布局规范)
-  ;;     _build/<mt>/         ← 编译产物落点,与别的依赖互不干扰
-  ;;   lib/{src,<mt>}/        ← chandler deps/build 的落点(src/mt 拆分)
-  ;;
-  ;; **拓扑序**要紧:A 依赖 B 时,编 A 需要 B 已经在 lib/ 里。故按 lock 的
-  ;; topo-order 逐个编 + 装,并把已装好的部分作为**预构建对象根**挂进去
-  ;; (`(prebuilt "<project>/lib")`,designs/25)—— 对象式消费,不重编。
+  ;; ── 逐个依赖:在**它自己的 _vendor/ 树里**就地编译,产物留在原地 ──
+  ;; **拓扑序**要紧:A 依赖 B 时,编 A 需要 B 的对象已就位。故按 lock 的 topo-order
+  ;; 逐个编,已编好的上游作为**预构建对象根**挂进去(见 upstream-prebuilt-roots)。
   (define (build-deps root order verbose?)
     (for-each (lambda (d) (build-one-dep root d verbose?)) order))
 
@@ -107,7 +107,7 @@
         ;; 已经建好的上游按**它们各自的**预构建根消费(C0:不再有汇总的 lib/)。
         ;; topo 序保证「排在自己前面的」都已编好;prebuilt 根在 compile 里会变成
         ;; (obj . obj),即只给对象、不给源码 —— 那正是避免「不同编译实例」的做法。
-        (cons "." (upstream-prebuilt-roots root d))
+        (cons "." (append (upstream-prebuilt-roots root d) (fallback-roots root)))
         (lambda ()
           ;; 顺序与旧的生成 recipe 一致:native 先(它把 _build/.gen 挂进搜索根,
           ;; 随后的 library-task 才解析得到生成的 (<lib> native-loader)),库在后。
@@ -117,20 +117,38 @@
         verbose?
         (format "dependency ~a" name))))
 
-  ;; 本依赖之前(topo 序)那些依赖的预构建根:(src . obj) 各自成对。
-  ;; 只收**已经有 _build/<mt> 的**,免得把还没编的当预构建根挂上去。
+  ;; 一个依赖的预构建根 (src . obj):只在它已经有 _build/<mt> 时才算(否则 #f)。
+  (define (dep-prebuilt-root root u)
+    (let* ([src (srcdir-join (vendor-dir root (locked-dep-name u))
+                             (or (locked-dep-srcdir u) "."))]
+           [obj (join-paths src "_build" (current-machine-type))])
+      (and (file-directory? obj) (prebuilt src obj))))
+
+  ;; 本依赖之前(topo 序)那些依赖的预构建根 —— 编 d 时它们必须已就位。
   (define (upstream-prebuilt-roots root d)
     (let loop ([ds (topo-order (read-lock (project-lock-path root)))] [acc '()])
       (cond
         [(null? ds) (reverse acc)]
         [(eq? (locked-dep-name (car ds)) (locked-dep-name d)) (reverse acc)]
-        [else
-         (let* ([u (car ds)]
-                [src (srcdir-join (vendor-dir root (locked-dep-name u))
-                                  (or (locked-dep-srcdir u) "."))]
-                [obj (join-paths src "_build" (current-machine-type))])
-           (loop (cdr ds)
-                 (if (file-directory? obj) (cons (prebuilt src obj) acc) acc)))])))
+        [else (loop (cdr ds)
+                    (let ([r (dep-prebuilt-root root (car ds))])
+                      (if r (cons r acc) acc)))])))
+
+  ;; 全部依赖的预构建根 —— 编项目自身时用(它可能 import 任何一个)。
+  (define (all-dep-prebuilt-roots root)
+    (if (file-exists? (project-lock-path root))
+        (filter values
+                (map (lambda (u) (dep-prebuilt-root root u))
+                     (topo-order (read-lock (project-lock-path root)))))
+        '()))
+
+  ;; 兜底根:chandler 运行时门(designs/12 §5)与全局装的库都住在全局前缀,而它们
+  ;; **不在 lock**(gate 不是 dep)。故编译时把全局前缀作为预构建根挂在末尾 ——
+  ;; 与 run 期 resolved-libdirs 的全局兜底同一条路径。它是个 (src . obj) 对,
+  ;; 在 compile 里当预构建根 → (obj . obj),只给对象、不重编。
+  (define (fallback-roots root)
+    (let ([g (global-libdir)])
+      (if (and (pair? g) (file-directory? (cdr g))) (list g) '())))
 
   ;; ── 进程内构建一棵树:切 cwd、复位状态、设搜索根、排单、跑 ──
   ;;
@@ -138,7 +156,7 @@
   ;; `(dir …)` 全是**相对该树根**的,与旧方案「在依赖树里跑 bake」语义一致。
   ;; register! 是排单回调(在 cwd 已切好、搜索根已设好之后调用);
   ;; select! 决定跑哪些目标 —— 推导出来的构建跑**全部** file 目标(等价旧的
-  ;; build-all),而加载 recipe.ss 时跑它自己的 default-task(别的任务如 test
+  ;; build-all),而加载 chandler-tasks.ss 时跑它自己的 default-task(别的任务如 test
   ;; 不该被 build 顺手带跑)。
   (define (build-tree! dir roots register! select! verbose? what)
     (let ([old (current-directory)])
@@ -215,36 +233,46 @@
 
   ;; ── 根项目自己的编译 ──
   ;;
-  ;; **recipe.ss 是可选的**(2026-07-24):它是**程序**(任意 Scheme,加载即求值),
-  ;; 只对根项目有意义 —— 依赖的 recipe.ss 永不执行(designs/08 §3)。而绝大多数项目
-  ;; 的 build 段完全可以从清单推出来:`(name)` 给库名与 umbrella、`(srcdir)` 给搜索
-  ;; 根、`(native …)` 给 native 任务。故:
-  ;;   有 recipe.ss → 加载它,跑它的 default-task(需要自定义任务时才写)
+  ;; **chandler-tasks.ss 是可选的**(2026-07-24):它是**程序**(任意 Scheme,加载即
+  ;; 求值),只对根项目有意义 —— 依赖的 chandler-tasks.ss 永不执行(designs/08 §3)。
+  ;; 而绝大多数项目的 build 段完全可以从清单推出来:`(name)` 给库名与 umbrella、
+  ;; `(srcdir)` 给搜索根、`(native …)` 给 native 任务。故:
+  ;;   有 chandler-tasks.ss → 加载它,跑它的 default-task(需要自定义任务时才写)
   ;;   没有         → 从 manifest 推导,一行 recipe 也不用写
   ;; 清单与 recipe 因此**不需要合并成一个文件**:数据仍只 read 不求值,程序仍是可选的
   ;; 单独文件,而「一个文件说清一个项目」在常见场合已经成立。
   (define (build-project root verbose?)
-    (let ([recipe (join-paths root "recipe.ss")])
+    (let ([recipe (join-paths root default-tasks-file)])
       (if (file-exists? recipe)
-          ;; recipe 自己用 (define-lib-roots …) 说搜索根,这里不越俎代庖。
+          ;; chandler-tasks.ss 自己用 (define-lib-roots …) 说搜索根,这里不越俎代庖。
           (build-tree! root (list ".")
-                       (lambda () (load-recipe "recipe.ss"))
+                       (lambda () (load-recipe default-tasks-file))
                        (lambda () (select-targets '()))
                        verbose? "project recipe")
           (let ([mpath (join-paths root "manifest.ss")])
             (when (file-exists? mpath)
               (let* ([mf (read-manifest mpath)]
                      [name (manifest-name mf)]
+                     [app  (manifest-app mf)]
                      [sd   (let ([s (manifest-srcdir mf)])
                              (if (or (not s) (string=? s "")) "." s))])
                 (build-tree!
                   root
-                  (list sd (prebuilt (join-paths root "lib")))
+                  ;; C0:项目 import 的依赖在各 _vendor 树里,按预构建根消费
+                  ;; (已 build 过的对象直接用,不重编);不再有汇总的 lib/。
+                  (cons sd (append (all-dep-prebuilt-roots root) (fallback-roots root)))
                   (lambda ()
                     ;; 你自己 manifest 里的 native 是**可信**的(designs/08 §3
                     ;; 「你 manifest 里 path native 的构建」),不需要 --allow-build。
                     (derive-native-tasks! name (native-items (project-native-spec root)))
-                    (derive-library-tasks! (project-library-entries root name sd)))
+                    (if app
+                        ;; app:入口库(可能与 manifest name 不同名 —— skiff-demo 的
+                        ;; 清单叫 "skiff-demo",入口却是 (mdserver))决定要编什么。
+                        ;; library-task 从入口走 build-graph:编入口闭包,依赖(预构建
+                        ;; 根)不下降。这正是旧 recipe 的 (library-task 'build entry)。
+                        (library-task 'build (app-entry app))
+                        ;; lib:没有单一入口,按约定编 <name>.ss + <name>/ 全部库。
+                        (derive-library-tasks! (project-library-entries root name sd))))
                   all-file-targets
                   verbose? (format "project ~a" name))))))))
 

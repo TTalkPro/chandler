@@ -23,6 +23,7 @@
           (chandler runtime-detector)
           (chandler build)
           (chandler pack)
+          (chandler env)
           (chandler cli args))
 
   ;; ── pack / verify-pack(designs/09)──
@@ -273,17 +274,33 @@
 
   ;; ── build:编译依赖闭包 + 当前项目 ──
   ;; 1. 依赖:bake build-all per dep → chandler lay out to lib/<mt>/
-  ;; 2. 项目:bake build in project root (if recipe.ss exists)
+  ;; 2. 项目:有 chandler-tasks.ss 跑它的 default-task,否则从 manifest 推导
   (define (cmd-build root flags)
     (let ([verbose? (flag? flags 'verbose)])
       (build root (list (cons 'allow-build (flag flags 'allow-build))
                         (cons 'production (flag? flags 'production))
                         (cons 'verbose verbose?)))
-      ;; 编译项目自身:有 recipe.ss 就跑它的 default-task,没有就从 manifest 推导。
+      ;; 编译项目自身:有 chandler-tasks.ss 就跑它的 default-task,没有就从 manifest 推导。
       ;; 进程内编译(P6 阶段 B6)—— 不再 spawn bake。
       (printf "build: compiling project...~%")
       (build-project root verbose?))
     0)
+
+  ;; ── .env 收集(C3)──
+  ;; 项目根 <root>/.env,再叠加 --env-file <path>(显式指定,后到者同键覆盖)。
+  ;; 依赖树里的 .env 一概不读(见 (chandler env) 头注:信任模型)。返回有序 alist。
+  (define (collect-dotenv root flags)
+    (let* ([base (read-dotenv (dotenv-file-path root))]
+           [extra (let ([f (flag flags 'env-file)])
+                    (if (string? f)
+                        (read-dotenv (if (string-prefix? "/" f) f (join-paths root f)))
+                        '()))])
+      (append base extra)))
+
+  ;; .env 覆盖进程环境 —— 故在传给子进程的 env alist 里排在**最后**(env-prefix
+  ;; 是 shell 变量前缀,同名后者胜)。chandler 自己交接的 APP_ROOT 等排在前面。
+  (define (env-with-dotenv root flags base-env)
+    (append base-env (collect-dotenv root flags)))
 
   ;; ── env:输出依赖环境变量(eval "$(chandler env)")──
   ;;   两个变量:库搜索路径,以及 APP_ROOT(库前缀 —— 资源与 native 都挂它下面)。
@@ -292,6 +309,9 @@
       (printf "export CHEZSCHEMELIBDIRS=\"~a\"~%" (libdirs->arg dirs))
       (let ([e (app-root-env root)])
         (unless (null? e) (printf "export APP_ROOT=\"~a\"~%" (cdar e))))
+      ;; .env(C3):覆盖式,故放在最后 export —— 后 export 的值在 eval 后生效。
+      (for-each (lambda (kv) (printf "export ~a=~a~%" (car kv) (shell-quote (cdr kv))))
+                (collect-dotenv root flags))
       0))
 
   ;; ── deps --list / deps --tree ──
@@ -409,7 +429,7 @@
                         (append (list "-q" "--libdirs" (path-list dirs)
                                       "--script" preamble)
                                 script-args)
-                        (list (cons 'env (app-root-env root)))))))
+                        (list (cons 'env (env-with-dotenv root flags (app-root-env root))))))))
 
   ;; **dev 期不设 APP_ROOT**(C0,2026-07-24)。
   ;;
@@ -440,7 +460,8 @@
                (if project? "project" "global") (length dirs) interp)
       (let ([args (append (list "--libdirs" (path-list dirs))
                           (if (null? natives) '() (list (make-repl-preamble root natives))))])
-        (run-foreground interp args (list (cons 'env (app-root-env root)))))))
+        (run-foreground interp args
+                        (list (cons 'env (env-with-dotenv root flags (app-root-env root))))))))
 
   ;; 运行时:--runtime > CHANDLER_RUNTIME > manifest 声明 skiff-only > 跟随 chandler 当前所在
   (define (repl-interp root flags)

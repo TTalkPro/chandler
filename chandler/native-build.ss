@@ -82,7 +82,7 @@
   ;;   一个同名 phony 依赖它。后端跑完我们核验产物落位。这层 <lib>/native/ 嵌套正是
   ;;   install(_build/<mt>/ → <prefix>/<mt>/)原样带过去的形状。
   ;;
-  ;;   信任:**你自己 recipe.ss 里**的 native-task 是被信任的(与 run/sh 同一档)。
+  ;;   信任:**你自己 chandler-tasks.ss 里**的 native-task 是被信任的(与 run/sh 同一档)。
   ;;   **依赖**的 native 构建是 RCE,由 chandler 的 `--allow-build` 把关
   ;;   (见 designs/07 §2-3、designs/08 §3)—— 不在本模块职责内。
   ;; ====================================================================

@@ -14,7 +14,7 @@
 ;;;                bootstrap.ss 负责(§18f 整段未搬)
 ;;;   -B           bake 自己就只打一句 "ignored in this version"
 ;;;   --name/--lib/--force  是 `bake init` 的选项;脚手架归 `chandler init`,
-;;;                且 recipe.ss 自 B6b 起是可选的,再来一套 init 只会制造重复
+;;;                且 chandler-tasks.ss 自 B6b 起是可选的,再来一套 init 只会制造重复
 
 (library (chandler cli bake)
   (export bake-main bake-parse-opts bake-opt bake-list-tasks bake-show-prereqs)
@@ -46,11 +46,13 @@
         [(null? args) (cons (cons 'tasks (reverse tasks)) o)]
         [(string=? (car args) "--")
          (cons (cons 'tasks (append (reverse tasks) (cdr args))) o)]
-        [(string-prefix? "--recipe=" (car args))
+        [(string-prefix? "--file=" (car args))
+         (put 'recipe (strip-prefix (car args) "--file=") (cdr args))]
+        [(string-prefix? "--recipe=" (car args))     ; 向后兼容旧名
          (put 'recipe (strip-prefix (car args) "--recipe=") (cdr args))]
         [(string-prefix? "--jobs=" (car args))
          (put 'jobs (strip-prefix (car args) "--jobs=") (cdr args))]
-        [(member (car args) '("--recipe" "-f")) (need 'recipe args "path")]
+        [(member (car args) '("--file" "--recipe" "-f")) (need 'recipe args "path")]
         [(member (car args) '("--jobs" "-j"))   (need 'jobs args "count")]
         [(member (car args) '("-T" "--tasks"))      (put 'list #t (cdr args))]
         [(member (car args) '("-A" "--all-tasks"))  (put 'all #t (cdr args))]
@@ -115,10 +117,10 @@
               (list-sort sort-task-names (vector->list (hashtable-keys task-registry)))))
 
   (define (print-help)
-    (printf "chandler bake -- run tasks from a recipe.ss (the task runner absorbed from bake)~%~%")
+    (printf "chandler bake -- run tasks from a chandler-tasks.ss (the task runner absorbed from bake)~%~%")
     (printf "Usage: chandler bake [options] [task ...]~%~%")
     (printf "Options:~%")
-    (printf "  -f, --recipe PATH   recipe file to load (default: ./recipe.ss)~%")
+    (printf "  -f, --file PATH     tasks file to load (default: ./chandler-tasks.ss)~%")
     (printf "  -T, --tasks         list tasks that carry a description~%")
     (printf "  -A, --all-tasks     with -T: list every task, described or not~%")
     (printf "  -P, --prereqs       print each task's prerequisite tree~%")
@@ -128,8 +130,8 @@
     (printf "  -q, --quiet         suppress progress output~%")
     (printf "  -t, --trace         trace task invocation~%")
     (printf "  -h, --help          this message~%~%")
-    (printf "Most projects do not need a recipe.ss at all: `chandler build` derives the~%")
-    (printf "build from manifest.ss. Write one only for custom tasks (test, release, ...).~%"))
+    (printf "Most projects do not need a chandler-tasks.ss at all: `chandler build` derives~%")
+    (printf "the build from manifest.ss. Write one only for custom tasks (test, release).~%"))
 
   ;; ── §16 dispatch ──
   (define (bake-main argv)
@@ -150,9 +152,9 @@
     (*verbose*   (not (bake-opt o 'quiet)))
     (*trace*     (and (bake-opt o 'trace) #t))
     (*all-tasks* (and (bake-opt o 'all) #t))
-    (let ([recipe (or (bake-opt o 'recipe) "recipe.ss")])
+    (let ([recipe (or (bake-opt o 'recipe) default-tasks-file)])
       (unless (file-exists? recipe)
-        (bail-config "recipe file not found: ~a (use -f to specify)" recipe))
+        (bail-config "tasks file not found: ~a (use -f to specify)" recipe))
       (load-recipe recipe)
       (load-fp-manifest!)
       (cond

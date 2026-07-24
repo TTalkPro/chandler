@@ -12,6 +12,7 @@
           (chandler base)
           (chandler task-engine)
           (chandler compile)
+          (chandler recipe)
           (chandler cli bake))
 
   (define (with-proj files proc)
@@ -44,7 +45,7 @@
 
   ;; 一个不需要编译器的最小 recipe:两个 phony 任务,默认任务写文件。
   (define phony-files
-    '(("recipe.ss" .
+    '(("chandler-tasks.ss" .
        "(task 'build \"build it\" '() (lambda () (write-text \"BUILT\" \"x\")))\n(task 'other \"other one\" '() (lambda () (write-text \"OTHER\" \"x\")))\n(task 'hidden (lambda () (void)))\n(default-task 'build)\n")))
 
   (define-suite suite
@@ -57,9 +58,16 @@
         (assert-string= "4" (bake-opt o 'jobs))
         (assert-equal '("build") (bake-opt o 'tasks)))
       (let ([o (bake-parse-opts '("--recipe=x.ss" "--jobs=8"))])
-        (assert-string= "x.ss" (bake-opt o 'recipe))
+        (assert-string= "x.ss" (bake-opt o 'recipe))    ; 旧名向后兼容
         (assert-string= "8" (bake-opt o 'jobs))
-        (assert-equal '() (bake-opt o 'tasks))))
+        (assert-equal '() (bake-opt o 'tasks)))
+      ;; 新名 --file(与文件重命名 recipe.ss → chandler-tasks.ss 配套)
+      (let ([o (bake-parse-opts '("--file" "t.ss"))])
+        (assert-string= "t.ss" (bake-opt o 'recipe)))
+      (let ([o (bake-parse-opts '("--file=t.ss"))])
+        (assert-string= "t.ss" (bake-opt o 'recipe)))
+      ;; 默认文件名常量 = chandler 命名(不是 bake 的 recipe.ss)
+      (assert-string= "chandler-tasks.ss" default-tasks-file))
 
     (parse-boolean-flags
       (let ([o (bake-parse-opts '("-T" "-A" "-P" "-n" "-c" "-q" "-t"))])
@@ -141,7 +149,7 @@
 
     (prereqs-tree
       (with-proj
-        '(("recipe.ss" .
+        '(("chandler-tasks.ss" .
            "(task 'leaf (lambda () (void)))\n(task 'top \"top\" '(leaf) (lambda () (void)))\n(default-task 'top)\n"))
         (lambda (d)
           (let ([out (capture (lambda () (bake-main '("-P"))))])
@@ -152,7 +160,7 @@
       (when-compiler (lambda ()
         (with-proj
           '(("a.sls" . "(library (a) (export x) (import (rnrs)) (define x 1))")
-            ("recipe.ss" . "(define-lib-roots \".\")\n(library-task 'build '(a))\n(default-task 'build)\n"))
+            ("chandler-tasks.ss" . "(define-lib-roots \".\")\n(library-task 'build '(a))\n(default-task 'build)\n"))
           (lambda (d)
             (assert-equal exit-ok (run-quiet (lambda () (bake-main '()))))
             (assert-true (file-exists? (join-paths (build-dir) "a.so")))
@@ -165,7 +173,7 @@
         (with-proj
           '(("a.sls" . "(library (a) (export x) (import (rnrs)) (define x 1))")
             ("b.sls" . "(library (b) (export y) (import (rnrs) (a)) (define y x))")
-            ("recipe.ss" . "(define-lib-roots \".\")\n(library-task 'build '(b))\n(default-task 'build)\n"))
+            ("chandler-tasks.ss" . "(define-lib-roots \".\")\n(library-task 'build '(b))\n(default-task 'build)\n"))
           (lambda (d)
             (assert-equal exit-ok (run-quiet (lambda () (bake-main '("-j" "2")))))
             (assert-true (file-exists? (join-paths (build-dir) "a.so")))

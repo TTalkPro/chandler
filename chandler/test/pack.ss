@@ -95,20 +95,22 @@
           (assert-false
             (file-exists? (join-paths (pack-out app "myapp" "1.0") mt "ghost.so"))))))
 
-    ;; ── 应用资源:源目录名约定死(<project>/resources/),存在即打包;落点是
-    ;; share/<app>/resources/ —— 与依赖资源 share/<libpath>/resources/ 及全局
-    ;; 安装前缀同构,且在 <mt> 层之上(数据不带 ABI)──
+    ;; ── 应用资源:源目录名约定死(<project>/resources/),**原样**搬进
+    ;; <pack>/src/resources/ —— <libpath>/ 那层已在 resources/ 里(与依赖资源、
+    ;; 与 dev 期 resource-path 扫描同一约定);数据不带 ABI,落 src/ 层不进 <mt>。──
     (pack-resources-by-convention
       (let* ([app (make-app '())])
         (fake-build! app "myapp")
-        (put! (join-paths app "resources" "greeting.txt") "res-hello")
-        (put! (join-paths app "resources" "sub" "nested.txt") "nested")
+        ;; 项目自己的库 (myapp) 的资源摆在 resources/myapp/(与 dev 期读的路径一致)
+        (put! (join-paths app "resources" "myapp" "greeting.txt") "res-hello")
+        (put! (join-paths app "resources" "myapp" "sub" "nested.txt") "nested")
         (pack-until-runtime app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . petite)))
         (let ([d (pack-out app "myapp" "1.0")])
+          ;; verbatim:resources/myapp/… → src/resources/myapp/…(不再多套一层 <app>)
           (assert-string= "res-hello" (read-file (join-paths d "src" "resources" "myapp" "greeting.txt")))
           (assert-true (file-exists? (join-paths d "src" "resources" "myapp" "sub" "nested.txt")))
-          ;; 旧的扁平落点已去掉 —— 共享前缀里两个应用会撞车
-          (assert-false (file-exists? (join-paths d "resources")))
+          ;; 不该出现 dev 期读不到的双层 src/resources/myapp/myapp/
+          (assert-false (file-exists? (join-paths d "src" "resources" "myapp" "myapp")))
           ;; 数据不带 ABI → 不该落进 <mt> 层(也就不会进库搜索根)
           (assert-false (file-exists? (join-paths d mt "resources"))))))
 
@@ -118,7 +120,7 @@
         (pack-until-runtime app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . petite)))
         (let ([d (pack-out app "myapp" "1.0")])
           (assert-false (file-exists? (join-paths d "resources")))
-          (assert-false (file-exists? (join-paths d "src" "resources" "myapp"))))))
+          (assert-false (file-exists? (join-paths d "src" "resources"))))))
 
     ;; ── .chandler/<app>/manifest.ss:清单快照,与全局 install 落点同构;
     ;; 也是 app-resource-path 认出应用名的依据(包里恒只有一个条目)──

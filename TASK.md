@@ -447,10 +447,10 @@ $APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
 | C0 | `resolved-libdirs` 改 per-dep pairs;`vendor/`→`_vendor/`;删掉所有往 `lib/` 的拷贝;pack / 全局 install 改从各依赖自己的树取 | P0 | ✅ 已完成 | `chandler/{install,build,pack}.ss`、`chandler/cli/commands.ss` |
 | C1 | 统一 `resource-path`:扫 `(library-directories)` 的 **src/obj 两侧** + prefix-fallback;删旧四 API;**资源定位不再依赖 `APP_ROOT`** | P1 | ✅ 已完成 | `chandler/runtime-paths.ss`、`chandler/pack.ss` |
 | C2 | `native-load-paths` 改扫所有挂载条目的 obj 侧(不再只扫 `lib/<mt>`) | P2 | ✅ 已完成 | `chandler/install.ss` |
-| C3 | `.env` 读取模块(`chandler/env.ss`);`run`/`repl`/`env`/`install` 消费 `.env` | P3 | 🔲 待实现 | `chandler/env.ss`(新)、`chandler/cli/commands.ss` |
+| C3 | `.env` 读取模块(`chandler/env.ss`);`run`/`repl`/`env` 消费(**不碰 build/deps/install**,保住可复现) | P3 | ✅ 已完成 | `chandler/env.ss`(新)、`chandler/cli/{commands,args,main}.ss` |
 | C4 | install 落点:resources → `src/resources/<namespace>/`(替代 `share/<namespace>/resources/`) | P5 | ✅ 已完成 | `chandler/layout.ss`、`chandler/install.ss`、`chandler/runtime-paths.ss`、`chandler/cli/commands.ss` |
 | C5 | pack 输出 resources 在 `src/resources/<ns>/`(「pack 来源改 `_vendor/`」那半依赖未采纳的 C0,未做) | P6 | ✅ 已完成 | `chandler/pack.ss` |
-| C6 | 文档 + skiff-demo 迁移 + `chandler init` 模板加 `.env` 骨架 | P7 | 🔲 待实现 | `README.md`、`chandler/cli/commands.ss` |
+| C6 | 文档 + skiff-demo 迁移 + `chandler init` 模板加 `.env` 骨架 | 🟡 skiff-demo 已迁移;本仓 README + init 模板待做 | 跨仓 `skiff-demo/*`;`README.md`、`chandler/cli/commands.ss` |
 
 **C4/C5 实现期决定(2026-07-24)**:
 
@@ -524,9 +524,50 @@ $APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
 
 **验证**:三运行时 **337/337 全绿**。pack 的测试夹具(`fake-dep-objs!`)也改成往 `_vendor/<dep>/_build/<mt>/` 写 —— 先前它伪造 `lib/`,一度让 pack 测试在真实 pack 已经坏掉时仍然是绿的。
 
-**未重跑**:`deps → build → run` 与 `pack → clean-env 启动` 的端到端在 C0 之后尚未实跑(只有单元测试覆盖)。
+**端到端已实跑(2026-07-24,PATH 无 bake,用现装到临时前缀的新 chandler)**:
+- `deps → build --allow-build → run`:依赖仓带子库 + native(cc)+ 资源,`(chandler runtime-paths)` 的 `resource-path` 同时读出**依赖资源**与**应用自身资源**,全程无 `lib/`、无 `APP_ROOT` —— `(b 7 opt 8 b-res "…" my-res "…")`。
+- `pack --runtime petite`:包内 `src/resources/{b,myapp}/`、`ta6le/` 对象 + native、`ta6le/chandler/` 10 个 runtime `.so`;`env -i ./bin/myapp` clean-env 启动与整包 `cp` 到别处均打印正确结果;`verify-pack --target` **21 ok / 0 bad / 0 extra**。
+- 全局 `install --global`:`_vendor` 各依赖树 merge 进前缀,`src/{b.ss,myapp.ss}` + `src/resources/b/data.txt` + `ta6le/{b.so,myapp.so,b/opt.so,b/native/libb.so}` 三层俱全。
 
-**测试夹具的一个既有问题(未修)**:`(chandler test fixtures)` 的 `mktmp` 被调用约 250 次/轮,而多数调用方从不清理 —— 本次会话十几轮三运行时全跑下来,`/tmp` 攒了 **12160 个目录、7.7G**,直接把 tmpfs 撑到 100%,后续所有 `mktemp` 返回空串,测试大面积假失败(报的是 `cannot set current directory to ""` / `Permission denied`,与被测代码无关)。已手工清理。修法:让 `mktmp` 把目录登记进一张表,`run-suites` 收尾统一 `rm-rf`;或给夹具加 `with-tmp` 形式强制 dynamic-wind。
+**e2e 期修掉的三处**:
+1. **`chandler build` 要求 lock 才肯跑** —— 零依赖项目(chandler 自身)从不 `deps`、没有 lock,先前只靠上一轮残留的 lock 蒙混。改为「无 lock = 无依赖要编」,跳过依赖编译直接编项目自身。
+2. **`build-project` / `build-one-dep` 仍挂旧的 `lib/` 预构建根**,且缺全局兜底 —— 于是 import `(chandler runtime-paths)`(运行时门,不在 lock)的项目编不过。改为逐依赖 `(prebuilt src obj)` + 末尾全局前缀兜底,与 run 期 `resolved-libdirs` 同一搜索路径。
+3. **应用资源 pack 时双层嵌套** `src/resources/myapp/myapp/` —— pack 的 `copy-resources!` 多套了一层 `<app>`,与 dev 期 `resource-path` 扫 `<root>/resources/<libpath>/` 的约定对不上。统一为 **verbatim**:`<root>/resources/**` → `src/resources/**`(`<libpath>/` 已在 `resources/` 里,与依赖资源同一约定)。
+
+**两处既有不一致(非 C0 引入,未修,记录在案)**:
+- `install --global` 的落点走 `default-user-libdir`(读 `HOME`),而 chandler 运行时门走 `global-prefix`(读 `CHANDLER_PREFIX`)—— 两个「全局前缀」概念不统一,`CHANDLER_PREFIX` 对 `install --global` 无效(验证时误装进真实 `~/.local/share/chez`,已清)。
+- `uninstall --global` 只按注册表删**项目自己**的文件,merge 进去的依赖(`b`)留下 —— 全局 install 记账不含 merged deps。
+
+**文件约定改名(2026-07-24)**:项目构建描述文件 `recipe.ss`(bake 的烘焙术语)→ **`chandler-tasks.ss`**,与数据文件 `manifest.ss` 配对。默认名收敛成 `(chandler recipe)` 导出的常量 `default-tasks-file`(先前硬编码 3 处);`chandler bake` 的 `--recipe` 长旗标 → `--file`(旧名保留作向后兼容别名),`-f` 不变;错误/帮助措辞 `recipe file` → `tasks file`。仓库根自己的 `recipe.ss` 一并改名 + 头注重写。库名 `(chandler recipe)` 与函数 `load-recipe` 保留作内部概念名(改动纯内部,无用户可见收益)。skiff-demo 无此文件(已删 recipe.ss),不受影响。三运行时 360/360;`chandler bake -T/build` 实测读新名正常,旧名报 `tasks file not found`。
+
+**C3 实现期决定(2026-07-24,规格由用户逐条拍板 —— design 14 不存在)**:
+
+1. **优先级:`.env` 覆盖进程环境**。传给子进程的 env alist 里 `.env` 条目排在**最后**(`env-prefix` 是 shell 变量前缀,同名后者胜),chandler 自己交接的 `APP_ROOT` 等在前。实测 `SHELL_OVERRIDE=from-shell chandler run` → 应用读到 `from-dotenv`。
+2. **作用面:`run`/`repl`/`env`(exec 由 run 承担,chandler 无独立 exec 命令)。刻意不碰 `build`/`deps`/`install`** —— 那三者受环境变量影响会让同一份源码在不同 `.env` 下产出不同结果,损害可复现性。
+3. **来源:项目根 `<root>/.env` + 显式 `--env-file <path>`(同键覆盖 base)。依赖树里的 `.env` 一概不读** —— 依赖是不可信第三方,加载它的 `.env` 等于让依赖偷偷注入 `PATH`/`LD_PRELOAD`,与 [designs/08](designs/08-bootstrap-security.md) 信任模型一致。
+4. **语法:`KEY=value` + `#` 注释 + 空行 + 可选 `export ` 前缀;单引号(字面)/ 双引号(`\n \t \r \\` 转义)/ 裸值(去尾部空白);`${VAR}` 展开**(先查本文件更早条目、再查进程环境、都无→空串;单引号内不展开;只认 `${…}`,裸 `$VAR` 原样保留)。malformed 行(无 `=` / 空键 / 非法键名)带**行号**报错。
+5. `read-dotenv` 返回**有序 alist**、**不直接 putenv** —— 调用方决定注入子进程还是导出,同进程内也就不污染 chandler 自己的环境。
+
+**验证**:三运行时 **359/359**(新增 env 23 用例)。e2e(PATH 无 bake):`chandler run` 注入 `.env` 且 `${USER}` 展开、`.env` 覆盖 shell 预设值;`chandler env` 导出(`${USER}` 已展开、shell-quoted);`--env-file prod.env` 覆盖 base `.env`。
+
+**skiff-demo 迁移(C6 一半,2026-07-24,跨仓 `/home/david/workspace/skiff-demo`)**:
+
+把示例应用从旧模型(汇总 `lib/` + `chandler-setup.ss` + `APP_ROOT`/`app-resource-path`)迁到 C0/C1/C4 新模型:
+- `mdserver/app.sls`:`app-resource-path` → `resource-path '(mdserver)`;资源 `resources/*.md` → **`resources/mdserver/`**(verbatim 约定,app 库 `(mdserver)` 的资源摆在 `resources/<libpath>/`)。
+- `serve.ss`:删掉自己操作 `(library-directories)` 的旧代码 —— `chandler run` 全权交接库搜索路径,脚本只 `(import (mdserver))` + `(main …)`。
+- **删 `recipe.ss`**:`chandler build` 从 `manifest.ss` 的 `(app (entry (mdserver)))` 推导要编什么,不再需要手写。
+- `.gitignore`:`/vendor/` → `/_vendor/`,去掉 `/lib/`。
+- README 重写:构建/运行/打包/文件四节全部对齐新模型 + 一段迁移说明。
+
+**迁移期揪出 build-project 一个 bug(已修,chandler 侧)**:`build-project` 用 **manifest name** 找 umbrella `<name>.ss` —— 而 app 的入口库常与清单不同名(skiff-demo 清单叫 `"skiff-demo"`,入口却是 `(mdserver)`),于是一个库都没编、`build-project` 静默空跑。改为:清单有 `(app (entry E))` 时按**入口** `(library-task 'build E)`(编入口闭包,依赖走预构建根不下降,正是旧 recipe 的语义);无 app 的纯 lib 才按 name 找 umbrella。新增回归用例(360)。
+
+**skiff-demo 端到端全通**(PATH 无 bake,skiff 运行时,依赖 chez-markding 经网络 fetch):
+- `deps`(整仓 → `_vendor/`)→ `build --allow-build`(chez-markding 107 `.so` + mdserver 3 `.so`)→ `run --script serve.ss`:`docs: …/resources/mdserver`(`resource-path` 扫库路径命中,**无 APP_ROOT**),`/` `/hello` `/features` 均 200、渲染出中文 markdown。
+- `pack`:`src/resources/mdserver/` 三个 `.md`、`ta6le/chez-markding/` 107 `.so`、`ta6le/chandler/` 10 `.so`;`verify-pack --target` **131 ok / 0 bad / 0 extra**;`env -i ./bin/skiff-demo`(clean-env)起服务 200、整包 `cp` 到别处 docs 落点随之相对、仍 200。
+
+**C6 剩本仓**:README 的架构章 + `chandler init` 模板注入 `.env` 骨架 + 设计文档(11/13)标注 `resource-path`/`_vendor` 定稿。
+
+**测试夹具泄漏(已修,2026-07-24)**:`mktmp` 约 250 次/轮、多数调用方从不清理 —— 一会话攒 **12160 个目录、7.7G** 撑满 tmpfs,`mktemp` 随即返回空串、测试大面积假失败(`cannot set current directory to ""`),更糟的是**空串让夹具把文件写进 cwd(仓库根),还覆盖了 `recipe.ss`**。修法:harness 持一张临时目录表(`register-test-tmp!`),`run-suites` 在**每条用例后**统一 `rm-rf`;fixtures 与 `fs.ss` 的 mktmp 都登记进去,且**空串当场报错**(不再静默污染 cwd)。实测泄漏从 ~250/轮降到 **0/轮**。
 
 **依赖序**:
 - C0–C3 可**先于阶段 B** 落地(不依赖 bake 吸收)——过渡期 bake 子进程仍跑,但 libdirs 已是 per-dep 对、resources 已统一、`.env` 已生效。

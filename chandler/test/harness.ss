@@ -7,8 +7,22 @@
 
 (library (chandler test harness)
   (export define-suite run-suites
-          assert-true assert-false assert-equal assert-raises assert-string=)
-  (import (chezscheme))
+          assert-true assert-false assert-equal assert-raises assert-string=
+          register-test-tmp!)
+  (import (chezscheme)
+          (chandler fs))
+
+  ;; 每个测试临时目录登记在此,run-suites 在**每条用例之后**统一清 —— 夹具的 mktmp
+  ;; 从前谁造谁清、大多没清,一轮下来 /tmp 攒上万个目录直到 tmpfs 撑满,mktemp 返回
+  ;; 空串、测试大面积假失败(2026-07-24 亲历)。清理集中到 harness,夹具只管登记。
+  (define test-tmp-dirs '())
+  (define (register-test-tmp! dir)
+    (when (and (string? dir) (> (string-length dir) 0))
+      (set! test-tmp-dirs (cons dir test-tmp-dirs)))
+    dir)
+  (define (clear-test-tmps!)
+    (for-each (lambda (d) (guard (e (#t (void))) (rm-rf d))) test-tmp-dirs)
+    (set! test-tmp-dirs '()))
 
   ;; (define-suite name (test-name body ...) ...) → name 绑定为 ((sym . thunk) ...)
   (define-syntax define-suite
@@ -65,7 +79,9 @@
                         (lambda ()
                           (thunk)
                           (set! pass (+ pass 1))
-                          (k #t)))))))
+                          (k #t)))))
+                  ;; 无论过失,清掉这条用例造的临时目录(k 逃逸回到此处后仍会跑)。
+                  (clear-test-tmps!)))
               suite)))
         suites)
       (printf "~%tests: ~a passed, ~a failed~%" pass failn)

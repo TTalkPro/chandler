@@ -64,19 +64,20 @@ chandler --version
 
 **开发期不必安装**:仓库里直接 `./bin/chandler <命令>`(同样 skiff 优先)。
 
-### 用 bake 构建/安装(生态闭环)
+### 构建与任务(`chandler bake`)
 
-chandler 带 `recipe.ss`,可被生态里的构建工具 **bake** 直接构建与安装——把 `(chandler …)` 库树装进 Chez lib dir,`(import (chandler …))` 全局可解析(bake 自身即依赖 `(chandler lock/registry/…)`,这是 **skiff 跑 · chandler 管依赖 · bake 装库** 的闭环处):
+bake 的编译引擎已整体吸收进 chandler,原来的独立 `bake` 二进制作废。chandler 自己带一份 `chandler-tasks.ss`(原名 `recipe.ss`),由 `chandler bake` 子命令消费:
 
 ```sh
-bake            # = bake build,编译 (chandler) 库树为 .so
-bake test       # 跑全测试套件(138 用例)
-bake test-ps    # PowerShell 启动器验收(需 pwsh,缺则跳过)
-bake install    # 装 (chandler) 库树 → ~/.local/share/chez/{src,<mt>}(--global 装 /usr/local)
-bake uninstall  # 据清单干净卸载
+chandler bake            # = build,编译 (chandler) 库树为 .so → _build/<mt>/
+chandler bake test       # 跑全测试套件
+chandler bake test-ps    # PowerShell 启动器验收(需 pwsh,缺则跳过)
+chandler bake -T         # 列任务
 ```
 
-> `bake` 装的是 **库**(供 `import`,src/mt 拆分);`chandler` **CLI 启动器**由 `bootstrap.ss` 安装时生成。
+> **多数项目不需要 `chandler-tasks.ss`**:`chandler build` 直接从 `manifest.ss` 的 `(app (entry …))` 推导要编什么。只有需要自定义任务(如上面的 `test`/`test-ps`)时才写。它是**程序**(加载即求值),与**数据**文件 `manifest.ss` 配对。
+>
+> **安装**由自含的 `bootstrap.ss` 负责(装库树 + 生成 CLI 启动器),不经 `chandler bake`。
 
 ## 快速上手
 

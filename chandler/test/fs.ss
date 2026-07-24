@@ -8,7 +8,10 @@
           (chandler proc)
           (chandler fs))
 
-  (define (tmp) (string-trim* (proc-result-out (run-capture "mktemp" '("-d")))))
+  ;; 登记进 harness,由 run-suites 逐用例清(不用 (chandler test fixtures) 的 mktmp:
+  ;; fs 是最底层,fixtures 依赖它,引入会绕成环。这里直接登记即可)。
+  (define (tmp)
+    (register-test-tmp! (string-trim* (proc-result-out (run-capture "mktemp" '("-d"))))))
   (define (string-trim* s)
     (let ([n (string-length s)])
       (if (and (> n 0) (char=? #\newline (string-ref s (- n 1)))) (substring s 0 (- n 1)) s)))

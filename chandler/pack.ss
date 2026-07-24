@@ -222,23 +222,24 @@
                 (files-under dir)))))
         locked)))
 
-  ;; 应用资源:源码态的 <project>/resources/ 原样搬进 <pack>/src/resources/<app>/。
-  ;; 源目录名**约定死**,不设子句 —— 数据不带 ABI,故落点在 src/ 层(同一份被该应用的
-  ;; 所有平台包共用;放进 <mt>/ 会随 ABI 重复,且那是对象根)。
+  ;; 应用资源:源码态的 <project>/resources/ **原样**搬进 <pack>/src/resources/。
   ;;
-  ;; 落点带 <app> 一层:与依赖资源 src/resources/<dep-libpath>/ 同构,也与全局安装
-  ;; 前缀同构 —— 前缀是**共享**的,一个扁平 resources/ 会让两个应用撞车。
-  ;; 消费侧 (chandler runtime-paths) 的 app-resource-path 按同一约定解析。
+  ;; **verbatim,不再插 <app> 一层**(C0/C1 统一):`<libpath>/` 那层已经在
+  ;; `resources/` 里了 —— 项目自己的库 `(myapp)` 的资源就摆在 `resources/myapp/`,
+  ;; 与依赖资源 `resources/<dep-libpath>/`、与 resource-path 的 dev 期扫描
+  ;; (`<src>/resources/<libpath>/`)完全同一约定。先前这里又套一层 `<app>`,
+  ;; 于是包里成了 `src/resources/myapp/myapp/…`,与 dev 期读的路径对不上。
+  ;; 数据不带 ABI,故落 src/ 层(同一份被所有平台包共用;放进 <mt>/ 会随 ABI 重复)。
   ;;
   ;; 注:无源码分发包因此也带一个 `src/` 目录,里面**只有资源、没有 .ss** ——
-  ;; 那正是三态同构的代价与收益:APP_ROOT 下只有一种拼法,loader 与资源 API 都不分支。
+  ;; 那正是三态同构的代价与收益:一种拼法,loader 与资源 API 都不分支。
   (define (copy-resources! project root app)
     (let ([src (join-paths project "resources")])
       (and (file-directory? src)
            (let ([n 0])
              (for-each
                (lambda (abs)
-                 (let ([dst (join-paths (prefix-resource-dir root app)
+                 (let ([dst (join-paths root "src" resources-dirname
                                         (strip-prefix abs (string-append src "/")))])
                    (ensure-parent dst)
                    (copy-file abs dst)

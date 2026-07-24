@@ -3,8 +3,9 @@
 ;;;
 ;;; 来源:bake/dsl.ss(§7 宏 + §8 注册器)+ bake/loader.ss(§9 加载)+
 ;;; bake/runtime.ss 的 recipe 面辅助(run/run-capture/displayln/file->*)。
-;;; 注意:本文件是**库** (chandler recipe),与仓库根的 recipe.ss(chandler 自己的
-;;; 构建描述,数据)同名不同路径,不要混淆。
+;;; 注意:本文件是**库** (chandler recipe)——task-DSL 与加载器的实现;项目根的
+;;; 构建描述文件叫 `chandler-tasks.ss`(default-tasks-file,原名 recipe.ss),是被本库
+;;; load-recipe 加载的**程序**,不要与本库混淆。(库名保留 "recipe" 作内部概念名。)
 ;;;
 ;;; load-based → library 的两处改写:
 ;;;   1. recipe.ss 原先 eval 进 (interaction-environment),能看见 bake 全部顶层绑定。
@@ -29,11 +30,18 @@
     ;; forward-reference 钩子(B5 native 注册)
     current-native-prescan
     ;; recipe 面辅助(designs/02 §辅助函数)
-    path-ext file->string file->lines run run/code run/capture shq)
+    path-ext file->string file->lines run run/code run/capture shq
+    ;; 项目构建描述文件的默认名(用户可见约定;与数据文件 manifest.ss 配对)
+    default-tasks-file)
   (import (chezscheme)
           (chandler base)
           (chandler task-engine)
           (chandler miniregex))
+
+  ;; 项目构建描述文件默认名(2026-07-24:原 bake 的 `recipe.ss` → chandler 命名)。
+  ;; 它是**程序**(task/file/rule/default-task,加载即求值),与**数据**文件
+  ;; manifest.ss 配对;是可选的(B6b:无它则 `chandler build` 从 manifest 推导)。
+  (define default-tasks-file "chandler-tasks.ss")
 
   ;; ====================================================================
   ;; §7 DSL 宏 — designs/02 §宏签名(来自 bake/dsl.ss)
@@ -327,7 +335,7 @@
            (unless (> (*exit-code*) exit-ok) (*exit-code* exit-config-error))
            (raise 'bake-error))
           (else
-           (eprintf "chandler: error: failed to load recipe: ~a~%  Cause: ~a~%"
+           (eprintf "chandler: error: failed to load tasks file: ~a~%  Cause: ~a~%"
                     path (condition->string-fallback e))
            (*exit-code* exit-config-error)
            (raise 'bake-error))))

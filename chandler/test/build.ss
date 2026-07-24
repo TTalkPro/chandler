@@ -132,9 +132,9 @@
             ;; 未重新授权 → 报错
             (assert-raises (lambda () (build app '()))))))))
 
-    ;; ── 根项目自己的编译(B6:recipe.ss 可选)──
+    ;; ── 根项目自己的编译(B6:chandler-tasks.ss 可选)──
 
-    ;; 没有 recipe.ss → 从 manifest 推导:(name) 给库名、(srcdir) 给搜索根
+    ;; 没有 chandler-tasks.ss → 从 manifest 推导:(name) 给库名、(srcdir) 给搜索根
     (build-project-without-recipe
       (when-compiler (lambda ()
         (let ([app (mktmp)])
@@ -150,7 +150,7 @@
             (assert-true (file-exists? (join-paths bdir "myapp.so")))
             (assert-true (file-exists? (join-paths bdir "myapp/sub.so"))))))))
 
-    ;; 有 recipe.ss → 跑它的 default-task,且**只跑它**(test 之类不该被 build 带跑)
+    ;; 有 chandler-tasks.ss → 跑它的 default-task,且**只跑它**(test 之类不该被 build 带跑)
     (build-project-with-recipe-runs-default-task-only
       (when-compiler (lambda ()
         (let ([app (mktmp)])
@@ -158,7 +158,7 @@
                       "(manifest (format 1) (name \"myapp\") (version \"0.1.0\") (srcdir \".\"))")
           (write-file (join-paths app "myapp.ss")
                       "(library (myapp) (export ok) (import (chezscheme)) (define ok #t))")
-          (write-file (join-paths app "recipe.ss")
+          (write-file (join-paths app "chandler-tasks.ss")
                       (string-append
                         "(define-lib-roots \".\")\n"
                         "(library-task 'build '(myapp))\n"
@@ -169,7 +169,25 @@
                          (join-paths app "_build" (current-machine-type) "myapp.so")))
           (assert-false (file-exists? (join-paths app "RAN-TEST")))))))
 
-    ;; 没有 manifest.ss 也没有 recipe.ss → 什么都不做,不报错
+    ;; app 的入口库与 manifest name 不同名时,按**入口**编,不按 name 找 umbrella。
+    ;; 回归钉:skiff-demo 清单叫 "skiff-demo",入口却是 (mdserver) —— 先前
+    ;; build-project 用 name 找 skiff-demo.ss,一个库都没编,build-project 静默空跑。
+    (build-project-app-entry-differs-from-name
+      (when-compiler (lambda ()
+        (let ([app (mktmp)])
+          (write-file (join-paths app "manifest.ss")
+                      "(manifest (format 1) (name \"toolpkg\") (version \"0.1.0\") (srcdir \".\")\n  (app (entry (mytool)) (main go)))")
+          (write-file (join-paths app "mytool.ss")
+                      "(library (mytool) (export go) (import (chezscheme) (mytool core)) (define (go) core-ok))")
+          (ensure-dir (join-paths app "mytool"))
+          (write-file (join-paths app "mytool/core.sls")
+                      "(library (mytool core) (export core-ok) (import (chezscheme)) (define core-ok 1))")
+          (build-project app #f)
+          (let ([bdir (join-paths app "_build" (current-machine-type))])
+            (assert-true (file-exists? (join-paths bdir "mytool.so")))
+            (assert-true (file-exists? (join-paths bdir "mytool/core.so"))))))))
+
+    ;; 没有 manifest.ss 也没有 chandler-tasks.ss → 什么都不做,不报错
     (build-project-noop-without-manifest
       (let ([app (mktmp)])
         (build-project app #f)

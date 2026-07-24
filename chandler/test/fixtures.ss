@@ -10,12 +10,19 @@
           manifest-text lib-umbrella-text
           make-lib-repo make-native-lib make-app)
   (import (chezscheme)
+          (chandler test harness)
           (chandler util)
           (chandler fs)
           (chandler proc))
 
   ;; ── 临时目录 / 文件 ──
-  (define (mktmp) (trim (proc-result-out (run-capture "mktemp" '("-d")))))
+  ;; 登记进 harness,由 run-suites 逐用例清。空串(mktemp 失败,如磁盘满)当场报错 ——
+  ;; 从前它会静默返回 "",调用方随即把夹具写进 **cwd(= 仓库根)**,污染工作区。
+  (define (mktmp)
+    (let ([d (trim (proc-result-out (run-capture "mktemp" '("-d"))))])
+      (when (string=? d "")
+        (error 'mktmp "mktemp -d returned empty (disk full? /tmp not writable?)"))
+      (register-test-tmp! d)))
   (define (write-file p s) (call-with-output-file p (lambda (o) (display s o)) 'truncate))
   (define (read-file p) (if (file-exists? p) (call-with-input-file p get-string-all) ""))
   (define (trim s) (string-trim s))
