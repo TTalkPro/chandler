@@ -204,7 +204,7 @@ install.sh / install.ps1    薄壳:运行时发现 → chandler install-self(POS
 
 **阶段 0-13 全部完成,M1-M7 全部达成。** 环境:Chez 10.4.1 / ta6le。
 
-- 测试:`tests/run-tests.sps` **219 用例全绿**(18 个 suite:util/fs/sexp/layout/version/manifest/lock/proc/fetch/resolve/install/activate/cli/registry/build/pack/selfinstall/**base**/**runtime-paths**)。**`scheme`、`petite`、已部署的 `skiff` 三运行时均全绿**。
+- 测试:`tests/run-tests.sps` **259 用例全绿**(21 个 suite:util/fs/sexp/layout/version/manifest/lock/proc/fetch/resolve/install/activate/cli/registry/build/pack/base/runtime-paths/**task-engine**/**miniregex**/**recipe**)。**`scheme`、`petite`、已部署的 `skiff` 三运行时均全绿**。
 - **skiff 端到端验证**:skiff 应用(manifest 声明 `(skiff …)`)经 chandler-on-skiff 走 `init→add→install→verify→run` 全通;`chandler run` 依 manifest 自动选运行时(skiff-only→skiff、chez→chez),应用运行期自证落在正确运行时。
 - 端到端验证:`init→add→install→verify→list→tree→run→exec` 经二进制跑通;`(activate)` 真实挂载并 import 依赖;全局 `install/uninstall/list/doctor`;`build` 排单经 mock bake + 授权哈希绑定;`install-self` 装 `~/.local` + 自卸载自洽(启动器 skiff 优先运行时发现)。
 - 实现的库:`(chandler)` umbrella + 底座 `util/fs/hash/proc` + `sexp/layout/version/manifest/lock/fetch/resolve/install/registry/runtime-detector/activate/build/pack` + **`runtime-paths`**(资源定位)+ **`base`**(runtime umbrella)+ `cli.{args,commands,main,selfinstall}`;测试夹具 `(chandler test fixtures)`。
@@ -355,13 +355,60 @@ $APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
 
 | # | 任务 | 状态 | 文件 |
 |---|------|------|------|
-| B1 | `records`(36)+ `globals`(34)+ `output`(40)+ `engine`(156) → `(chandler task-engine)`;import 改 `(chandler base)` | 🔲 待实现 | `chandler/task-engine.ss`(新) |
-| B2 | `dsl`(147)+ `loader`(68) → `(chandler recipe)`(DSL 宏 + recipe 加载);`(load-recipe)` + `(invoke-task 'build)` 跑通 chandler 自身编译 | 🔲 待实现 | `chandler/recipe.ss`(新;注意与根 recipe.ss 同名不同路径) |
-| B3 | `deps`(312) → `(chandler import-graph)`(R6RS import 解析 + 库闭包 + 环检测) | 🔲 待实现 | `chandler/import-graph.ss`(新) |
-| B4 | `compile`(612) → `(chandler compile)`(library-task/compile-lib/指纹/并行 `-j`/prebuilt);编译 chandler 自身产物与 bake 字节一致 | 🔲 待实现 | `chandler/compile.ss`(新) |
-| B5 | `native`(427)+ `miniregex`(70) → `(chandler native-build)` + `(chandler miniregex)`;native(script/make/cmake)端到端;loader codegen 文本不变 | 🔲 待实现 | `chandler/native-build.ss`、`chandler/miniregex.ss`(新) |
+| B1 | `records`(36)+ `globals`(34)+ `output`(40)+ `engine`(156) → `(chandler task-engine)`;import 改 `(chandler base)` | ✅ 已完成 | `chandler/task-engine.ss`(新) |
+| B2 | `dsl`(147)+ `loader`(68) → `(chandler recipe)`(DSL 宏 + 注册器 + recipe 加载 + 目标选择);`miniregex`(70)提前搬入 | ✅ 已完成 | `chandler/recipe.ss`、`chandler/miniregex.ss`(新) |
+| B3 | `deps`(312) → `(chandler import-graph)`(R6RS import 解析 + 库闭包 + 环检测) | ✅ 已完成 | `chandler/import-graph.ss`(新) |
+| B4 | `compile`(612) → `(chandler compile)`(library-task/program-task/boot-task/指纹/并行 `-j`/prebuilt/clean);**B2 遗留验收**:`load-recipe` 本仓 `recipe.ss` + `(invoke-task 'build)` 跑通自编译 | ✅ 已完成 | `chandler/compile.ss`(新) |
+| B5 | `native`(427) → `(chandler native-build)`;注册 `current-native-prescan`;native(script/make/cmake)端到端(miniregex 已于 B2 完成) | ✅ 已完成 | `chandler/native-build.ss`(新) |
 | B6 | bake CLI(`dispatch` 65 + `cli` 235 + `init` 113 + `main` 29)合入 chandler CLI;保留 `chandler bake` 别名;`chandler bake build` ≡ 旧 `bake build` | 🔲 待实现 | `chandler/cli/{args,commands,main}.ss` |
 | B7 | 删除 bake 仓;统一一套 bootstrap + 启动器;skiff-demo 端到端 | 🔲 待实现 | 删 `/home/david/workspace/bake`;`bootstrap.ss` |
+
+**执行约定(2026-07-24)**:阶段 B **只从 bake 仓读取搬运,不改 bake 仓** —— 能力吸收完即 B7 删仓,给作废物打补丁是纯浪费。故 A2 记的「bake 侧保守删改」到此为止,不再有 bake 侧改动。
+
+**B1 实现期决定**:见 `chandler/task-engine.ss` 头注 —— load-based bake 靠运行时符号解析,library 词法封闭,故 ① 被 `set!` 的全局(`*dry-run*`/`default-task-name`/…)改 `make-parameter`(R6RS library 不能 export 被赋值的变量),约定「读 `(*x*)` / 写 `(*x* v)`」;② 对 B4/B5 的 forward reference 改钩子参数(`current-regexp-matcher`/`current-fingerprint-judge`/`current-compile-needed`)。
+
+**B2 实现期决定(2026-07-24)**:
+
+1. **miniregex 从 B5 提前到 B2** —— `register-rule!` 要把字符串 pattern 编成 miniregex、engine 的 `resolve` 要拿它匹配 rule,都是 B2 的必要前置;而该模块自含 70 行、零下游依赖,提前无代价。`(chandler miniregex)` 库体末尾把 `regexp-match?` 注册进 B1 的 `current-regexp-matcher` 钩子(**实例化即注册**,不需调用方记得初始化)。B5 因此只剩 native。
+2. **recipe 求值环境**:bake 把 recipe.ss eval 进 `(interaction-environment)`,能看见全部顶层绑定;library 词法封闭,故改为按 `recipe-environment-libs`(parameter,默认 `(chezscheme)`/`base`/`task-engine`/`recipe`)**每次加载现组一个可变环境**(`copy-environment` —— recipe 顶层的 `(define …)` 需要可变环境;每次新组则上一份 recipe 的定义不会渗进下一份,已有回归用例)。B4/B5 吸收后往这个 parameter 追加 `(chandler compile)`/`(chandler native-build)` 即可,无需回头改 recipe。
+3. **native loader 预扫**(bake/native.ss 的 `prescan-native-loaders!`)是 forward reference,改 `current-native-prescan` 钩子,未注册时 no-op;调用点仍是「整份读完 → 预扫 → 逐 form 求值」,顺序不变(生成的 `(<lib> native-loader)` 源码必须早于 `library-task` 求值落盘)。
+4. **recipe 面子进程封装留在 `(chandler recipe)`**:`run`/`run/code`/`run/capture`/`displayln` 是 recipe 表面 API,签名(可变参数)与 `(chandler proc)` 的 `run-capture`/`run-check`(列表参数)不兼容,按 A2 决定 3 不 alias;`path-ext`/`file->string`/`file->lines` 同理补齐(`path-root` 是 Chez 内建,`path-swap-ext`/`mtime` 由 base 提供)。
+5. **`select-targets`/`normalize-target` 从 dispatch.ss 提前搬入**(argv 恒是字符串而 phony 登记在符号键下,二者是 `invoke-task` 的正确性前提,与 CLI 接线无关);dispatch 的其余部分(选项→全局、`-j`、manifest 读写)留 B6。
+6. **用户可见前缀 `bake: error:` → `chandler: error:`**(吸收后用户见到的工具名只有 chandler);内部哨兵符号仍是 `'bake-error`,它不面向用户,改名要连累 B4/B5 全部搬运。
+7. **B2 验收缩到 DSL + loader**(真 recipe 文件端到端:task/file/rule/default-task 注册 → 物化 → 执行 → 产物落盘);原文写的「跑通 chandler 自身编译」依赖 `library-task`,已挪到 B4。
+
+**验证**:`scheme`/`petite`/`skiff` 三运行时 **259/259 全绿**(新增 miniregex 7 + recipe 17 用例;recipe 全部在临时目录里造**真** recipe 文件跑 `load-recipe`,不 mock)。
+
+**B3 实现期决定(2026-07-24)**:
+
+1. **公开名一律照搬**(`dep-read-all`/`dep-find-clause`/… 的 `dep-` 前缀原是为共享 interaction-environment 防撞,library 词法封闭后理由消失)—— 但不改名:B4 搬 compile 时逐处引用,改名只平添 diff 与出错面。
+2. **三处并进 base**:`dep-join` → `string-join`(实现完全一致)、`dep-warn` → `eprintf`、`dep-parent-or-dot` → `parent-dir`(空串换 `"."`)。
+3. **`runtime-provided` 快照排除整片 `(chandler …)`** —— 与 bake 的唯一行为差异,且是合并**引入**的新风险:chandler 是单二进制,构建器自己的库此刻就加载在本进程里,会混进 `(library-list)`;若判成 builtin,一个忘了跑 `chandler deps` 的项目会**静默**不编、不交付 `(chandler base)`,直到部署才炸。排除后:铺好了源码/对象自然解析得到,没铺就报 `cannot locate library (chandler base)` —— 可操作的错。实测 skiff 上 `(skiff web)` 仍判 builtin、`(chandler base)` 不再误判。
+4. bake 的 `bake/import-graph.ss`(71 行 CLI 壳)**不搬** —— 它只是 `deps-run.sh` 的驱动,等价能力已由 Scheme 测试直接调库覆盖;需要时 B6 再加 `chandler bake -P` 一类子命令。
+
+**验证**:三运行时 **277/277 全绿**(新增 import-graph 18 用例,覆盖 bake `deps-run.sh` 的 I1–I4/I9/I10 全部断言 + 预构建根归类 + 项目库胜过同名预构建 + `(chandler …)` 不算 builtin)。
+
+**B4 实现期决定(2026-07-24)**:
+
+1. **「与 bake 字节一致」这条验收作废** —— 实测 **Chez 的 fasl 输出本就不可复现**:同一目录、同一份源码,`bake` 连编两次产物字节就不同(`chandler/util.so` 20017 vs 20019 字节,第 528 字节起分歧)。原文写这条时并不知道这一点。**改用功能等价验收**:自编译产出的 `_build/<mt>/` 单独作为**唯一**库搜索根(源码不在路径里)能 `(import (chandler))` 成功,且整套测试跑在这批对象上全绿。已实跑通过。
+2. **显式装配 `install-compile-hooks!`** —— Chez **惰性实例化**库:库体的副作用直到有绑定被真正引用才跑。而 recipe 里的 `(define-lib-roots …)` 要求「加载 recipe 之**前**」求值环境里就有它,那时还没人引用过 compile 的任何绑定。实测只留库体副作用会报 `variable define-lib-roots is not bound`。故导出显式装配过程,由入口(B6 CLI 的 build 通路、测试)调用;库体也调一次作为尽力而为。**对照**:`(chandler miniregex)` 的钩子注册不需要这一套 —— 它由 `register-rule!` 调 `regexp` 时被强制实例化,而没有 rule 时那个钩子根本用不上。
+3. **修掉一个合并引入的真 bug:同进程二次构建**。bake 是「一次调用 = 一个进程」,全局构建状态(`compile-nodes`/`fp-cache`/WPO 开关/`*gen-roots*`/`lib-roots`/`classify-cache`)靠进程退出复位;chandler 是单二进制且 compile 是**库**,同进程连着建两次是自然用法 —— 那时第二次会命中第一次的指纹缓存,**内容真改了也判成「无需重编」**。新增 `(chandler recipe)` 的 `recipe-reset-hooks`(按 key 去重的复位钩子,`load-recipe` 开头统一跑)+ compile 的 `reset-compile-state!` + import-graph 的 `reset-classify-cache!`。已有回归用例(同进程改源码再建,必须重编)。
+4. **`libdirs-string` 顺带修掉 bake 的 Windows 分隔符 bug** —— bake 那份写死 `":"`/`"::"`,与 chandler 2026-07-22 修过的是同一类错。改走 `(chandler layout)` 的 `libdirs->arg`/`entry->arg`,分隔符随平台;worker 线格式(`root->arg`/`arg->root`)同此。
+5. **`-j` worker 改为「生成自含脚本」** —— bake 的 worker 是 `scheme --script <bake 自己> --compile-one …` 自调用;chandler 的 CLI 是 `.sps` 程序,自调用要连带解决「worker 上哪找 `(chandler …)` 库」。而 worker 干的事只需要 `(chezscheme)`,故改为把 worker 源码生成到 `_build/<mt>/.compile-one.ss`(`write-text-if-changed`),`worker-cmd` 直接 `--script` 它。**副产品**:CLI 不必再留 `--compile-one` 暗门;worker 不依赖 chandler 装在哪。worker 用的可执行文件默认取**父进程所在运行时**(`current-runtime` + `CHANDLER_SKIFF`/`CHANDLER_SCHEME`),而非 bake 那样默认 `"scheme"` 再指望启动器导出 `BAKE_RUNTIME` —— 跨一次构建混用 Chez 版本会出 fasl 不匹配。
+6. **改名**:`bake-build-dir`→`build-dir`;`manifest`→`fp-manifest`(chandler 的 "manifest" 是**包清单** `manifest.ss`/`manifest.lock`,同名两义会害人)、连带 `load-/write-/…-path`;`bake-runtime`→`worker-runtime`;`*generate-wpo*`/`*gen-roots*` → parameter。**磁盘文件名 `.bake-manifest` 保持不变** —— 过渡期 bake 子进程仍可能写它,改名只会让双方各自重编一遍(B7 删仓后再改)。
+7. **§18f bake 自举整段不搬**(`cmd-bootstrap`/`build-bake-all!`,~50 行)—— 那是「把 bake 自己的 17 个模块编成 `bake-all.so`」,chandler 的安装由自含的 `bootstrap.ss` 负责,无对应物。
+8. **新增 `compiler-available?`** —— Petite 把 `compile-library` 绑着但一调就抛 `compile package is not loaded`,错在很深处、话也难懂。探测一次(真编一个最小库到临时文件)后记住,`compile-lib` 入口给出可操作的话:「this runtime has no compiler (Petite does not ship one) — build with `scheme` or `skiff`」。测试里真编译的用例据此在 Petite 上**跳过**而非放宽断言。
+
+**验证**:三运行时 **297/297 全绿**(新增 compile 20 用例;真在临时目录编真库,含 `-j` 真起子进程)。自编译端到端:`load-recipe` 本仓 `recipe.ss` → `invoke-task 'build` → 17 个 `.so`,把 `_build/ta6le` 单独作唯一库根 `(import (chandler))` 成功、整套测试跑在这批对象上 277/277。
+
+**B5 实现期决定(2026-07-24)**:
+
+1. **loader codegen 文本有两处**(功能不变,只是署名与话术):`;; generated by bake` → `by chandler`;定位失败的话 `run \`bake build\` first` → `chandler build`。原表格写的「codegen 文本不变」是为了对齐 bake 的 `loader-run.sh` Z4/Z5,但 bake 即将删仓、用户见到的工具名只有 chandler,留旧署名反而是错的。**结构与两条硬约束一字未动**(APP_ROOT 候选 / `library-directories` 对象侧兜底 / `_build/<mt>` dev 兜底 / 裸 soname guard;`native-loaded` 引用边)。代价:一次性重生成 + 重编 loader。
+2. **`chez-include-dir` 从当前运行时反推**(bake 写死 `command -v scheme`)—— 跑在 skiff 上时,`scheme` 可能是 PATH 上另一个 Chez,拿它的 `scheme.h` 去编 Model B 的 C 代码,ABI 未必一致:**编得过、跑起来崩**。改为跟 `worker-runtime` 同一套(`current-runtime` + `CHANDLER_SKIFF`/`CHANDLER_SCHEME`);布局不匹配时报的是可操作的「设 `CHEZ_INCLUDE_DIR`」。
+3. **删掉 native 自带的 `so-ext`**(与 `(chandler layout)` 的完全同义);`%abs` 不再 shell 出去跑 `pwd`,直接 `(current-directory)`。
+4. **装配同 B4**:`install-native-hooks!` 显式调用(注册 `current-native-prescan` + recipe 环境 + 复位钩子)—— Chez 惰性实例化,而预扫必须早于任何 recipe form 求值。
+
+**验证**:三运行时 **312/312 全绿**(新增 native-build 15 用例)。native 端到端实跑:`cc` 编 C → 落 `_build/<mt>/mylib/native/greet.so` → 预扫生成 `_build/.gen/mylib/native-loader.ss` → 编 loader 与 FFI 库 → **只给对象根**(`--libdirs _build/ta6le`,源码不在路径里)`env -i` 跑 `(answer)` 得 42(自加载);搬走 native 后报的是 loader 自己的话而非 Chez 的 unbound。落点不变量与未知后端各有回归用例。
 
 #### 阶段 C — 统一资源定位 + per-dep 库路径 + .env(替代原 C1-C7)
 

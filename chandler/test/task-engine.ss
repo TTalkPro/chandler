@@ -66,20 +66,28 @@
       (assert-equal 7 (rule-order-counter))
       (rule-order-counter 0))
 
-    (hooks-default
-      ;; forward-reference 钩子默认值:matcher 朴素相等、judge 返回 #f。
-      (assert-true  ((current-regexp-matcher) "abc" "abc"))
-      (assert-false ((current-regexp-matcher) "abc" "xyz"))
-      (assert-false ((current-fingerprint-judge) "any.so"))
-      (assert-false ((current-compile-needed) #f #f)))
+    (hooks-are-parameters
+      ;; forward-reference 钩子是 parameter,值恒是过程。
+      ;; **不断言默认值**:默认只在没人注册时有效,而 miniregex / compile 一旦被
+      ;; 加载就会把自己注册进来(测试进程里正是如此)。断言默认行为等于断言
+      ;; 「这两个库没被加载」,那是与测试顺序耦合的假约束。
+      (assert-true (procedure? (current-regexp-matcher)))
+      (assert-true (procedure? (current-fingerprint-judge)))
+      (assert-true (procedure? (current-compile-needed)))
+      (parameterize ((current-regexp-matcher (lambda (pat s) 'matched)))
+        (assert-equal 'matched ((current-regexp-matcher) "a" "b")))
+      (assert-raises (lambda () (current-regexp-matcher 'not-a-procedure))))
 
     (hooks-register
-      ;; 注册后,钩子调用注册的过程;测试结束复位(别污染其他 suite)。
-      (current-regexp-matcher (lambda (pat s) #t))
-      (assert-true  ((current-regexp-matcher) "x" "y"))
-      (current-regexp-matcher (lambda (pat s) #f))
-      (assert-false ((current-regexp-matcher) "x" "y"))
-      (current-regexp-matcher (lambda (pattern s) (string=? pattern s))))
+      ;; 注册后,钩子调用注册的过程;测试结束**复位成原值**(不是复位成默认值——
+      ;; (chandler miniregex) 实例化时已把 regexp-match? 注册进来,写死默认值
+      ;; 会把它抹掉,后跑的 recipe rule 用例就匹配不上了)。
+      (let ((orig (current-regexp-matcher)))
+        (current-regexp-matcher (lambda (pat s) #t))
+        (assert-true  ((current-regexp-matcher) "x" "y"))
+        (current-regexp-matcher (lambda (pat s) #f))
+        (assert-false ((current-regexp-matcher) "x" "y"))
+        (current-regexp-matcher orig)))
 
     (join-chain-format
       ;; designs/03 要求用 Unicode 箭头 " → " 分隔。

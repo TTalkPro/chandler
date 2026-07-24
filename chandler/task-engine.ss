@@ -104,14 +104,16 @@
   ;; §bail — designs/04 §错误输出格式(来自 bake/util.ss)
   ;; ====================================================================
 
+  ;; 前缀用 chandler(吸收后 bake 二进制作废,用户见到的工具名只有 chandler);
+  ;; 内部哨兵符号仍是 'bake-error —— 它不面向用户,改名要连累 B4/B5 全部搬运。
   (define (bail-exec fmt . args)
     ;; Execution-time error → exit code 1.
-    (apply eprintf (string-append "bake: error: " fmt "\n") args)
+    (apply eprintf (string-append "chandler: error: " fmt "\n") args)
     (*exit-code* exit-exec-error)
     (raise 'bake-error))
 
   (define (bail-config fmt . args)
-    (apply eprintf (string-append "bake: error: " fmt "\n") args)
+    (apply eprintf (string-append "chandler: error: " fmt "\n") args)
     (*exit-code* exit-config-error)
     (raise 'bake-error))
 
@@ -268,7 +270,7 @@
        (guard (e ((eq? e 'bake-error) (raise e))  ; already reported downstream
                   (#t
                    (task-failed?-set! t #t)
-                   (eprintf "bake: error: task ~a failed~%  Exception: ~a~%"
+                   (eprintf "chandler: error: task ~a failed~%  Exception: ~a~%"
                             (task-name t) (condition->string-fallback e))
                    (*exit-code* exit-exec-error)
                    (raise 'bake-error)))

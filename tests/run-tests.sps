@@ -23,7 +23,12 @@
         (prefix (chandler test build) build:)
          (prefix (chandler test pack) pack:)
          (prefix (chandler test base) base:)
-         (prefix (chandler test task-engine) task-engine:))
+         (prefix (chandler test task-engine) task-engine:)
+         (prefix (chandler test miniregex) miniregex:)
+         (prefix (chandler test recipe) recipe:)
+         (prefix (chandler test import-graph) import-graph:)
+         (prefix (chandler test compile) compile:)
+         (prefix (chandler test native-build) native-build:))
 
 (define all-suites
   (list
@@ -45,6 +50,11 @@
     (cons 'build build:suite)
     (cons 'pack pack:suite)
     (cons 'base base:suite)
-    (cons 'task-engine task-engine:suite)))
+    (cons 'task-engine task-engine:suite)
+    (cons 'miniregex miniregex:suite)
+    (cons 'recipe recipe:suite)
+    (cons 'import-graph import-graph:suite)
+    (cons 'compile compile:suite)
+    (cons 'native-build native-build:suite)))
 
 (exit (if (run-suites all-suites) 0 1))
