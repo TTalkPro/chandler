@@ -4,9 +4,7 @@
 >
 > v2 是 **breaking change**(决策 D7),不考虑老版本兼容。每个 milestone 内部任务并行,跨 milestone 严格按顺序。
 
-## 实施阶段划分
-
-> v2 分两个阶段实施。**Phase 1 是当前焦点**,聚焦"pack 重构闭环"——把 pack 做对(payload 字节级统一 + `(chandler setup)` 启动钩子),**不依赖中央仓库**。Phase 2 引入中央仓库的多版本 install 和 prebuilt 分发。
+## 进度总览
 
 ### Phase 1 — pack 重构闭环(当前焦点)
 
@@ -16,7 +14,7 @@
 |-----------|------|------|
 | **v2.0** | 基础数据层 + 新 layout(schema 升级,无运行时影响) | ⏳ 待开工 |
 | **v2.1-partial** | `install --prefix=<dir>` 能力(pack 内部用,**不含** `install --global`) | ⏳ 待开工 |
-| **v2.2** | `(chandler setup)` + launchers + runtime-paths | ⏳ 待开工 |
+| **v2.2** | `(chandler setup)` + launchers + runtime-paths + **APP_ROOT 去除** | ⏳ 待开工 |
 | **v2.3** | pack = install --prefix + envelope + bundle chandler-runtime | ⏳ 待开工 |
 
 Phase 1 验收:dev 模式不变 + `chandler pack` 产出 nested layout 自包含 pack + pack 解开能跑。
@@ -32,8 +30,6 @@ Phase 1 验收:dev 模式不变 + `chandler pack` 产出 nested layout 自包含
 | **v2.5** | lib pack + CLI 全套 + skiff-demo 迁移验证 | ⏸️ 暂缓 |
 
 Phase 2 前置:Phase 1 全部完成 + 中央仓库设计重新评估实际需求。
-
----
 
 ---
 
@@ -60,14 +56,14 @@ Phase 2 前置:Phase 1 全部完成 + 中央仓库设计重新评估实际需求
 
 ### Layout 函数
 
-- [ ] **T1.6** 改造 `split-pair`:接受 prefix 返回 `(<prefix>/src . <prefix>/<mt>)`,**保持不变**(已是核心不变)
+- [ ] **T1.6** `split-pair` 保持不变:`(<prefix>/src . <prefix>/<mt>)`
   - 文件:`chandler/layout.ss`
-  - 验证:所有现有调用方仍 work
 - [ ] **T1.7** 新增 `version-root`:`(version-root root name version)` → `<root>/<name>/<version>/`
   - 文件:`chandler/layout.ss`
-- [ ] **T1.8** 改造 `vendor-dir`:dev 模式**不变**(仍 `_vendor/<name>/`),但加 `versioned-vendor-dir` 用于 install 路径
-  - 文件:`chandler/install.ss`、`chandler/layout.ss`
-- [ ] **T1.9** 新增 `prefix-resource-dir` 在新 layout 下验证仍 work:`(<name>/<version>/src/resources/<libpath>/)`
+- [ ] **T1.8** 改造 dev 模式 dep 布局:去掉 srcdir,统一为 `<unit-root>/` (src) + `<unit-root>/_build/<mt>/` (obj)
+  - 关联:[10-dev-mode §3 布局](designs/10-dev-mode.md)
+  - 文件:`chandler/install.ss`(`dep-pair`、`dep-src-dir`)、`chandler/layout.ss`
+- [ ] **T1.9** 验证 `prefix-resource-dir` 在新 install layout 仍 work:`(<name>/<version>/src/resources/<libpath>/)`
   - 关联:[09-runtime-paths §N+1 算法](designs/09-runtime-paths.md)
   - 文件:`chandler/layout.ss`
 
@@ -82,7 +78,7 @@ Phase 2 前置:Phase 1 全部完成 + 中央仓库设计重新评估实际需求
 ### v2.0 验收
 
 - [ ] 全部测试通过(纯 Chez + skiff 两运行时)
-- [ ] 现有 dev 模式仍 work(`chandler run` 不变)
+- [ ] 现有 dev 模式仍 work(`chandler run` 不变,除了 dep 布局去 srcdir)
 - [ ] schema 升级不影响 build/deps/run(只影响 install,pending v2.1)
 
 ---
@@ -95,49 +91,44 @@ Phase 2 前置:Phase 1 全部完成 + 中央仓库设计重新评估实际需求
 >
 > **前置:** v2.0 完成
 
-### Install pipeline
+### Install pipeline(Phase 1: install --prefix)
 
-- [ ] **T2.1** 重写 `install-global` 适配 nested layout:每个 dep 装到 `<prefix>/<name>/<version>/{src,<mt>}/`
-  - 关联:[04-install §流水线](designs/04-install.md)、[03-central-repo §布局](designs/03-central-repo.md)
-  - 文件:`chandler/registry.ss`(替换 `enumerate-lib`)
-- [ ] **T2.2** 改造 `merge-lib-to-global!`:不再 flatten,改为 per-dep 写入各自 version 目录
+- [ ] **T2.1** 重写 install 核心:每个 dep 装到 `<prefix>/<name>/<version>/{src,<mt>}/`(nested materialize)
+  - 关联:[04-install §流水线](designs/04-install.md)
+  - 文件:`chandler/registry.ss`(替换 `enumerate-lib`)、`chandler/install.ss`
+- [ ] **T2.2** 改造 `merge-lib-to-global!` 的核心能力:不再 flatten,改为 per-dep 写入各自 version 目录
   - 文件:`chandler/cli/commands.ss`
 - [ ] **T2.3** 实现 staging → promote 事务,适配 nested staging path:`<root>/.chandler/staging/<name>-<version>-<mt>/`
   - 关联:[04-install §失败回滚](designs/04-install.md)
   - 文件:`chandler/registry.ss`
-- [ ] **T2.4** 写 per-version `registry.ss`(含 sha256 files 清单)+ 触发 index.ss 重建
+- [ ] **T2.4** 写 per-version `registry.ss`(含 sha256 files 清单)
   - 关联:[03-central-repo §3 混合 registry](designs/03-central-repo.md)
-- [ ] **T2.5** 实现 `index.ss` 重建算法(扫各 `<name>/<version>/.chandler/registry.ss`)和 lazy rebuild(mtime check)
-  - 关联:[03-central-repo §3.2](designs/03-central-repo.md)
-
-### Install 选项
-
-- [ ] **T2.6** 加 `install --prefix=<dir>` 选项:跟 install-global 同流水线,只是 prefix 改为自定义(为 v2.3 pack 铺路)
+- [ ] **T2.5** 加 `install --prefix=<dir>` 选项:跟 install-global 同流水线,只是 prefix 改为自定义(为 v2.3 pack 铺路)
   - 文件:`chandler/cli/commands.ss`
-- [ ] **T2.7** 加 `install <pack.tar.gz>`:从 pack 解包安装(prebuilt install,只解 `<name>/<version>/` 子树)
-  - 关联:[04-install §prebuilt install](designs/04-install.md)、[06-prebuilt](designs/06-prebuilt.md)
+- [ ] **T2.6** 加 `install <pack.tar.gz>`:从 pack 解包安装(prebuilt install,只解 `<name>/<version>/` 子树)
+  - 关联:[04-install §prebuilt install](designs/04-install.md)
   - **注意:** tarball 解包前必须做 path traversal 防护([12-security](designs/12-security.md))
 
-### Uninstall / doctor
+### 中央仓库 global install(Phase 2 — 暂缓)
 
-- [ ] **T2.8** 改造 `uninstall --name=<n>`:`rm -rf <prefix>/<name>/<version>/` + 重建 index
-- [ ] **T2.9** 加 `uninstall --name=<n> --version=<v>`:精确到版本卸载
-- [ ] **T2.10** 改造 `doctor --global`:扫 per-version registry.ss 校验 sha256,检测篡改
+- [ ] **T2.7**(Phase 2)实现 `index.ss` 重建算法(扫各 `<name>/<version>/.chandler/registry.ss`)和 lazy rebuild
+- [ ] **T2.8**(Phase 2)改造 `uninstall --name=<n>`:`rm -rf <prefix>/<name>/<version>/` + 重建 index
+- [ ] **T2.9**(Phase 2)加 `uninstall --name=<n> --version=<v>`:精确到版本卸载
+- [ ] **T2.10**(Phase 2)改造 `doctor --global`:扫 per-version registry.ss 校验 sha256
 
-### v2.1 验收
+### v2.1 验收(Phase 1 部分)
 
-- [ ] `chandler install --global` 把 app+deps 装到 nested layout
-- [ ] `chandler list --global` 列出所有 name+version+mt 组合
-- [ ] `ch uninstall --name=X --version=Y` 精确卸载
+- [ ] `install --prefix=<dir>` 把 app+deps 装到 nested layout
+- [ ] `install <pack.tar.gz>` 解包安装 work
 - [ ] **此阶段下 install 后的 app 暂时跑不起来**(等 v2.2 launcher/setup)
 
 ---
 
-## v2.2 — 运行时层(setup + launchers + runtime-paths) `[Phase 1]`
+## v2.2 — 运行时层 + APP_ROOT 去除 `[Phase 1]`
 
 > 设计:[07-chandler-setup](designs/07-chandler-setup.md)、[08-launchers](designs/08-launchers.md)、[09-runtime-paths](designs/09-runtime-paths.md)
 >
-> 目标:让 v2.1 装好的 app 能跑起来。`(chandler setup)` 是核心。
+> 目标:让 v2.1 装好的 app 能跑起来 + **完全去除 APP_ROOT,统一到 library-directories**。
 >
 > **前置:** v2.1 完成
 
@@ -159,24 +150,41 @@ Phase 2 前置:Phase 1 全部完成 + 中央仓库设计重新评估实际需求
 
 ### 启动器生成
 
-- [ ] **T3.5** 改造 install 模式 sh launcher:`--libdirs` 指向**系统 chandler-runtime prefix**(让 setup 可见)
+- [ ] **T3.5** 改造 install 模式 sh/ps1 launcher:`--libdirs` 指向**系统 chandler-runtime prefix**(让 setup 可见)
   - 关联:[08-launchers §install 启动器模板](designs/08-launchers.md)
   - 文件:`chandler/cli/commands.ss`(`app-launcher-sh`/`app-launcher-ps1`)
 - [ ] **T3.6** 设计 chandler-runtime 的固定位置(install 模式):`<CHANDLER_HOME>/src` + `<CHANDLER_HOME>/<mt>`(沿用现状)
   - 关联:[08-launchers §bootstrap paradox](designs/08-launchers.md)
 
+### APP_ROOT 去除 + native-loader 改造(关键简化)
+
+> v2 决策:完全去除 APP_ROOT,所有文件路径定位统一到 `(library-directories)`。见 [09-runtime-paths §4](designs/09-runtime-paths.md)。
+
+- [ ] **T3.7** 删除 `chandler/runtime-paths.ss` 的 `app-root` / `app-name` exports 和实现
+  - 关联:[09-runtime-paths §4](designs/09-runtime-paths.md)
+  - 文件:`chandler/runtime-paths.ss`
+- [ ] **T3.8** 改造 bake 生成的 `native-loader.so`:去掉 candidate 1(`$APP_ROOT/<mt>/<libpath>/native/`),只用 `(library-directories)` 扫 obj 侧
+  - 关联:[09-runtime-paths §5.2 自加载 loader](designs/09-runtime-paths.md)
+  - 文件:bake 的 native-loader codegen(跨仓 bake)
+- [ ] **T3.9** 删除 `chandler run`/`activate`/启动器里的 `APP_ROOT` 设置代码
+  - 文件:`chandler/cli/commands.ss`(cmd-run)、`chandler/activate.ss`(`set-app-root!`)
+- [ ] **T3.10** 验证 native 兜底扫描 `native-load-paths` 仍 work(扫 obj 侧,不依赖 APP_ROOT)
+  - 文件:`chandler/install.ss`
+
 ### runtime-paths 适配
 
-- [ ] **T3.7** 验证 `runtime-paths.ss` 的 N+1 fallback 在新 layout 仍 work(无代码改动,加测试)
+- [ ] **T3.11** 验证 `runtime-paths.ss` 的 N+1 fallback 在新 install/pack layout 仍 work(无代码改动,加测试)
   - 关联:[09-runtime-paths §N+1 算法](designs/09-runtime-paths.md)
-- [ ] **T3.8** 验证 `scan-library-directories` 在新 layout work(primary 路径,无代码改动)
-- [ ] **T3.9** 验证 `native-load-paths` 在新 layout work(per-lib native 落点不变,I4)
+- [ ] **T3.12** 验证 `scan-library-directories` 在新 layout work(primary 路径,无代码改动)
+- [ ] **T3.13** 验证 dev 模式资源定位 primary 路径 work(N+1 fallback 在 dev 下 miss,可接受)
 
 ### v2.2 验收
 
 - [ ] v2.1 装好的 app 通过启动器跑起来
 - [ ] setup 读 lock 正确构造 library-directories
-- [ ] 资源定位 + native 加载正常
+- [ ] **`APP_ROOT` 完全不出现在任何代码路径**(grep 验证)
+- [ ] native 加载完全靠 library-directories
+- [ ] 资源定位 primary + fallback 都 work
 - [ ] **此阶段 dev 模式仍走老路**(chandler run 实时算,不用 setup)
 
 ---
@@ -194,7 +202,7 @@ Phase 2 前置:Phase 1 全部完成 + 中央仓库设计重新评估实际需求
 - [ ] **T4.1** 新增 `chandler pack` 主流程:resolve closure → `install --prefix=<tmp>` → copy envelope → tar
   - 关联:[05-pack §流水线](designs/05-pack.md)
   - 文件:`chandler/pack.ss`(基本重写)
-- [ ] **T4.2** envelope copy:`bin/<app>` + `bin/<app>.ps1`(用 v2.2 的 launcher 模板)
+- [ ] **T4.2** envelope copy:`bin/<app>` + `bin/<app>.ps1`(用 v2.2 的 launcher 模板,无 APP_ROOT)
 - [ ] **T4.3** envelope copy:`bin/<mt>/<runtime>`(bundled skiff/scheme)
 - [ ] **T4.4** envelope copy:`boot/<mt>/*.boot`
 - [ ] **T4.5** envelope copy:`chandler-runtime/{src,<mt>}/`(D5,bundle chandler runtime 解决 bootstrap paradox)
@@ -203,7 +211,7 @@ Phase 2 前置:Phase 1 全部完成 + 中央仓库设计重新评估实际需求
 
 ### pack launcher
 
-- [ ] **T4.7** pack 模式 sh launcher:`--libdirs` 指向 **bundled** chandler-runtime(`<pack-root>/chandler-runtime/src::<pack-root>/chandler-runtime/<mt>`)
+- [ ] **T4.7** pack 模式 sh/ps1 launcher:`--libdirs` 指向 **bundled** chandler-runtime(`<pack-root>/chandler-runtime/src::<pack-root>/chandler-runtime/<mt>`)
   - 关联:[08-launchers §pack 启动器](designs/08-launchers.md)
   - 文件:`chandler/pack.ss`
 
@@ -215,13 +223,14 @@ Phase 2 前置:Phase 1 全部完成 + 中央仓库设计重新评估实际需求
 ### 旧 pack 清理
 
 - [ ] **T4.9** 删除 pack.ss 中老的 flat 布局代码(copy-obj-tree!/copy-dep-trees!/bootstrap-source 等)
-- [ ] **T4.10** 删除 design 09 提到的旧概念:`chandler-setup.ss`、`APP_ROOT` 资源路径(已被 setup 取代)
+- [ ] **T4.10** 删除所有 APP_ROOT 残留(pack 不再设 APP_ROOT)
 
 ### v2.3 验收
 
 - [ ] `chandler pack` 产出 nested layout 的 pack
 - [ ] pack 解开后能直接跑(`bin/<app>` 启动)
 - [ ] pack tarball 解包到中央仓库 → 字节级一致 install(prebuilt install 流水线验证)
+- [ ] **pack 启动器不设 APP_ROOT**(grep 验证)
 - [ ] pack.ss 行数 < 400
 
 ---
@@ -229,80 +238,52 @@ Phase 2 前置:Phase 1 全部完成 + 中央仓库设计重新评估实际需求
 ## v2.4 — prebuilt 分发 + native 安全 `[Phase 2 — 暂缓]`
 
 > 设计:[06-prebuilt](designs/06-prebuilt.md)、[12-security](designs/12-security.md)、[01-manifest-lock §prebuilt source](designs/01-manifest-lock.md)
->
-> 目标:实现 prebuilt source 完整路径 + 安全 flag。
->
-> **前置:** v2.3 完成
 
 ### prebuilt resolve
 
-- [ ] **T5.1** resolve 时识别 `(source (prebuilt ...))`,选本机 mt 条目
-  - 关联:[02-resolution §prebuilt resolve](designs/02-resolution.md)
-- [ ] **T5.2** mt-gate:本机 mt 不在 prebuilt mt 列表 → 失败,提示 git-fallback 或报错
-  - 关联:[06-prebuilt §mt-gate](designs/06-prebuilt.md)
+- [ ] **T5.1**(Phase 2)resolve 时识别 `(source (prebuilt ...))`,选本机 mt 条目
+- [ ] **T5.2**(Phase 2)mt-gate:本机 mt 不在 prebuilt mt 列表 → 失败,提示 git-fallback 或报错
 
 ### prebuilt fetch + materialize
 
-- [ ] **T5.3** prebuilt fetch:HTTP 下载 tarball
-  - 文件:`chandler/fetch.ss`(扩展)
-- [ ] **T5.4** sha256 校验下载内容
-- [ ] **T5.5** prebuilt materialize:解包 tarball 到 `<name>/<version>/`(走 v2.1 staging → promote)
-- [ ] **T5.6** 写 `.chandler/source.ss` 记录 `(prebuilt (url ...) (sha256 ...))`
+- [ ] **T5.3**(Phase 2)prebuilt fetch:HTTP 下载 tarball
+- [ ] **T5.4**(Phase 2)sha256 校验下载内容
+- [ ] **T5.5**(Phase 2)prebuilt materialize:解包 tarball 到 `<name>/<version>/`(走 v2.1 staging → promote)
+- [ ] **T5.6**(Phase 2)写 `.chandler/source.ss` 记录 `(prebuilt (url ...) (sha256 ...))`
 
 ### 安全 flag
 
-- [ ] **T5.7** 加 `--allow-prebuilt-native` flag:prebuilt 含 native 时默认拒绝
-  - 关联:[12-security §prebuilt native](designs/12-security.md)、[06-prebuilt §native 安全](designs/06-prebuilt.md)
-  - 文件:`chandler/cli/commands.ss`
-- [ ] **T5.8** 实现官方 mirror 白名单(签名校验占位,v2 不强制签名)
-- [ ] **T5.9** tarball 解包前的 path traversal 防护(tar 炸弹)
-
-### v2.4 验收
-
-- [ ] 一个库(http)发布 prebuilt,另一个项目(myapp)用 prebuilt install
-- [ ] prebuilt 装的库跟 git clone+build 装的库**字节级一致**(只 source.ss 不同)
-- [ ] 含 native 的 prebuilt 默认拒绝,`--allow-prebuilt-native` 通过
+- [ ] **T5.7**(Phase 2)加 `--allow-prebuilt-native` flag:prebuilt 含 native 时默认拒绝
+- [ ] **T5.8**(Phase 2)实现官方 mirror 白名单(签名校验占位)
+- [ ] **T5.9**(Phase 2)tarball 解包前的 path traversal 防护
 
 ---
 
 ## v2.5 — lib pack + CLI 完善 + 迁移验证 `[Phase 2 — 暂缓]`
 
 > 设计:[05-pack §lib pack](designs/05-pack.md)、[11-cli](designs/11-cli.md)、[10-dev-mode](designs/10-dev-mode.md)
->
-> 目标:lib pack、CLI 全套、用 skiff-demo 验证端到端。
->
-> **前置:** v2.4 完成
 
 ### lib pack
 
-- [ ] **T6.1** 实现 `chandler pack --lib <name>`:无 envelope,只有 payload,`.chandler/pack.ss` 写 `(lib ...)`
-  - 关联:[05-pack §lib pack](designs/05-pack.md)
-- [ ] **T6.2** lib pack 的 source kind 反向:manifest 里 `(source (prebuilt <url>))` 直接拉 lib pack
+- [ ] **T6.1**(Phase 2)实现 `chandler pack --lib <name>`:无 envelope,只有 payload
+- [ ] **T6.2**(Phase 2)lib pack 的 source kind 反向:manifest 里 `(source (prebuilt <url>))` 直接拉 lib pack
 
 ### CLI 完善
 
-- [ ] **T6.3** 完善 `chandler add --prebuilt <url> [--mt <mt>]`(11-cli §命令一览)
-- [ ] **T6.4** 完善 `chandler list` / `tree` 显示新 layout(name+version+mt)
-- [ ] **T6.5** 完善帮助文本 + `--version` 输出格式
+- [ ] **T6.3**(Phase 2)完善 `chandler add --prebuilt <url> [--mt <mt>]`
+- [ ] **T6.4**(Phase 2)完善 `chandler list` / `tree` 显示新 layout(name+version+mt)
+- [ ] **T6.5**(Phase 2)完善帮助文本 + `--version` 输出格式
 
 ### dev mode 微调
 
-- [ ] **T6.6** dev 模式的全局兜底从单对 → list of per-version pairs(扫中央仓库 index.ss)
-  - 关联:[10-dev-mode §库定位](designs/10-dev-mode.md)
-- [ ] **T6.7** 验证 dev 模式下 `(import (chandler setup))` **不需要**(chandler run 实时算)
+- [ ] **T6.6**(Phase 2)dev 模式的全局兜底从单对 → list of per-version pairs(扫中央仓库 index.ss)
+- [ ] **T6.7**(Phase 2)验证 dev 模式下 `(import (chandler setup))` **不需要**(chandler run 实时算)
 
 ### 迁移验证
 
-- [ ] **T6.8** skiff-demo 端到端迁移:init → add → deps → build → install → run → pack → 解包跑
-- [ ] **T6.9** 性能基准:install/build/run/pack 各阶段时间
-- [ ] **T6.10** 文档完善:README、用户指南
-
-### v2.5 验收(= v2 整体验收)
-
-- [ ] 全部 milestone 通过
-- [ ] 三运行时(scheme/petite/skiff)全绿
-- [ ] skiff-demo 完整流程跑通
-- [ ] designs/ 文档与实现一致
+- [ ] **T6.8**(Phase 2)skiff-demo 端到端迁移:init → add → deps → build → install → run → pack → 解包跑
+- [ ] **T6.9**(Phase 2)性能基准:install/build/run/pack 各阶段时间
+- [ ] **T6.10**(Phase 2)文档完善:README、用户指南
 
 ---
 
@@ -317,21 +298,22 @@ Phase 2 前置:Phase 1 全部完成 + 中央仓库设计重新评估实际需求
 | D5 | pack bundle chandler-runtime | [08-launchers §bootstrap paradox](designs/08-launchers.md) |
 | D6 | mt 嵌套(`<version>/<mt>/`),非复合 key | [00 §4.1](designs/00-design-principles.md) |
 | D7 | 不考虑老版本兼容 | [00 §10](designs/00-design-principles.md) |
+| **D8** | **去除 APP_ROOT,统一到 library-directories** | **[09-runtime-paths §4](designs/09-runtime-paths.md)** |
+| **D9** | **dev 模式 app/dep 对称(`<dir>/` + `<dir>/_build/<mt>/`)** | **[10-dev-mode §3](designs/10-dev-mode.md)** |
+| **D10** | **去掉 srcdir 字段(默认源码在 checkout 根)** | **[10-dev-mode §14](designs/10-dev-mode.md)** |
 
 ## 备注
 
 - 每个 milestone 内部任务**可并行**,跨 milestone 必须顺序
-- T1.x(schema)和 T2.x(pipeline)之间,v2.0 完成后 v2.1 才能开工
-- v2.2(setup/launchers)依赖 v2.1 的 install 结果
-- v2.3(pack 重构)依赖 v2.2 的 launcher 模板
-- v2.4(prebuilt)依赖 v2.3 的 pack 流水线
-- v2.5 是收尾,所有前置完成才能开工
+- v2.0 → v2.1 → v2.2 → v2.3 是 Phase 1 的严格依赖序
+- v2.2 的 T3.7-T3.10(APP_ROOT 去除)是独立子任务,可在 setup/launcher 完成后并行做
+- v2.2 的 T3.8(native-loader codegen)涉及跨仓 bake,需要协调
+- Phase 2 全部暂缓,等 Phase 1 完成后重新评估
 
 工作量估计(粗):
-- v2.0: 2-3 天(schema + layout)
-- v2.1: 2-3 天(install pipeline 重构)
-- v2.2: 2-3 天(setup + launchers)
+- v2.0: 2-3 天(schema + layout + dev 布局)
+- v2.1: 2-3 天(install --prefix pipeline)
+- v2.2: 3-4 天(setup + launchers + **APP_ROOT 去除 + native-loader 改造**)
 - v2.3: 3-4 天(pack 重构)
-- v2.4: 2-3 天(prebuilt + 安全)
-- v2.5: 2-3 天(lib pack + 收尾)
-- **总计: 13-19 天**
+- **Phase 1 总计: 10-14 天**
+- Phase 2: 另行评估
