@@ -15,6 +15,7 @@
           (chandler fetch)
           (chandler fs)
           (chandler layout)
+          (chandler util)
           (chandler install)
           (chandler compile)
           (chandler build))
@@ -23,7 +24,15 @@
   ;; (授权逻辑照跑 —— 它在编译之前就完成了)。
   (define (when-compiler proc) (when (compiler-available?) (proc)))
 
-  (define (obj app rel) (join-paths app "lib" (current-machine-type) rel))
+    ;; C0:依赖的编译产物留在**它自己的** _vendor 树里,不再搬进汇总的 lib/
+  (define (dep-obj app dep rel)
+    (join-paths app "_vendor" dep "_build" (current-machine-type) rel))
+  ;; rel 形如 "b.so" / "b/opt.so" / "n/native/libn.so" —— 首段即依赖名
+  (define (obj app rel)
+    (let ([i (char-index rel #\/)])
+      (dep-obj app (if i (substring rel 0 i)
+                       (let ([d (char-index rel #\.)]) (if d (substring rel 0 d) rel)))
+               rel)))
 
   (define-suite suite
     ;; 无 native 的依赖:build 直接排单,无需授权,产物落 lib/<mt>/

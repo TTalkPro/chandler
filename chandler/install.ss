@@ -21,7 +21,7 @@
 (library (chandler install)
   (export install verify sync-status list-deps
           vendor-dir lib-dir project-lock-path project-manifest-path
-          library-search-dirs native-load-paths sync-app-prefix!
+          library-search-dirs native-load-paths
           chandler-runtime-sublibs chandler-dev-only-rel?
           installed-chandler-version copy-chandler-runtime!
           project-libdir project-lib-pair project-obj-dir
@@ -41,8 +41,8 @@
 
   (define (project-manifest-path root) (join-paths root "manifest.ss"))
   (define (project-lock-path root) (join-paths root "manifest.lock"))
-  (define (vendor-dir root name) (join-paths (join-paths root "vendor") (symbol->string name)))
-  (define (lib-dir root name) (vendor-dir root name))   ; 兼容:依赖源码树现居 vendor/
+  (define (vendor-dir root name) (join-paths (join-paths root "_vendor") (symbol->string name)))
+  (define (lib-dir root name) (vendor-dir root name))   ; 兼容:依赖源码树现居 _vendor/
   ;; ── 项目本地安装前缀 lib/ 的 src/mt 拆分 ──
   (define (project-libdir root) (join-paths root "lib"))                 ; 安装前缀(base)
   (define (project-lib-pair root) (split-pair (project-libdir root)))    ; (lib/src . lib/<mt>)
@@ -73,21 +73,13 @@
           ;; chandler 是**运行时门**不是依赖:实体取自全局前缀,进 vendor/chandler
           (when (manifest-chandler mf) (install-chandler-runtime! root (manifest-chandler mf)))
           (clean-orphans root lk (if (manifest-chandler mf) '("chandler") '()) opts)
-          ;; 2) 源码安装:从 vendor/ 装进 lib/src/(in-process,无 bake 子进程)。
-          (rm-rf (project-libdir root))
-          (install-dep-sources! root deps-to-vendor)
-          ;; chandler 的 runtime 子集:源码 → lib/src,**已编译对象** → lib/<mt>
-          ;; (前缀里那份是同一个 chez/skiff 编好的,不必也不该在这里重编)
+          ;; 2) chandler 运行时门的对象:从全局前缀取那份**已编译**的,摆进
+          ;;    _vendor/chandler/_build/<mt>/(与别的依赖同一形状,不必也不该重编)。
           (when (manifest-chandler mf) (copy-chandler-runtime! root))
-          ;; M1: 复制依赖声明资源到 lib/src/resources/<libpath>/
-          (install-resources root deps-to-vendor)
-          ;; 3) 把项目自己也铺进这个前缀:resources/ → lib/src/resources/<name>/,
-          ;;    manifest 快照 → lib/.chandler/<name>/ —— lib/ 由此是个**完整前缀**,
-          ;;    APP_ROOT 指向它即可,应用四态读同一条路径。
-          (sync-app-prefix! root mf)
-          (printf "deps: ~a ~a vendored, installed to lib/{src,~a}~%"
-                  (length deps-to-vendor) (plural (length deps-to-vendor) "dependency" "dependencies")
-                  (current-machine-type))
+          ;; **不再往 lib/ 拷任何东西**(C0):依赖的源码、对象、资源各自 live 在
+          ;; _vendor/<dep>/ 里,由 resolved-libdirs 逐依赖挂成 (src . obj) 对。
+          (printf "deps: ~a ~a vendored to _vendor/~%"
+                  (length deps-to-vendor) (plural (length deps-to-vendor) "dependency" "dependencies"))
           0))))
 
   ;; 取 lock:新鲜则用旧;否则解析 + 写(填 manifest-sha256)
@@ -149,77 +141,13 @@
               (copy-file abs dst)))
           (files-under src)))))
 
-  ;; ── 源码安装:vendor/ → lib/src/(in-process,无 bake 子进程;design 13 §3)──
-  ;; chandler 是安装的唯一执行者。每依赖:找 umbrella + 拷整棵源码子树。
-  ;; 与 bake 旧 run-install 等价(步骤 1-2),但不经过子进程。
-  (define lib-source-extensions '(".chezscheme.sls" ".sls" ".ss" ".sc"))
-
-  (define (find-umbrella-file srcdir name)
-    (let loop ([exts lib-source-extensions])
-      (cond
-        [(null? exts) #f]
-        [else
-         (let ([p (join-paths srcdir (string-append name (car exts)))])
-           (if (file-exists? p) p (loop (cdr exts))))])))
-
-  (define (install-dep-sources! root git-deps)
-    (when (pair? git-deps)
-      (let ([lib-src (join-paths (project-libdir root) "src")])
-        (ensure-dir lib-src)
-        (for-each
-          (lambda (d)
-            (let* ([name (symbol->string (locked-dep-name d))]
-                   [vdir (vendor-dir root (locked-dep-name d))]
-                   [srcdir (srcdir-join vdir (or (locked-dep-srcdir d) "."))]
-                   [from-prefix (string-append srcdir "/")])
-              ;; 1. umbrella: srcdir/<name>.{ext} → lib/src/<name>.{ext}
-              (let ([umb (find-umbrella-file srcdir name)])
-                (when umb
-                  (let ([dst (join-paths lib-src (base-name umb))])
-                    (ensure-parent dst)
-                    (copy-file umb dst))))
-              ;; 2. source subtree: srcdir/<name>/** → lib/src/<name>/**
-              (let ([subtree (join-paths srcdir name)])
-                (when (file-directory? subtree)
-                  (for-each
-                    (lambda (abs)
-                      (let* ([rel (strip-prefix abs from-prefix)]
-                             [dst (join-paths lib-src rel)])
-                        (ensure-parent dst)
-                        (copy-file abs dst)))
-                    (files-under subtree))))))
-          git-deps))))
-
-  ;; M1: 复制依赖声明资源到 lib/src/resources/<libpath>/(designs/11 §5,落点见 C4)
-  ;; 资源是 ABI-independent,与源码同属 src/ 层;lock 驱动,不重读 dep manifest。
-  (define (install-resources root git-deps)
-    (for-each
-      (lambda (d)
-        (let ([resources (locked-dep-resources d)])
-          (when resources
-            (let ([vdir (vendor-dir root (locked-dep-name d))])
-              (for-each
-                (lambda (entry)
-                  (let* ([libref (car entry)]
-                         [rel-path (cdr entry)]
-                         [src-dir (join-paths vdir rel-path)]
-                         [libpath (string-join (map symbol->string libref) "/")]
-                         [dst-base (prefix-resource-dir (project-libdir root) libpath)])
-                    (when (file-directory? src-dir)
-                      (copy-resource-tree src-dir dst-base))))
-                resources)))))
-      git-deps))
-
-  ;; 递归复制目录树:files-under 给绝对路径,copy-file 自动建父目录
-  (define (copy-resource-tree src-dir dst-dir)
-    (let* ([prefix (if (string-suffix? "/" src-dir) src-dir (string-append src-dir "/"))]
-           [files (files-under src-dir)])
-      (for-each
-        (lambda (f)
-          (let* ([rel (strip-prefix f prefix)]
-                 [dst (path-join* dst-dir rel)])
-            (copy-file f dst)))
-        files)))
+  ;; 依赖声明的资源**不再复制**(C0):它们 live 在
+  ;;   _vendor/<dep>/<srcdir>/resources/<libpath>/
+  ;; 而 resolved-libdirs 把那个 src 侧挂上了,(chandler runtime-paths) 的
+  ;; resource-path 扫 src 侧即命中 —— 改依赖的资源即时生效,不必重跑 deps。
+  ;; **约定**:依赖仓库把资源摆在 `<srcdir>/resources/<libpath>/`(与安装前缀里
+  ;; `<prefix>/src/resources/<libpath>/` 同一形状)。manifest 的 `(resources …)`
+  ;; 声明退化为**交付期映射** —— install/pack 据它把任意路径搬到规范落点。
 
   ;; ══════════════════════════════════════════════════════════════════
   ;; chandler 自身:**运行时门,不是依赖**(designs/12 §5)
@@ -274,25 +202,23 @@
       ;; 三处都不必为它开特例。umbrella chandler.ss 不来:那是 dev facade
       ;; (export activate…),应用要的是 (chandler base) 与各 runtime 子库。
       (let ([src (join-paths prefix "src" "chandler")]
-            [dst (join-paths root "vendor" "chandler" "chandler")])
+            [dst (join-paths (vendor-dir root (quote chandler)) "chandler")])
         (unless (file-directory? src)
           (error 'deps (format "~a is missing chandler's sources (reinstall chandler)" prefix)))
-        (rm-rf (join-paths root "vendor" "chandler"))
+        (rm-rf (vendor-dir root (quote chandler)))
         (copy-runtime-subset! src dst ".ss"))))
 
-  ;; 源码 → lib/src,已编译对象 → lib/<mt>(前缀里那份由同一个运行时编出,直接用)
+  ;; 已编译对象 → _vendor/chandler/_build/<mt>/chandler/ —— 与别的依赖同一形状,
+  ;; 于是 dep-pair 不必为 chandler 开特例。源码由 install-chandler-runtime! 摆进
+  ;; _vendor/chandler/chandler/,就地即是 src 侧。前缀里那份对象由同一个运行时编出,
+  ;; 直接用,不该也不必在这里重编。
   (define (copy-chandler-runtime! root)
-    (let ([prefix (global-prefix)]
-          [mt (current-machine-type)])
-      (copy-runtime-subset! (join-paths root "vendor" "chandler" "chandler")
-                            (join-paths (project-libdir root) "src" "chandler")
-                            ".ss")
-      (copy-runtime-subset! (join-paths prefix mt "chandler")
-                            (join-paths (project-obj-dir root) "chandler")
+    (let* ([prefix (global-prefix)]
+           [mt (current-machine-type)]
+           [dst (join-paths (vendor-dir root 'chandler) "_build" mt "chandler")])
+      (copy-runtime-subset! (join-paths prefix mt "chandler") dst
                             (string-append "." (so-ext)))
-      (copy-runtime-subset! (join-paths prefix mt "chandler")
-                            (join-paths (project-obj-dir root) "chandler")
-                            ".so")))
+      (copy-runtime-subset! (join-paths prefix mt "chandler") dst ".so")))
 
   ;; 平铺复制 <from>/<sub><ext> —— 只取 runtime 子集,子目录(cli/test)整个不看
   (define (copy-runtime-subset! from to ext)
@@ -310,7 +236,7 @@
 
   ;; ── 孤儿清理:vendor/ 下有、lock 无的目录(extra-keep:非 lock 来源的合法住户)──
   (define (clean-orphans root lk extra-keep opts)
-    (let ([vd (join-paths root "vendor")])
+    (let ([vd (join-paths root "_vendor")])
       (when (file-directory? vd)
         (let ([keep (append extra-keep
                             (map (lambda (d) (symbol->string (locked-dep-name d))) (lock-deps lk)))])
@@ -346,10 +272,8 @@
                    (set! ok #f)
                    (fprintf (current-error-port) "dirty: vendor/~a has local changes~%" (locked-dep-name d))]))))
           (lock-deps lk))
-        (unless (or (null? (filter (lambda (d) (eq? 'git (locked-dep-source-kind d))) (lock-deps lk)))
-                    (file-directory? (car (project-lib-pair root))))   ; lib/src 存在
-          (set! ok #f)
-          (fprintf (current-error-port) "missing: lib/src (run `chandler deps` to rebuild)~%"))
+        ;; C0 之后没有 lib/ 可查:每个 git 依赖的 _vendor 树在不在,上面逐条已经查过
+        ;; (rev / dirty),这里只补「一条都没 vendor 过」的情形。
         ok)))
 
   ;; sync-status:list/tree 用
@@ -385,24 +309,51 @@
           '())))
 
   ;; run/exec/activate 用:lib/ 对 (src . obj)(若 lib/ 在)+ path 依赖源目录
+  ;; ── per-dep (源 . 对象) 对(C0,2026-07-24)──
+  ;;
+  ;; 一个依赖挂一条:源在 _vendor/<name>/<srcdir>,对象在它自己的 _build/<mt>/
+  ;; (`chandler build` 就是在那棵树里、以 srcdir 为 cwd 编的)。
+  ;;
+  ;; **为什么不再有 lib/**:先前要一个「项目本地安装前缀」,是因为消费方只能挂一个
+  ;; 目录对,于是必须把各依赖的源码与对象摊平进去。既然 library-directories 本来就
+  ;; 收一**列**条目,直接逐依赖挂它自己的树即可 —— 少一次全量拷贝、少一处会与
+  ;; _vendor 漂移的副本,改依赖源码即时生效(dev 期全 live)。
+  ;; 资源同理:各依赖的 <srcdir>/resources/<libpath>/ 被 resource-path 的 src 侧
+  ;; 扫描直接读到,不必先拷进某个前缀。
+  (define (dep-src-dir root d)
+    (srcdir-join (vendor-dir root (locked-dep-name d)) (or (locked-dep-srcdir d) ".")))
+
+  (define (dep-pair root d)
+    (let ([src (dep-src-dir root d)])
+      (cons src (join-paths src "_build" (current-machine-type)))))
+
+  ;; 项目自身:源在 <root>/<srcdir>,对象在 <root>/_build/<mt>
+  (define (project-pair root)
+    (cons (srcdir-join root (proj-srcdir root))
+          (join-paths root "_build" (current-machine-type))))
+
+  (define (locked-deps-of root)
+    (let ([lpath (project-lock-path root)])
+      (if (file-exists? lpath) (lock-deps (read-lock lpath)) '())))
+
   (define (library-search-dirs root)
     (append
-      (if (file-directory? (project-libdir root)) (list (project-lib-pair root)) '())
+      (map (lambda (d) (dep-pair root d))
+           (filter (lambda (d) (file-directory? (dep-src-dir root d))) (locked-deps-of root)))
       (path-dep-source-dirs root)))
 
   ;; ── 统一库搜索规则(run / exec / repl / activate 共用)──
   ;;   项目模式(lock 存在且有依赖):lib/ + path 源目录 + 项目自身库根 + 全局兜底(项目最高优先)
   ;;   非项目:直接全局
+  ;; 项目模式:有 lock 就算(C0 之后不再看 lib/ 在不在 —— 它已经不存在了)
   (define (project-mode? root)
-    (and (file-exists? (project-lock-path root))
-         (or (file-directory? (project-libdir root))
-             (pair? (path-dep-source-dirs root)))))
+    (file-exists? (project-lock-path root)))
 
   (define (resolved-libdirs root)
     (if (project-mode? root)
-        (append (library-search-dirs root)
-                (list (srcdir-join root (proj-srcdir root)))   ; 项目自身库根
-                (list (global-libdir)))                        ; 全局兜底
+        (append (library-search-dirs root)      ; 逐依赖一条 (src . obj)
+                (list (project-pair root))      ; 项目自身(源 . 自己的 _build/<mt>)
+                (list (global-libdir)))         ; 全局兜底
         (list (global-libdir))))
 
   (define (proj-srcdir root)
@@ -427,7 +378,7 @@
   ;;   lib/<mt>/…/native/。取并集,严格是旧行为的超集,不会漏。
   (define (native-load-paths root)
     (let loop ([dirs (dedupe-strings
-                       (cons (project-obj-dir root)
+                       (cons (cdr (project-pair root))
                              (map entry-obj-side (resolved-libdirs root))))]
                [acc '()])
       (if (null? dirs)
@@ -460,39 +411,12 @@
   (define (self-loading? f)
     (file-exists? (join-paths (parent-dir (parent-dir f)) "native-loader.so")))
 
-  ;; ── 项目自身铺进前缀 lib/(2026-07-23:取代生成 chandler-setup.ss)──
-  ;;   lib/ 与 ~/.local/share/chez、解开的 pack 三态同构,APP_ROOT 恒指向这样一个前缀。
-  ;;   要做到这点,项目自己的两样东西也得进去:
-  ;;     resources/                  → lib/src/resources/<name>/     应用数据
-  ;;     manifest.ss                 → lib/.chandler/<name>/manifest.ss  清单快照
-  ;;   后者顺便让 (chandler runtime-paths) 的 app-name 认出「这个前缀属于谁」——
-  ;;   依赖不写 .chandler/,故项目自己恒是唯一条目。
-  ;;
-  ;;   run/repl 每次启动也调它:资源是开发期高频改动的东西,拷贝陈旧比不拷更糟。
-  ;;   只补新增与更新(mtime 比较),删除由 `chandler deps` 重铺 lib/ 时收敛。
-  (define sync-app-prefix!
-    (case-lambda
-      [(root)
-       (let ([mpath (project-manifest-path root)])
-         (when (file-exists? mpath) (sync-app-prefix! root (read-manifest mpath))))]
-      [(root mf)
-       (let ([name (or (manifest-name mf) (base-name root))])
-         (sync-app-resources! root name)
-         (snapshot-app-manifest! root name))]))
-
-  (define (sync-app-resources! root name)
-    (let ([src (join-paths root "resources")])
-      (when (file-directory? src)
-        (let ([pre (string-append src "/")]
-              [dst-base (prefix-resource-dir (project-libdir root) name)])
-          (for-each
-            (lambda (abs) (copy-if-stale! abs (join-paths dst-base (strip-prefix abs pre))))
-            (files-under src))))))
-
-  (define (snapshot-app-manifest! root name)
-    (let ([mpath (project-manifest-path root)]
-          [dst (join-paths (project-libdir root) ".chandler" name "manifest.ss")])
-      (when (file-exists? mpath) (copy-if-stale! mpath dst))))
+  ;; ── 项目自身的资源:**不再铺进任何前缀**(C0)──
+  ;;   项目的源码根本来就被 resolved-libdirs 挂着,故 <root>/resources/<name>/
+  ;;   被 resource-path 的 src 侧扫描直接读到 —— 改一个资源文件即时生效,
+  ;;   不必重跑 deps,也不需要 APP_ROOT。
+  ;;   (先前要拷进 lib/ 是因为「APP_ROOT 指向唯一前缀」那套模型;C1 把资源定位
+  ;;    改成扫 library-directories 之后,那个理由消失了。)
 
   ;; 只在内容可能变了时拷:mtime 严格更新即拷(相等则认为没变 —— 拷贝时 dst 恒不早于 src)
   (define (copy-if-stale! src dst)

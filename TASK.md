@@ -444,7 +444,7 @@ $APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
 
 | # | 任务 | doc 14 | 状态 | 文件 |
 |---|------|--------|------|------|
-| C0 | `resolved-libdirs` 改 per-dep pairs;`vendor/`→`_vendor/` 改名;删 `install-dep-sources!`(不再拷源码进 lib/) | P0 | 🔲 待实现 | `chandler/install.ss` |
+| C0 | `resolved-libdirs` 改 per-dep pairs;`vendor/`→`_vendor/`;删掉所有往 `lib/` 的拷贝 | P0 | 🟡 **部分完成** —— dev 通路(deps/build/run/repl/activate)已切换;**pack 与全局 install 仍读 `lib/`,待改** | `chandler/install.ss`、`chandler/build.ss`、`chandler/cli/commands.ss` |
 | C1 | 统一 `resource-path`:扫 `(library-directories)` 的 **src/obj 两侧** + prefix-fallback;删旧四 API;**资源定位不再依赖 `APP_ROOT`** | P1 | ✅ 已完成 | `chandler/runtime-paths.ss`、`chandler/pack.ss` |
 | C2 | `native-load-paths` 改扫所有挂载条目的 obj 侧(不再只扫 `lib/<mt>`) | P2 | ✅ 已完成 | `chandler/install.ss` |
 | C3 | `.env` 读取模块(`chandler/env.ss`);`run`/`repl`/`env`/`install` 消费 `.env` | P3 | 🔲 待实现 | `chandler/env.ss`(新)、`chandler/cli/commands.ss` |
@@ -498,6 +498,24 @@ $APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
 **验证**:三运行时 **337/337**(新增 1 用例:全局前缀里无 loader 的 native 被拾起、带 loader 的仍跳过)。
 
 **D3(`chandler init` 模板)—— 核对后确认无需改动**:`cmd-init` 从来只写 `manifest.ss` + `.gitignore` + 库骨架,**本就不生成 `recipe.ss`**;B6b 让 recipe 变可选之后,这正是想要的形态。`.gitignore` 里的 `.chandler-build.ss` / `.chandler-install.ss` 是已作废的生成物,**保留**(老项目已有这两行,删掉只会变噪声;新项目多两行无害),已在原处注明。
+
+**C0 进度(2026-07-24,未完)**:
+
+**已切换(dev 通路)**:
+- `vendor/` → **`_vendor/`**;`resolved-libdirs` 改为**逐依赖一条 `(src . obj)` 对** —— 源在 `_vendor/<name>/<srcdir>`,对象在它自己的 `_build/<mt>/`(`chandler build` 本来就编在那里)。
+- **删掉所有往 `lib/` 的拷贝**:`install-dep-sources!`、`install-resources`、`sync-app-prefix!`、build 的 `install-dep-objects!`。`lib/` 目录自此在 dev 期**不存在**。
+- **依赖资源不再复制**:live 在 `_vendor/<dep>/<srcdir>/resources/<libpath>/`,由 C1 的 src 侧扫描直接读到。**约定**:依赖仓库把资源摆成 `resources/<libpath>/`(与前缀里 `src/resources/<libpath>/` 同形);manifest 的 `(resources …)` 声明退化为**交付期映射**。
+- **项目自己的资源同理**:`<root>/resources/<name>/` 就地被读到(项目源码根本来就挂着)。
+- **dev 期不设 `APP_ROOT`**:它只服务 native-loader 候选 1,而 dev 期 native 分散在各 `_vendor/.../_build/<mt>/`,没有单一前缀能覆盖 —— 硬造一个只会让候选 1 恒 miss。候选 2(扫 `library-directories` obj 侧)恰好命中。外层已显式设了则原样透传;pack 仍设(那里是真前缀)。
+- `chandler build` 编依赖时,上游按**各自的**预构建根 `(prebuilt <src> <obj>)` 消费(compile 会把它变成「只给对象」,正是避免「不同编译实例」的做法)。
+
+**仍待改(下一步)**:
+1. **`chandler pack`** —— `copy-obj-tree!` / `copy-share!` 仍读 `lib/{src,<mt>}`。来源应改为逐依赖 `_vendor/<dep>/<srcdir>/_build/<mt>/` + 项目 `_build/<mt>/` + 各自的 `resources/<ns>/`(这正是 C5 原文的另一半)。**注意:pack 的测试目前是绿的,但那是因为它们自己伪造 `lib/`(`fake-dep-objs!`)—— 真实 pack 现在会失败。**
+2. **全局 install** —— `merge-lib-to-global!` 仍合并 `lib/{src,<mt>}` → 全局前缀,同样要改成逐依赖树。
+3. `project-libdir` / `project-lib-pair` / `project-obj-dir` 三个函数已无实际含义(仍指向不存在的 `lib/`),上面两处改完即可删除。
+4. e2e 复验:`deps → build → run` 已在改动前跑通,C0 之后**尚未重跑**。
+
+**当前状态**:三运行时 **337/337 全绿**,但绿色只覆盖到 dev 通路;pack / 全局 install 的真实路径未验。
 
 **依赖序**:
 - C0–C3 可**先于阶段 B** 落地(不依赖 bake 吸收)——过渡期 bake 子进程仍跑,但 libdirs 已是 per-dep 对、resources 已统一、`.env` 已生效。

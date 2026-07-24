@@ -108,11 +108,9 @@
           (assert-equal 0 (main (list "-C" app "add" "greet" greet "--branch" "main")))
           (assert-equal 0 (main (list "-C" app "deps")))
           (assert-equal 0 (main (list "-C" app "deps" "--list")))
-          ;; 新模型:git 依赖 checkout 到 vendor/,chandler 直接装到 lib/src,生成 setup
-          (assert-true (file-exists? (string-append app "/vendor/greet/greet.ss")))     ; checkout
-          (assert-true (file-exists? (string-append app "/lib/src/greet.ss")))          ; chandler 装的源(lib/src)
-          ;; lib/ 是完整前缀:清单快照在 .chandler/<name>/;不再生成 chandler-setup.ss
-          (assert-true (file-exists? (string-append app "/lib/.chandler/app/manifest.ss")))
+          ;; C0:git 依赖整仓 checkout 到 _vendor/,**只此一份** —— 不再拷进任何前缀
+          (assert-true (file-exists? (string-append app "/_vendor/greet/greet.ss")))
+          (assert-false (file-directory? (string-append app "/lib")))
           (assert-false (file-exists? (string-append app "/chandler-setup.ss"))))))
 
     ;; ── 库搜索模式判定(run/exec/repl 统一):无 lock/依赖 → 全局;有 → 项目(最高优先)──
@@ -133,10 +131,14 @@
           (main (list "-C" app "add" "greet" greet "--branch" "main"))
           (main (list "-C" app "deps"))
           (assert-true (project-mode? app))
-          ;; 项目 libdirs:lib/ 一对 (src . obj) 在前 + 项目根 + 全局兜底(一对)在末尾
+          ;; C0 项目 libdirs:**逐依赖**一对 (src . obj) 在前 + 项目自身 + 全局兜底在末尾
           (let ([dirs (resolved-libdirs app)])
-            (assert-true (>= (length dirs) 2))
-            (assert-equal (project-lib-pair app) (car dirs))                     ; lib/ 一对在前
+            (assert-true (>= (length dirs) 3))
+            (let ([first (car dirs)])
+              (assert-true (pair? first))
+              ;; 第一条是依赖 greet 自己的树:源在 _vendor/greet,对象在它的 _build/<mt>
+              (assert-true (substr? (car first) "/_vendor/greet"))
+              (assert-true (substr? (cdr first) (string-append "_build/" (current-machine-type)))))
             (assert-equal (global-libdir) (list-ref dirs (- (length dirs) 1)))))))  ; 全局兜底在末尾
 
     ;; 错误输出不许把格式指令原样打给用户:Chez 的 I/O 条件把 "~a" 写在 message 里、

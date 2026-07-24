@@ -51,12 +51,8 @@
              [allow (alist-ref opts 'allow-build)]
              [approvals-path (join-paths root ".chandler-approvals")]
              [approvals (read-approvals approvals-path)])
-        ;; lib/src 只在**有依赖**时才该存在 —— 零依赖项目 `chandler deps` 什么也不装,
-        ;; 那时报「lib/src missing; run deps first」是假错(deps 明明跑过了)。
-        ;; 自举项目(chandler 自己)正是零依赖,B6 之前不走这条路才没暴露。
-        (when (and (pair? order)
-                   (not (file-directory? (car (project-lib-pair root)))))
-          (error 'build "lib/src missing; run `chandler deps` first" root))
+        ;; C0 之后没有 lib/ 可查 —— 每个依赖的 _vendor 树在不在,由 build-one-dep
+        ;; 逐条报(带上是哪个依赖),比这里一句笼统的前置检查更可操作。
         ;; 1) 收集需授权的 native 构建 + 校验授权
         (let ([pending '()] [to-record '()])
           (for-each
@@ -108,7 +104,10 @@
         (error 'build (format "~a not vendored; run `chandler deps` first" srcdir)))
       (build-tree!
         srcdir
-        (list "." (prebuilt (join-paths root "lib")))
+        ;; 已经建好的上游按**它们各自的**预构建根消费(C0:不再有汇总的 lib/)。
+        ;; topo 序保证「排在自己前面的」都已编好;prebuilt 根在 compile 里会变成
+        ;; (obj . obj),即只给对象、不给源码 —— 那正是避免「不同编译实例」的做法。
+        (cons "." (upstream-prebuilt-roots root d))
         (lambda ()
           ;; 顺序与旧的生成 recipe 一致:native 先(它把 _build/.gen 挂进搜索根,
           ;; 随后的 library-task 才解析得到生成的 (<lib> native-loader)),库在后。
@@ -116,8 +115,22 @@
           (derive-library-tasks! (tree-library-files srcdir name)))
         all-file-targets
         verbose?
-        (format "dependency ~a" name))
-      (install-dep-objects! root d)))
+        (format "dependency ~a" name))))
+
+  ;; 本依赖之前(topo 序)那些依赖的预构建根:(src . obj) 各自成对。
+  ;; 只收**已经有 _build/<mt> 的**,免得把还没编的当预构建根挂上去。
+  (define (upstream-prebuilt-roots root d)
+    (let loop ([ds (topo-order (read-lock (project-lock-path root)))] [acc '()])
+      (cond
+        [(null? ds) (reverse acc)]
+        [(eq? (locked-dep-name (car ds)) (locked-dep-name d)) (reverse acc)]
+        [else
+         (let* ([u (car ds)]
+                [src (srcdir-join (vendor-dir root (locked-dep-name u))
+                                  (or (locked-dep-srcdir u) "."))]
+                [obj (join-paths src "_build" (current-machine-type))])
+           (loop (cdr ds)
+                 (if (file-directory? obj) (cons (prebuilt src obj) acc) acc)))])))
 
   ;; ── 进程内构建一棵树:切 cwd、复位状态、设搜索根、排单、跑 ──
   ;;
@@ -189,46 +202,11 @@
       (lambda (rel) (library-task (string->symbol (string-append "c-" (task-suffix rel))) rel))
       rels))
 
-  ;; ── 编译产物搬运:bake 的 _build/<mt>/ → chandler 的 lib/<mt>/(design 13 §4)──
-  ;; bake 只编译;chandler 是安装的唯一执行者。精确清旧(按命名空间)+ 拷新产物。
-  ;; 过滤规则复用 pack.ss 的 deliverable?(.bake-manifest 指纹缓存 + *.wpo 中间物)。
-
-  (define (deliverable? rel)
-    (and (not (string=? (base-name rel) ".bake-manifest"))
-         (not (string-suffix? ".wpo" rel))))
-
-  (define (clean-dep-objects! objdir name)
-    (let ([ns (symbol->string name)])
-      (let ([so (join-paths objdir (string-append ns ".so"))])
-        (when (file-exists? so) (delete-file so)))
-      (let ([dir (join-paths objdir ns)])
-        (when (file-directory? dir) (rm-rf dir)))))
-
-  (define (install-dep-objects! root d)
-    (let* ([name   (locked-dep-name d)]
-           [vdir   (vendor-dir root name)]
-           [srcdir (srcdir-join vdir (or (locked-dep-srcdir d) "."))]
-           [mt     (current-machine-type)]
-           [bdir   (join-paths srcdir "_build" mt)]
-           [objdir (project-obj-dir root)])
-      ;; 1. 精确清旧:删该依赖在 lib/<mt>/ 下的旧产物(不碰别的依赖)
-      (clean-dep-objects! objdir name)
-      ;; 2. 拷新产物:_build/<mt>/** → lib/<mt>/**(只拷 .so + native 共享物)
-      (when (file-exists? bdir)
-        (unless (file-directory? bdir)
-          (error 'build (format "~a/_build/~a is not a directory" srcdir mt)))
-        (ensure-dir objdir)
-        (let* ([bprefix (string-append bdir "/")]
-               [nx (string-append "." (so-ext))])
-          (for-each
-            (lambda (abs)
-              (let ([rel (strip-prefix abs bprefix)])
-                (when (and (deliverable? rel)
-                           (or (string-suffix? ".so" rel) (string-suffix? nx rel)))
-                  (let ([dst (join-paths objdir rel)])
-                    (ensure-parent dst)
-                    (copy-file abs dst)))))
-            (files-under bdir))))))
+  ;; ── 编译产物**不再搬运**(C0,2026-07-24)──
+  ;; 先前把 _build/<mt>/ 拷进 lib/<mt>/,是为了凑出一个「项目本地安装前缀」给消费方
+  ;; 挂。既然 library-directories 收的是一**列**条目,逐依赖挂它自己的树即可:
+  ;; 产物就留在 `chandler build` 编出它们的地方(_vendor/<dep>/<srcdir>/_build/<mt>/),
+  ;; 少一次全量拷贝,也少一处会与 _vendor 漂移的副本。
 
   ;; 登记表里的全部 file 目标(推导式构建没有 default-task,跑全部即「build-all」)。
   (define (all-file-targets)

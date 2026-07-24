@@ -273,7 +273,8 @@
   (define (cmd-env root flags)
     (let ([dirs (resolved-libdirs root)])
       (printf "export CHEZSCHEMELIBDIRS=\"~a\"~%" (libdirs->arg dirs))
-      (printf "export APP_ROOT=\"~a\"~%" (cdar (app-root-env root)))
+      (let ([e (app-root-env root)])
+        (unless (null? e) (printf "export APP_ROOT=\"~a\"~%" (cdar e))))
       0))
 
   ;; ── deps --list / deps --tree ──
@@ -376,7 +377,6 @@
     (let ([script (or (flag flags 'script)
                       (and (pair? positionals) (car positionals)))])
       (unless script (error 'run "usage: chandler run --script <script.ss> [args...]"))
-      (sync-app-prefix! root)
       (let* ([dirs (resolved-libdirs root)]
              [natives (native-load-paths root)]
              [preamble (make-preamble root natives (abspath root script))]
@@ -394,20 +394,21 @@
                                 script-args)
                         (list (cons 'env (app-root-env root)))))))
 
-  ;; APP_ROOT = 项目库前缀 <root>/lib —— 与全局前缀、解开的 pack 同构(designs/09、11)。
+  ;; **dev 期不设 APP_ROOT**(C0,2026-07-24)。
   ;;
-  ;; **2026-07-24 起它只服务 native-loader**:资源定位改成扫 (library-directories)
-  ;; 的 src/obj 两侧((chandler runtime-paths) 的 resource-path),不再读这个变量 ——
-  ;; 能 import 那个库,就说明它的前缀已经在库搜索表上,再要一个 env 说同一件事是重复。
-  ;; 但生成的 native-loader 仍需要它:loader 可能在 library-invoke 期就跑,那时
-  ;; library-directories 未必已设(designs/24 §约束 3),故这里照常交接。
-  ;; 环境里已有值则不覆盖:外层(pack 启动器 / 用户显式设)先到且权威。
-  ;; 绝对化:APP_ROOT 要交给子进程,相对路径一旦对方换 cwd 就废
+  ;; 它现在只服务生成的 native-loader 的候选 1(`$APP_ROOT/<mt>/<libpath>/native/`)。
+  ;; 而 C0 之后 dev 期的 native 分散在各 `_vendor/<dep>/<srcdir>/_build/<mt>/` 里,
+  ;; **没有单一前缀能覆盖** —— 硬造一个只会让候选 1 恒 miss,等于留一条永远走不通的
+  ;; 分支。loader 的候选 2(扫 `(library-directories)` 各条目的 obj 侧)恰好命中:
+  ;; per-dep 对的 obj 侧正是 native 落点。资源定位(C1)同理已不读它。
+  ;;
+  ;; pack **仍然设**:那里 APP_ROOT 指向一个真前缀,且 boot / 全程序模式下
+  ;; library-directories 未必已设(designs/24 §约束 3),env 是唯一时序对得上的交接。
+  ;;
+  ;; 外层已显式设了就原样透传(用户或 pack 启动器先到且权威),否则一个都不加。
   (define (app-root-env root)
-    (list (cons "APP_ROOT"
-                (or (getenv* "APP_ROOT")
-                    (let ([p (abspath root "lib")])
-                      (if (string-prefix? "/" p) p (join-paths (current-directory) p)))))))
+    (let ([v (getenv* "APP_ROOT")])
+      (if v (list (cons "APP_ROOT" v)) '())))
 
   ;; ── repl:交互式 shell,自动挂库搜索路径(与 run/exec 同规则)──
   ;;   项目模式(lock 存在且有依赖):lib/ + path 源目录 + 项目库根 + 全局(项目最高优先)
@@ -417,7 +418,6 @@
            [dirs     (resolved-libdirs root)]
            [natives  (if project? (native-load-paths root) '())]
            [interp   (repl-interp root flags)])
-      (when project? (sync-app-prefix! root))
       (fprintf (current-error-port)
                "chandler repl: ~a mode, ~a library search entries, runtime ~a~%"
                (if project? "project" "global") (length dirs) interp)

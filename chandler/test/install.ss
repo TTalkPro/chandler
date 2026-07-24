@@ -57,11 +57,8 @@
           ;; git 依赖 checkout 到 vendor/
           (assert-true (file-exists? (string-append (vendor-dir app 'a) "/a.ss")))
           (assert-true (file-exists? (string-append (vendor-dir app 'b) "/b.ss")))
-          ;; bake install 到 lib/{src,<mt>}:源码落 lib/src/(结构同全局前缀 <prefix>/src)
-          (assert-true (file-exists? (string-append (car (project-lib-pair app)) "/a.ss")))
-          (assert-true (file-exists? (string-append (car (project-lib-pair app)) "/b.ss")))
-          ;; lib/ 是个完整前缀:清单快照进 .chandler/<name>/(应用名由此可辨)
-          (assert-true (file-exists? (join-paths (project-libdir app) ".chandler" "app" "manifest.ss")))
+          ;; C0:源码只此一份,留在 _vendor/ 里 —— 不再拷进任何前缀
+          (assert-false (file-directory? (join-paths app "lib")))
           ;; 不再生成 chandler-setup.ss —— 启动统一走 `chandler run`
           (assert-false (file-exists? (join-paths app "chandler-setup.ss")))
           (assert-true (verify app)))))
@@ -77,7 +74,7 @@
             (assert-true (verify app))))))
 
     (activate-and-import
-      ;; 挂 lib/ 一对 (src::obj) 即可 import 所有依赖(源码在 lib/src,Chez 按需编译)
+      ;; 挂 resolved-libdirs(逐依赖一对)即可 import 所有依赖(源码 live 在 _vendor,Chez 按需编译)
       (parameterize ([cache-root (mktmp)])
         (let* ([b (make-lib-repo "b" '())]
                [app (make-app (list (cons 'b b)))])
@@ -85,36 +82,38 @@
           (let ([script (string-append app "/probe.ss")])
             (write-file script "(import (b)) (display b-ok)")
             (let ([r (run-capture "scheme"
-                       (list "-q" "--libdirs" (libdirs->arg (list (project-lib-pair app)))
+                       (list "-q" "--libdirs" (libdirs->arg (resolved-libdirs app))
                              "--script" script))])
               (assert-string= "#t" (trim (proc-result-out r))))))))
 
-    ;; 项目自身的 resources/ 也进前缀:lib/src/resources/<name>/ —— 部署态与
-    ;; pack 里的 share/<app>/resources/ 同一形状,故应用代码只有一种拼法。
-    (app-resources-land-in-project-prefix
+    ;; C0:项目自身与依赖的资源**都不再被复制** —— 各自 live 在源码树里,由
+    ;; resolved-libdirs 挂上的 src 侧被 resource-path 扫到。这里验的是「挂对了」:
+    ;; 项目根与每个依赖的 _vendor 树都在库搜索条目里。
+    (resolved-libdirs-mounts-project-and-each-dep
       (parameterize ([cache-root (mktmp)])
         (let* ([b (make-lib-repo "b" '())]
                [app (make-app (list (cons 'b b)))])
-          (write-text (join-paths app "resources" "greeting.txt") "hello")
           (install app '())
-          (assert-string= "hello"
-            (read-file (join-paths (project-libdir app) "src" "resources" "app" "greeting.txt"))))))
+          (let* ([dirs (resolved-libdirs app)]
+                 [srcs (map (lambda (e) (if (pair? e) (car e) e)) dirs)])
+            ;; 依赖:_vendor/b 的源码侧在
+            (assert-true (find (lambda (d) (substr? d "/_vendor/b")) srcs))
+            ;; 项目自身的库根在
+            (assert-true (find (lambda (d) (string=? d app)) srcs))
+            ;; 每条依赖条目都是 (src . obj) 对,obj 侧指向它自己的 _build/<mt>
+            (let ([dep-entry (find (lambda (e) (and (pair? e) (substr? (car e) "/_vendor/b"))) dirs)])
+              (assert-true (pair? dep-entry))
+              (assert-true (substr? (cdr dep-entry)
+                                    (string-append "_build/" (current-machine-type)))))))))
 
-    ;; resources/ 是开发期高频改动的东西:再次 sync 必须把新内容带过去
-    (app-resources-resync-picks-up-edits
+    ;; 依赖源码不再被拷进任何前缀:_vendor 是唯一那一份
+    (no-lib-prefix-is-created
       (parameterize ([cache-root (mktmp)])
         (let* ([b (make-lib-repo "b" '())]
-               [app (make-app (list (cons 'b b)))]
-               [src (join-paths app "resources" "greeting.txt")]
-               [dst (join-paths (project-libdir app) "src" "resources" "app" "greeting.txt")])
-          (write-text src "old")
+               [app (make-app (list (cons 'b b)))])
           (install app '())
-          (assert-string= "old" (read-file dst))
-          ;; mtime 粒度:显式推进一秒,免得同秒改动被判为未变
-          (run-check "sleep" '("1") '())
-          (write-text src "new")
-          (sync-app-prefix! app)
-          (assert-string= "new" (read-file dst)))))
+          (assert-false (file-directory? (join-paths app "lib")))
+          (assert-true (file-exists? (join-paths (vendor-dir app 'b) "b.ss"))))))
 
     ;; ── chandler 运行时门(designs/12 §5):不是依赖,实体取自全局前缀 ──
     ;; 造一个假前缀:.chandler/chandler/manifest.ss(版本)+ src/chandler/*.ss +
@@ -127,14 +126,16 @@
             (lambda ()
               (assert-equal 0 (install app '()))
               ;; runtime 子集:源码进 vendor/ 与 lib/src,对象进 lib/<mt>
-              (assert-true (file-exists? (join-paths app "vendor" "chandler" "chandler" "runtime-paths.ss")))
-              (assert-true (file-exists? (join-paths app "lib" "src" "chandler" "runtime-paths.ss")))
-              (assert-true (file-exists? (join-paths app "lib" (current-machine-type) "chandler" "runtime-paths.so")))
-              (assert-true (file-exists? (join-paths app "lib" "src" "chandler" "base.ss")))
+              ;; C0:源码就地在 _vendor/chandler/chandler/,对象摆进它自己的 _build/<mt>/
+              (assert-true (file-exists? (join-paths app "_vendor" "chandler" "chandler" "runtime-paths.ss")))
+              (assert-true (file-exists? (join-paths app "_vendor" "chandler" "chandler" "base.ss")))
+              (assert-true (file-exists? (join-paths app "_vendor" "chandler" "_build"
+                                                    (current-machine-type) "chandler" "runtime-paths.so")))
               ;; dev-only 的一律不来(工具不该进应用的库搜索路径)
-              (assert-false (file-exists? (join-paths app "lib" "src" "chandler" "pack.ss")))
-              (assert-false (file-exists? (join-paths app "lib" (current-machine-type) "chandler" "pack.so")))
-              (assert-false (file-directory? (join-paths app "lib" "src" "chandler" "cli"))))))))
+              (assert-false (file-exists? (join-paths app "_vendor" "chandler" "chandler" "pack.ss")))
+              (assert-false (file-exists? (join-paths app "_vendor" "chandler" "_build"
+                                                    (current-machine-type) "chandler" "pack.so")))
+              (assert-false (file-directory? (join-paths app "_vendor" "chandler" "chandler" "cli"))))))))
 
     ;; 装的比区间旧 → 当场报错(expected vs actual),不静默用旧的
     (chandler-gate-rejects-too-old-prefix
@@ -160,7 +161,7 @@
             (lambda ()
               (install app '())
               (install app '())
-              (assert-true (file-exists? (join-paths app "vendor" "chandler" "chandler" "runtime-paths.ss"))))))))
+              (assert-true (file-exists? (join-paths app "_vendor" "chandler" "chandler" "runtime-paths.ss"))))))))
 
     (dirty-refuse
       (parameterize ([cache-root (mktmp)])
@@ -176,8 +177,8 @@
         (let* ([b (make-lib-repo "b" '())]
                [app (make-app (list (cons 'b b)))])
           (install app '())
-          ;; vendor/ 下塞孤儿目录 → 下次 install 清理
-          (let ([orphan (join-paths app "vendor/ghost")])
+          ;; _vendor/ 下塞孤儿目录 → 下次 install 清理
+          (let ([orphan (join-paths app "_vendor/ghost")])
             (run-check "mkdir" (list "-p" orphan) '())
             (write-file (string-append orphan "/x") "junk")
             (install app '())
@@ -188,7 +189,7 @@
     ;; 统一加载降级为兜底 → native-load-paths 只报「无生成 loader」的第三方库。
     (native-fallback-skips-self-loading
       (let* ([root (mktmp)]
-             [obj (string-append root "/lib/" (current-machine-type))])
+             [obj (string-append root "/_build/" (current-machine-type))])
         ;; a:bake 构建,带生成 loader → 自加载,不应预加载
         (write-text (string-append obj "/a/native-loader.so") "LOADER")
         (write-text (string-append obj "/a/native/a.so") "SO")
@@ -209,7 +210,7 @@
              [prefix (mktmp)]
              [pobj (join-paths prefix (current-machine-type))]
              [old (getenv "CHANDLER_PREFIX")])
-        (write-text (join-paths root "lib" (current-machine-type) "b" "native" "b.so") "SO")
+        (write-text (join-paths root "_build" (current-machine-type) "b" "native" "b.so") "SO")
         (write-text (join-paths pobj "g" "native" "g.so") "SO")
         (write-text (join-paths pobj "h" "native-loader.so") "LOADER")
         (write-text (join-paths pobj "h" "native" "h.so") "SO")
