@@ -89,7 +89,7 @@
                              "--script" script))])
               (assert-string= "#t" (trim (proc-result-out r))))))))
 
-    ;; 项目自身的 resources/ 也进前缀:lib/share/<name>/resources/ —— 部署态与
+    ;; 项目自身的 resources/ 也进前缀:lib/src/resources/<name>/ —— 部署态与
     ;; pack 里的 share/<app>/resources/ 同一形状,故应用代码只有一种拼法。
     (app-resources-land-in-project-prefix
       (parameterize ([cache-root (mktmp)])
@@ -98,7 +98,7 @@
           (write-text (join-paths app "resources" "greeting.txt") "hello")
           (install app '())
           (assert-string= "hello"
-            (read-file (join-paths (project-libdir app) "share" "app" "resources" "greeting.txt"))))))
+            (read-file (join-paths (project-libdir app) "src" "resources" "app" "greeting.txt"))))))
 
     ;; resources/ 是开发期高频改动的东西:再次 sync 必须把新内容带过去
     (app-resources-resync-picks-up-edits
@@ -106,7 +106,7 @@
         (let* ([b (make-lib-repo "b" '())]
                [app (make-app (list (cons 'b b)))]
                [src (join-paths app "resources" "greeting.txt")]
-               [dst (join-paths (project-libdir app) "share" "app" "resources" "greeting.txt")])
+               [dst (join-paths (project-libdir app) "src" "resources" "app" "greeting.txt")])
           (write-text src "old")
           (install app '())
           (assert-string= "old" (read-file dst))

@@ -48,7 +48,7 @@ chandler 成为安装/卸载的**唯一执行者**;bake 退化为**纯编译引�
 | **native 构建** | bake | bake(**不变**) | recipe `native-task` |
 | **编译产物布局 `lib/<mt>/`** | bake(install-task) | **chandler** | §4 |
 | **native 产物布局** | bake(install-task) | **chandler** | §4 |
-| **resources 布局 `lib/share/`** | chandler(已拥有) | chandler(不变) | §3 |
+| **resources 布局** `lib/share/` → **`lib/src/resources/`**(2026-07-24 C4) | chandler(已拥有) | chandler(不变) | §3 |
 | 全局安装注册表 | chandler(已拥有) | chandler(不变) | [05](05-install-registry.md) |
 | **卸载** | bake(uninstall-task) | **chandler** | §5 |
 | pack 组装 | chandler(已拥有) | chandler(简化,§7) | [09](09-pack.md) |
@@ -263,7 +263,7 @@ Metis 分析(见 `.sisyphus/analysis/`)的结论一致:
 ### 6.3 install 接管对 setup 文件的影响:零(**已作废**:setup 文件本身已删除)
 
 `write-setup-file` 的逻辑当时完全不变——它挂的是 `lib/src::lib/<mt>` 对,而本设计**不改 `lib/` 的布局结构**。
-2026-07-23 起该函数已删除,`lib/` 反而多了两样东西使它成为一个**完整前缀**:`share/<name>/resources/`
+2026-07-23 起该函数已删除,`lib/` 反而多了两样东西使它成为一个**完整前缀**:`src/resources/<name>/`(2026-07-24 C4 起;原为 `share/<name>/resources/`)
 (项目自己的资源同步过来)与 `.chandler/<name>/manifest.ss`(清单快照,应用名由此可辨)。
 
 ## 7. pack 的简化

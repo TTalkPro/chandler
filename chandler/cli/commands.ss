@@ -177,16 +177,13 @@
         (printf "installed ~a ~a + dependencies to ~a~%" name version libdir)
         0)))
 
-  ;; 将 lib/{src,<mt>,share}/** → <global>/(合并,不覆盖同名)
+  ;; 将 lib/{src,<mt>}/** → <global>/(合并,不覆盖同名)
+  ;; 资源自 C4 起住在 src/resources/<ns>/,随 src/ 这一棵一起过去 —— 不再有第三棵。
   (define (merge-lib-to-global! root libdir)
     (let* ([mt (current-machine-type)]
            [libdir-proj (project-libdir root)])
-      ;; src/
       (merge-tree! (join-paths libdir-proj "src") (join-paths libdir "src"))
-      ;; <mt>/
-      (merge-tree! (join-paths libdir-proj mt) (join-paths libdir mt))
-      ;; share/(依赖资源)
-      (merge-tree! (join-paths libdir-proj "share") (join-paths libdir "share"))))
+      (merge-tree! (join-paths libdir-proj mt) (join-paths libdir mt))))
 
   (define (merge-tree! src-dir dst-dir)
     (when (file-directory? src-dir)
@@ -211,7 +208,7 @@
                    [rel-path (cdr entry)]
                    [src-dir (join-paths root rel-path)]
                    [libpath (string-join (map symbol->string libref) "/")]
-                   [dst-dir (join-paths libdir "share" libpath "resources")])
+                   [dst-dir (prefix-resource-dir libdir libpath)])
               (when (file-directory? src-dir)
                 (ensure-dir dst-dir)
                 (let ([pre (string-append src-dir "/")])
@@ -398,7 +395,7 @@
                         (list (cons 'env (app-root-env root)))))))
 
   ;; APP_ROOT = 项目库前缀 <root>/lib —— 与全局前缀、解开的 pack 同构(designs/09、11)。
-  ;; 应用读 $APP_ROOT/share/<app>/resources/,bake 生成的 native-loader 读
+  ;; 应用读 $APP_ROOT/src/resources/<app>/,生成的 native-loader 读
   ;; $APP_ROOT/<mt>/<lib>/native/ —— 三态一种拼法,故这里只交接「前缀在哪」。
   ;; 环境里已有值则不覆盖:外层(pack 启动器 / 用户显式设)先到且权威。
   ;; 绝对化:APP_ROOT 要交给子进程,相对路径一旦对方换 cwd 就废

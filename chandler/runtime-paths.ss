@@ -36,12 +36,12 @@
       [(string-contains? seg "/")
        (error 'runtime-paths "resource segment with path separator rejected" seg)]))
 
-  ;; 应用名 —— 部署态资源落在 <app-root>/share/<app>/resources/(P1:与依赖资源
-  ;; share/<libpath>/resources/ 及全局安装前缀逐层同构),故必须回答「我是谁」。三级:
+  ;; 应用名 —— 资源落在 <app-root>/src/resources/<app>/(C4:与依赖资源
+  ;; src/resources/<libpath>/ 及全局安装前缀逐层同构),故必须回答「我是谁」。三级:
   ;;   ① APP_NAME 显式(共享前缀里装了多个应用时,启动器传);
   ;;   ② <app-root>/.chandler/ 下的唯一条目 —— pack 恒只写一个(chandler pack 的
   ;;      write-app-manifest!),故包内不必再加第二个 env,APP_ROOT 仍是唯一必需变量;
-  ;;   ③ 取不到 → #f,只走源码态的 <app-root>/resources/。
+  ;;   ③ 取不到 → #f(认不出前缀属于谁,不猜)。
   (define (app-name)
     (or (getenv* "APP_NAME")
         (sole-chandler-entry (app-root))))
@@ -53,9 +53,10 @@
                              (dir-entries d))])
              (and (pair? es) (null? (cdr es)) (car es))))))
 
-  ;; 一种拼法:<prefix>/share/<app>/resources/…。APP_ROOT 恒指向一个**库前缀**,
-  ;; 三态同构(全局装 ~/.local/share/chez · 项目自己的 lib/ · 解开的 pack),故这里
-  ;; 不分支、也没有第二条候选;项目源码里的 resources/ 由 chandler 铺进 lib/share/。
+  ;; 一种拼法:<prefix>/src/resources/<app>/…(落点定义见 (chandler layout) 的
+  ;; prefix-resource-dir)。APP_ROOT 恒指向一个**库前缀**,三态同构(全局装
+  ;; ~/.local/share/chez · 项目自己的 lib/ · 解开的 pack),故这里不分支、也没有
+  ;; 第二条候选;项目源码里的 resources/ 由 chandler 铺进 lib/src/resources/<name>/。
   ;; 严格与可选查找共用路径构造,只有缺失处理不同。
   (define (build-app-resource-path segs)
     (for-each validate-resource-segment segs)
@@ -66,7 +67,7 @@
                  "cannot tell which app this prefix belongs to: no APP_NAME, and "
                  (join-paths (app-root) ".chandler")
                  " does not hold exactly one entry (run via `chandler run` or a pack launcher)")))
-      (apply join-paths (append (list (app-root) "share" app "resources") segs))))
+      (apply join-paths (cons (prefix-resource-dir (app-root) app) segs))))
 
   (define (app-resource-path . segs)
     (let ([path (build-app-resource-path segs)])
@@ -81,7 +82,7 @@
     (let ([app (app-name)])
       (and app
            (let ([path (apply join-paths
-                              (append (list (app-root) "share" app "resources") segs))])
+                              (cons (prefix-resource-dir (app-root) app) segs))])
              (and (file-exists? path) path)))))
 
   ;; ══════════════════════════════════════════════════════════════════
@@ -99,7 +100,7 @@
         obj-path
         (prefix-from-object (parent-dir obj-path) (- n 1))))
 
-  ;; 主路径:object filename → prefix → share/<libpath>/resources/<segs>
+  ;; 主路径:object filename → prefix → src/resources/<libpath>/<segs>
   ;; library-object-filename 对未加载库抛异常 —— ignore-errors 捕获后走 source fallback
   (define (lib-resource-via-object libref segs)
     (let ([obj (ignore-errors (library-object-filename libref))])
@@ -107,7 +108,7 @@
            (let* ([n (+ (length libref) 1)]              ; N 段 libref + 1 段 <mt>
                   [prefix (prefix-from-object obj n)]
                   [libpath (libref->path libref)]
-                  [base (apply join-paths (list prefix "share" libpath "resources"))]
+                  [base (prefix-resource-dir prefix libpath)]
                   [path (apply join-paths (cons base segs))])
              (and (file-exists? path) path)))))
 
@@ -122,8 +123,8 @@
                    [src-dir (if (pair? entry) (car entry) entry)])
               (let ([src-file (join-paths src-dir (string-append libpath ".ss"))])
                 (if (file-exists? src-file)
-                    (let* ([prefix (parent-dir src-dir)]
-                           [base (apply join-paths (list prefix "share" libpath "resources"))]
+                    ;; src-dir 就是 <prefix>/src,资源正在它下面 —— 不必再回到 prefix
+                    (let* ([base (src-resource-dir src-dir libpath)]
                            [path (apply join-paths (cons base segs))])
                       (or (and (file-exists? path) path)
                           (loop (cdr entries))))

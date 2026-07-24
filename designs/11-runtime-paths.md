@@ -192,6 +192,37 @@ fallback 只解决 dev source-only 与 built-in/#f 的可诊断性,不改变主�
 | `<prefix>/src/<lib>/resources/` | 与 source search tree 混合,source-only 的偶然可见继续污染契约 |
 | `<prefix>/share/<lib>/resources/` | 一份跨 mt 共享,与 FHS 风格 data layer 对齐,library namespace 明确 |
 
+> **⚠ 本节结论已于 2026-07-24 反转(TASK.md C4/C5)。** 资源落点改为
+> **`<prefix>/src/resources/<namespace>/`**,`share/` 这一层取消:
+>
+> ```text
+> <prefix>/
+> ├─ src/                                  ABI-independent:源码 + 资源
+> │  ├─ mylib.ss
+> │  ├─ mylib/sub.ss
+> │  └─ resources/                         ← 保留目录,其内按 namespace 分
+> │     ├─ myapp/hello.txt                     app 数据
+> │     └─ mylib/sub/schema.json               dep lib 数据
+> └─ <mt>/                                 ABI-bound:编译对象 + native
+>    ├─ mylib.so
+>    └─ mylib/sub.so
+> ```
+>
+> **上表第 2 行的否决不适用于新方案**:被否的 `src/<lib>/resources/` 是把资源散进
+> **每个库自己的源码目录**、与库搜索树交织;新方案是 `src/` 下**一个保留目录**
+> `resources/`,资源与库源码永不交错。第 1 行(不进 `<mt>/`)的理由则**依然成立**
+> 并被新方案满足 —— 资源仍在与 ABI 无关的那一层。
+>
+> **换来的**:一个前缀只剩两层(`src/` 与 `<mt>/`),而不是三层。资源与源码同属
+> 「跨 mt 共享、随源码走」的一档,原先拆成两层没有换来任何区分度,却让
+> install / pack / 全局 install / 资源定位四处各拼一遍路径。落点自此收敛为
+> `(chandler layout)` 的 `prefix-resource-dir` 一处定义。
+>
+> **代价(记录在案)**:`resources` 这个名字在源码根被占用 —— 一个真名为
+> `(resources …)` 的库会与它撞。
+>
+> 本节下文出现的 `share/<libpath>/resources/` 一律按 `src/resources/<libpath>/` 阅读。
+
 bake install 在 M1 根据声明,把 lib source directory 下的资源递归复制到 `<prefix>/share/<libpath>/resources/`,并把文件记入现有 `.bake-install/<lib>.files`,使 uninstall 精确删除。对象侧 `_build/<mt>/` 的规则不变。
 
 pack 同时保留两套 namespace:

@@ -13,13 +13,13 @@
 ;;;     bin/<mt>/skiff|scheme        运行时可执行文件
 ;;;     boot/<mt>/*.boot             boot
 ;;;     <mt>/                        对象根 = 应用 _build/<mt>/ + 依赖 lib/<mt>/
-;;;     share/<app>/resources/       应用数据,原样(目录名约定死,不可配置)
-;;;     share/<dep-libpath>/resources/  依赖库资源(designs/11 §5)
+;;;     src/resources/<app>/         应用数据,原样(目录名约定死,不可配置)
+;;;     src/resources/<dep-libpath>/ 依赖库资源(designs/11 §5;落点见 C4)
 ;;;     .chandler/<app>/manifest.ss  应用清单快照(与全局 install 同构)
 ;;;     pack.manifest
 ;;;
-;;; 布局与**全局安装前缀** `~/.local/share/chez/` 逐层同构(P1):`<mt>/` 对象根、
-;;; `share/<name>/resources/` 资源、`.chandler/<name>/manifest.ss` 清单 —— 一个包解开
+;;; 布局与**全局安装前缀** `~/.local/share/chez/` 逐层同构(P1/C4):`<mt>/` 对象根、
+;;; `src/resources/<name>/` 资源、`.chandler/<name>/manifest.ss` 清单 —— 一个包解开
 ;;; 就是一个自带运行时的安装前缀,消费方(应用代码、native loader、chandler 自己)
 ;;; 四态用同一套路径规则,不需要「pack 专用」的第二套。
 ;;;
@@ -222,20 +222,23 @@
                 (files-under dir)))))
         locked)))
 
-  ;; 应用资源:源码态的 <project>/resources/ 原样搬进 <pack>/share/<app>/resources/。
-  ;; 源目录名**约定死**,不设子句 —— 数据不带 ABI,故落点在 <mt> 层之上(同一份被该
-  ;; 应用的所有平台包共用;放进 <mt>/ 反而会进库搜索根)。
+  ;; 应用资源:源码态的 <project>/resources/ 原样搬进 <pack>/src/resources/<app>/。
+  ;; 源目录名**约定死**,不设子句 —— 数据不带 ABI,故落点在 src/ 层(同一份被该应用的
+  ;; 所有平台包共用;放进 <mt>/ 会随 ABI 重复,且那是对象根)。
   ;;
-  ;; 落点带 <app> 一层(P1):与依赖资源 share/<dep-libpath>/resources/ 同构,也与
-  ;; 全局安装前缀同构 —— 前缀是**共享**的,一个扁平 share/resources/ 会让两个应用撞车。
+  ;; 落点带 <app> 一层:与依赖资源 src/resources/<dep-libpath>/ 同构,也与全局安装
+  ;; 前缀同构 —— 前缀是**共享**的,一个扁平 resources/ 会让两个应用撞车。
   ;; 消费侧 (chandler runtime-paths) 的 app-resource-path 按同一约定解析。
+  ;;
+  ;; 注:无源码分发包因此也带一个 `src/` 目录,里面**只有资源、没有 .ss** ——
+  ;; 那正是三态同构的代价与收益:APP_ROOT 下只有一种拼法,loader 与资源 API 都不分支。
   (define (copy-resources! project root app)
     (let ([src (join-paths project "resources")])
       (and (file-directory? src)
            (let ([n 0])
              (for-each
                (lambda (abs)
-                 (let ([dst (join-paths root "share" app "resources"
+                 (let ([dst (join-paths (prefix-resource-dir root app)
                                         (strip-prefix abs (string-append src "/")))])
                    (ensure-parent dst)
                    (copy-file abs dst)
@@ -260,11 +263,11 @@
               "(manifest (format 1) (name \"" app "\") (version \"" version "\")\n"
               "  (app (entry " (datum->str entry) ") (main " (symbol->string main-proc) ")))\n")))))
 
-  ;; M2: share/ — 依赖库的资源(ABI-independent,designs/11 §5)
-  ;; 从项目安装前缀 lib/share/ 复制到 pack 的 share/,不套 .so filter。
+  ;; M2: 依赖库的资源(ABI-independent,designs/11 §5;落点见 C4)
+  ;; 从项目安装前缀 lib/src/resources/ 复制到 pack 的 src/resources/,不套 .so filter。
   ;; lock 驱动:只复制 locked-dep-resources 声明的 libref 对应目录。
   (define (copy-share! project root locked)
-    (let ([share-src (join-paths (project-libdir project) "share")])
+    (let ([share-src (join-paths (project-libdir project) "src" resources-dirname)])
       (when (file-directory? share-src)
         (for-each
           (lambda (d)
@@ -278,12 +281,12 @@
 
   (define (copy-share-entry share-src root libref rel-path)
     (let* ([libpath (string-join (map symbol->string libref) "/")]
-           [src-dir (join-paths share-src libpath "resources")])
+           [src-dir (join-paths share-src libpath)])
       (when (file-directory? src-dir)
         (for-each
           (lambda (abs)
             (let* ([rel (strip-prefix abs (string-append src-dir "/"))]
-                   [dst (join-paths root "share" libpath "resources" rel)])
+                   [dst (join-paths (prefix-resource-dir root libpath) rel)])
               (ensure-parent dst)
               (copy-file abs dst)))
           (files-under src-dir)))))
@@ -338,7 +341,7 @@
   ;;
   ;;   **只设一个 env:APP_ROOT** —— 部署根。包内其余一切都在它下面的约定路径上:
   ;;     $APP_ROOT/<mt>/<libpath>/native/       native(库搜索根即对象根)
-  ;;     $APP_ROOT/share/<app>/resources/       应用数据(目录名约定死)
+  ;;     $APP_ROOT/src/resources/<app>/         应用数据(目录名约定死)
   ;;   故不存在 per-library 的 native 变量(旧 BAKE_NATIVE_<LIB> 那族按库名大写造
   ;;   变量名),也不存在单独的 resources 变量 —— 布局钉死之后,唯一无法推导的信息
   ;;   就只剩「这个包被解到哪儿了」。
@@ -838,7 +841,7 @@
         ;; chandler。取的与 deps 阶段铺进 lib/ 的是同一个子集、同一个判据。
         (when (and mf (manifest-chandler mf))
           (copy-chandler-into-pack! objdir (manifest-chandler mf)))
-        ;; 2) share/<app>/resources/(应用数据)+ share/<dep>/resources/(依赖库资源,M2)
+        ;; 2) src/resources/<app>/(应用数据)+ src/resources/<dep>/(依赖库资源,M2)
         ;;    + .chandler/<app>/manifest.ss(清单快照)—— 三者都与全局安装前缀同构
         (copy-resources! project root name)
         (copy-share! project root locked)

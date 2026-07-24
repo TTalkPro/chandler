@@ -25,7 +25,7 @@
         thunk
         (lambda () (putenv "APP_NAME" (or old ""))))))
 
-  ;; 造一个「部署态」根:.chandler/<app>/manifest.ss + share/<app>/resources/
+  ;; 造一个「部署态」根:.chandler/<app>/manifest.ss + src/resources/<app>/
   (define (deploy-app! root app)
     (let ([m (join-paths root ".chandler" app "manifest.ss")])
       (ensure-parent m)
@@ -54,7 +54,7 @@
       (with-temp-app
         (lambda (root)
           (deploy-app! root "myapp")
-          (let ([path (join-paths root "share" "myapp" "resources" "sub" "file.txt")])
+          (let ([path (join-paths root "src" "resources" "myapp" "sub" "file.txt")])
             (ensure-parent path)
             (write-file path "test")
             (assert-string= path (app-resource-path "sub" "file.txt"))))))
@@ -85,17 +85,17 @@
       (with-temp-app
         (lambda (root)
           (deploy-app! root "myapp")
-          (let ([resources (join-paths root "share" "myapp" "resources")])
+          (let ([resources (join-paths root "src" "resources" "myapp")])
             (ensure-dir resources)
             (assert-string= resources (app-resource-path))))))
 
-    ;; ── P1:部署态资源落在 <app-root>/share/<app>/resources/ ──
+    ;; ── C4:部署态资源落在 <app-root>/src/resources/<app>/ ──
     ;; 应用名由 .chandler/ 下的唯一条目认出(pack 恒只写一个),故不必加第二个 env。
-    (app-resource-path-share-app-layout
+    (app-resource-path-src-resources-layout
       (with-temp-app
         (lambda (root)
           (deploy-app! root "myapp")
-          (let ([path (join-paths root "share" "myapp" "resources" "greeting.txt")])
+          (let ([path (join-paths root "src" "resources" "myapp" "greeting.txt")])
             (ensure-parent path)
             (write-file path "hi")
             (assert-string= "myapp" (app-name))
@@ -108,7 +108,7 @@
           (deploy-app! root "other")
           (with-app-name "myapp"
             (lambda ()
-              (let ([path (join-paths root "share" "myapp" "resources" "greeting.txt")])
+              (let ([path (join-paths root "src" "resources" "myapp" "greeting.txt")])
                 (ensure-parent path)
                 (write-file path "hi")
                 (assert-string= "myapp" (app-name))

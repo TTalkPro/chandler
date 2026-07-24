@@ -104,8 +104,8 @@
         (put! (join-paths app "resources" "sub" "nested.txt") "nested")
         (pack-until-runtime app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . petite)))
         (let ([d (pack-out app "myapp" "1.0")])
-          (assert-string= "res-hello" (read-file (join-paths d "share" "myapp" "resources" "greeting.txt")))
-          (assert-true (file-exists? (join-paths d "share" "myapp" "resources" "sub" "nested.txt")))
+          (assert-string= "res-hello" (read-file (join-paths d "src" "resources" "myapp" "greeting.txt")))
+          (assert-true (file-exists? (join-paths d "src" "resources" "myapp" "sub" "nested.txt")))
           ;; 旧的扁平落点已去掉 —— 共享前缀里两个应用会撞车
           (assert-false (file-exists? (join-paths d "resources")))
           ;; 数据不带 ABI → 不该落进 <mt> 层(也就不会进库搜索根)
@@ -117,7 +117,7 @@
         (pack-until-runtime app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . petite)))
         (let ([d (pack-out app "myapp" "1.0")])
           (assert-false (file-exists? (join-paths d "resources")))
-          (assert-false (file-exists? (join-paths d "share" "myapp" "resources"))))))
+          (assert-false (file-exists? (join-paths d "src" "resources" "myapp"))))))
 
     ;; ── .chandler/<app>/manifest.ss:清单快照,与全局 install 落点同构;
     ;; 也是 app-resource-path 认出应用名的依据(包里恒只有一个条目)──

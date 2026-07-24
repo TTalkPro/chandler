@@ -448,9 +448,23 @@ $APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
 | C1 | 统一 `resource-path`:scan-src-sides + prefix-fallback;删旧四 API(`app-resource-path`/`find-app-resource-path`/`lib-resource-path`/`find-lib-resource-path`) | P1 | 🔲 待实现 | `chandler/runtime-paths.ss` |
 | C2 | `native-load-paths` 改扫所有 pair obj 侧(不再只扫 `lib/<mt>`) | P2 | 🔲 待实现 | `chandler/install.ss` |
 | C3 | `.env` 读取模块(`chandler/env.ss`);`run`/`repl`/`env`/`install` 消费 `.env` | P3 | 🔲 待实现 | `chandler/env.ss`(新)、`chandler/cli/commands.ss` |
-| C4 | install 落点:resources → `src/resources/<namespace>/`(替代 `share/<namespace>/resources/`);install = 全局安装(摊平进 `~/.local/share/chez/`) | P5 | 🔲 待实现 | `chandler/install.ss` |
-| C5 | pack 来源改:`_vendor/<dep>/_build/<mt>/` + `_build/<mt>/` + `resources/`;pack 输出 resources 在 `src/resources/<ns>/` | P6 | 🔲 待实现 | `chandler/pack.ss` |
+| C4 | install 落点:resources → `src/resources/<namespace>/`(替代 `share/<namespace>/resources/`) | P5 | ✅ 已完成 | `chandler/layout.ss`、`chandler/install.ss`、`chandler/runtime-paths.ss`、`chandler/cli/commands.ss` |
+| C5 | pack 输出 resources 在 `src/resources/<ns>/`(「pack 来源改 `_vendor/`」那半依赖未采纳的 C0,未做) | P6 | ✅ 已完成 | `chandler/pack.ss` |
 | C6 | 文档 + skiff-demo 迁移 + `chandler init` 模板加 `.env` 骨架 | P7 | 🔲 待实现 | `README.md`、`chandler/cli/commands.ss` |
+
+**C4/C5 实现期决定(2026-07-24)**:
+
+> **前置说明**:`designs/14-unified-resources.md` **不存在**(git 全历史里也没有),C0–C6 的「设计权威」缺失。本次只按用户指定采纳 **C4/C5 中与 C0 无关的那一半** —— 资源落点 `share/<ns>/resources/` → `src/resources/<ns>/`。C5 原文的「pack 来源改 `_vendor/<dep>/_build/<mt>/`」依赖未采纳的 C0(`vendor/`→`_vendor/` + per-dep pairs),未做。
+
+1. **落点收敛到一处定义**:`(chandler layout)` 新增 `prefix-resource-dir` / `src-resource-dir` / `resources-dirname`,install / pack / 全局 install / runtime-paths 四处全部改调它 —— 原先是四处各拼一遍 `"share" ns "resources"`。
+2. **一个前缀自此只有两层**:`src/`(与 ABI 无关 —— 源码 + 资源)与 `<mt>/`(平台绑定 —— 编译对象 + native)。`merge-lib-to-global!` 因此从合并三棵树减为两棵。
+3. **[designs/11 §3](designs/11-runtime-paths.md) 的结论已就地标注反转**,并说明为何该节否决的 `src/<lib>/resources/` 与新方案不是一回事:被否的是「资源散进每个库自己的源码目录、与库搜索树交织」,新方案是「`src/` 下一个保留目录 `resources/`,其内按 namespace 分,资源与库源码永不交错」;而该节第 1 条(不进 `<mt>/`,免得按 mt 重复且误示受 ABI 约束)**依然成立且被满足**。
+4. **代价记录在案**:`resources` 这个名字在源码根被占用 —— 一个真名为 `(resources …)` 的库会与它撞。
+5. **无源码包因此也带一个 `src/` 目录**,里面只有资源、没有 `.ss` —— 那正是三态同构的代价与收益:`APP_ROOT` 下只有一种拼法,loader 与资源 API 都不分支。
+
+**验证**:三运行时 **333/333 全绿**。端到端(**PATH 无 bake**,用一份现装到临时前缀的 chandler + `CHANDLER_PREFIX`,确保读写两侧都是新代码):
+- `chandler deps` → 资源落 `lib/src/resources/resdemo/hello.txt`;`chandler run` 打印 `APP_ROOT=<project>/lib` 并读出内容。
+- `chandler build` → `chandler pack --runtime petite` → 包内 `src/resources/resdemo/hello.txt`;`env -i ./bin/resdemo` clean-env 启动读出内容;**整包 `cp` 到别处仍读得到**(`APP_ROOT` 跟着走);`verify-pack --target` **17 ok / 0 bad / 0 extra**。
 
 **依赖序**:
 - C0–C3 可**先于阶段 B** 落地(不依赖 bake 吸收)——过渡期 bake 子进程仍跑,但 libdirs 已是 per-dep 对、resources 已统一、`.env` 已生效。

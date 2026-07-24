@@ -334,7 +334,7 @@
   ;;
   ;;     $APP_ROOT/<mt>/<libpath>/native/<soname>.<ext>
   ;;
-  ;; 每个前缀的布局都一样 —— <mt>/ 对象根、share/<name>/resources/、
+  ;; 每个前缀的布局都一样 —— <mt>/ 对象根、src/(源码 + resources/<name>/)、
   ;; .chandler/<name>/ —— 不论它是 ~/.local/share/chez(全局安装)、项目自己的
   ;; lib/(`chandler run` 把 APP_ROOT 指向那里),还是解开的分发包(designs/09
   ;; §包布局)。故 loader 不需要按状态分支:一个后缀在三态里都解析得到。

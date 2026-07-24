@@ -7,14 +7,15 @@
 ;;;     lib/src/                        ← 源码(umbrella <name>.ss + <name>/… 各依赖并存)
 ;;;     lib/<mt>/                       ← 平台绑定产物(编译 .so + native/<lib>/…),
 ;;;                                        `chandler build` 后填充
-;;;     lib/share/<libpath>/resources/  ← 资源(依赖声明的 + 本项目自己的 resources/)
+;;;     lib/src/resources/<libpath>/    ← 资源(依赖声明的 + 本项目自己的 resources/;
+;;;                                        C4:并入 src/ 层,原 lib/share/ 取消)
 ;;;     lib/.chandler/<name>/manifest.ss ← 清单快照(应用名由此可辨,见 runtime-paths)
 ;;;   故库搜索挂**一对** (lib/src . lib/<mt>);消费方一条 pair 同时解析源码与对象。
 ;;;   path 依赖不进 vendor/lib,activate/run 时直挂其源目录(live)。
 ;;;
 ;;;   **APP_ROOT 即这个前缀**(2026-07-23):`chandler run`/`repl`/`activate` 把它指向
 ;;;   <project>/lib,pack 启动器指向包根 —— 三态同一形状,应用代码与 bake 生成的
-;;;   native-loader 都只认 `$APP_ROOT/<mt>/…` 与 `$APP_ROOT/share/<app>/resources/`
+;;;   native-loader 都只认 `$APP_ROOT/<mt>/…` 与 `$APP_ROOT/src/resources/<app>/`
 ;;;   一种拼法。生成 chandler-setup.ss 的旧做法已取消:启动统一走 `chandler run`。
 
 (library (chandler install)
@@ -78,9 +79,9 @@
           ;; chandler 的 runtime 子集:源码 → lib/src,**已编译对象** → lib/<mt>
           ;; (前缀里那份是同一个 chez/skiff 编好的,不必也不该在这里重编)
           (when (manifest-chandler mf) (copy-chandler-runtime! root))
-          ;; M1: 复制依赖声明资源到 lib/share/<libpath>/resources/
+          ;; M1: 复制依赖声明资源到 lib/src/resources/<libpath>/
           (install-resources root deps-to-vendor)
-          ;; 3) 把项目自己也铺进这个前缀:resources/ → lib/share/<name>/resources/,
+          ;; 3) 把项目自己也铺进这个前缀:resources/ → lib/src/resources/<name>/,
           ;;    manifest 快照 → lib/.chandler/<name>/ —— lib/ 由此是个**完整前缀**,
           ;;    APP_ROOT 指向它即可,应用四态读同一条路径。
           (sync-app-prefix! root mf)
@@ -189,8 +190,8 @@
                     (files-under subtree))))))
           git-deps))))
 
-  ;; M1: 复制依赖声明资源到 lib/share/<libpath>/resources/(designs/11 §5)
-  ;; 资源是 ABI-independent,落 share/ 层(与 src/ <mt>/ 并列);lock 驱动,不重读 dep manifest。
+  ;; M1: 复制依赖声明资源到 lib/src/resources/<libpath>/(designs/11 §5,落点见 C4)
+  ;; 资源是 ABI-independent,与源码同属 src/ 层;lock 驱动,不重读 dep manifest。
   (define (install-resources root git-deps)
     (for-each
       (lambda (d)
@@ -203,7 +204,7 @@
                          [rel-path (cdr entry)]
                          [src-dir (join-paths vdir rel-path)]
                          [libpath (string-join (map symbol->string libref) "/")]
-                         [dst-base (join-paths (project-libdir root) "share" libpath "resources")])
+                         [dst-base (prefix-resource-dir (project-libdir root) libpath)])
                     (when (file-directory? src-dir)
                       (copy-resource-tree src-dir dst-base))))
                 resources)))))
@@ -437,7 +438,7 @@
   ;; ── 项目自身铺进前缀 lib/(2026-07-23:取代生成 chandler-setup.ss)──
   ;;   lib/ 与 ~/.local/share/chez、解开的 pack 三态同构,APP_ROOT 恒指向这样一个前缀。
   ;;   要做到这点,项目自己的两样东西也得进去:
-  ;;     resources/                  → lib/share/<name>/resources/   应用数据
+  ;;     resources/                  → lib/src/resources/<name>/     应用数据
   ;;     manifest.ss                 → lib/.chandler/<name>/manifest.ss  清单快照
   ;;   后者顺便让 (chandler runtime-paths) 的 app-name 认出「这个前缀属于谁」——
   ;;   依赖不写 .chandler/,故项目自己恒是唯一条目。
@@ -458,7 +459,7 @@
     (let ([src (join-paths root "resources")])
       (when (file-directory? src)
         (let ([pre (string-append src "/")]
-              [dst-base (join-paths (project-libdir root) "share" name "resources")])
+              [dst-base (prefix-resource-dir (project-libdir root) name)])
           (for-each
             (lambda (abs) (copy-if-stale! abs (join-paths dst-base (strip-prefix abs pre))))
             (files-under src))))))
