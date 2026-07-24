@@ -10,14 +10,14 @@
 
   (define (ld name deps natives . scope)
     (make-locked-dep name 'git (string-append "https://x/" (symbol->string name))
-                     'tag "v1.0.0" "abcdef0123456789" "." deps natives
+                     'tag "v1.0.0" "abcdef0123456789" deps natives
                      (if (null? scope) 'runtime (car scope))
                      #f        ; resources:测试套件按需显式提供
                      #f))      ; v2 provenance
 
   (define (ldr name deps natives resources . scope)
     (make-locked-dep name 'git (string-append "https://x/" (symbol->string name))
-                     'tag "v1.0.0" "abcdef0123456789" "." deps natives
+                     'tag "v1.0.0" "abcdef0123456789" deps natives
                      (if (null? scope) 'runtime (car scope))
                      resources
                      #f))      ; v2 provenance
