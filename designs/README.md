@@ -1,58 +1,50 @@
-# Chandler 设计文档索引
+# Chandler v2 设计文档索引
 
-> 本目录补齐 [chez-chandler-git-lib-manager-design.md](../chez-chandler-git-lib-manager-design.md)(下称「总设计」)遗留的各专项设计。总设计定方向与难点,本目录逐项落地。阅读顺序即编号顺序。
+> 本目录是 Chandler v2 的完整设计。v2 是**重大架构升级**,不兼容老版本(layout v1)。阅读顺序:先读 [00](00-design-principles.md)(宪法),再按需读专项。
 
 ## 文档列表
 
-| 文档 | 内容 | 对应总设计难点 |
-|------|------|---------------|
-| [01-cli.md](01-cli.md) | CLI 命令面与工作流 | — |
-| [02-manifest-lock-spec.md](02-manifest-lock-spec.md) | `manifest.ss` / `manifest.lock` 完整规范 | 难点 2、6 |
-| [03-resolution.md](03-resolution.md) | 依赖解析:传递闭包、冲突规则、拓扑序 | 难点 6、7 |
-| [04-fetch-cache.md](04-fetch-cache.md) | git 获取、缓存、离线模式 | — |
-| [05-install-registry.md](05-install-registry.md) | 全局安装/卸载的文件清单机制 | 难点 1(点名的下一步) |
-| [06-runtime-compat.md](06-runtime-compat.md) | **标准 Chez 与 Skiff 双运行时兼容** | — |
-| [07-bake-integration.md](07-bake-integration.md) | **与 bake 的协作接口**(依赖编译闭包/native) | 难点 4、5 |
-| [08-bootstrap-security.md](08-bootstrap-security.md) | 自举、分发与信任模型 | 难点 5、8 |
-| [09-pack.md](09-pack.md) | **`chandler pack`**:无源码分发包(自 bake 移交)。包布局、三条约定、env 去留、boot 模式排单给 bake。 | 难点 4(延伸) |
-| [10-deploy-loader.md](10-deploy-loader.md) | pack 的 deploy loader(bootstrap.ss):runtime-aware 校验 + native 加载 | 难点 4(延伸) |
-| [11-runtime-paths.md](11-runtime-paths.md) | `(chandler runtime-paths)`:应用/库资源定位 API | — |
-| [12-chandler-layering.md](12-chandler-layering.md) | **chandler 分层**:dev-time 工具集 + runtime 公共基础设施(`(chandler base)` umbrella) | — |
-| [13-chandler-owns-install.md](13-chandler-owns-install.md) | **chandler 全面接管安装与卸载**:bake 退化为纯编译引擎,install 不再依赖 bake 在场 | 难点 4(延伸) |
+| 文档 | 内容 | 优先级 |
+|------|------|-------|
+| [00-design-principles.md](00-design-principles.md) | **核心模型 + 5 不变量 + 术语表**(宪法) | 必读 |
+| [01-manifest-lock.md](01-manifest-lock.md) | `manifest.ss` / `manifest.lock` schema + 新 source kind(prebuilt) | 数据 |
+| [02-resolution.md](02-resolution.md) | 依赖解析:BFS 闭包 + 冲突裁决 + 多版本语义 | 数据 |
+| [03-central-repo.md](03-central-repo.md) | 中央仓库布局 + 混合 registry + 卸载/升级 | 数据 |
+| [04-install.md](04-install.md) | install 操作:从 git/prebuilt 到中央仓库 | 分发 |
+| [05-pack.md](05-pack.md) | pack = install --prefix + envelope(payload 字节级统一) | 分发 |
+| [06-prebuilt.md](06-prebuilt.md) | prebuilt 分发:source kind + mt-gate + native 安全 | 分发 |
+| [07-chandler-setup.md](07-chandler-setup.md) | `(chandler setup)` 启动钩子(Bundler 模型) | 运行时 |
+| [08-launchers.md](08-launchers.md) | 启动器生成:dev/install/pack 三态 + bootstrap paradox 解决 | 运行时 |
+| [09-runtime-paths.md](09-runtime-paths.md) | 资源定位 API + native 加载 | 运行时 |
+| [10-dev-mode.md](10-dev-mode.md) | dev 模式:`_vendor/` + `chandler run` + live edit | 辅助 |
+| [11-cli.md](11-cli.md) | CLI 命令面 + 退出码 + 旗标 | 辅助 |
+| [12-security.md](12-security.md) | 安全模型:纯数据 + prebuilt native + 签名 | 辅助 |
 
-## 定位回顾(一句话版)
+## 一句话定位
 
-- **Skiff**(轻舟)= 运行时(Chez + libuv);**Chandler**(船具商)= 包管理器,读 `manifest.ss`,管**依赖的获取与激活**;**bake** = 构建工具,读 `recipe.ss`,管**编译**。
-- Chandler **不绑定 Skiff**:核心只依赖标准 Chez(`(chezscheme)` 可移植子集),Skiff 项目与纯 Chez 项目都能用(见 [06](06-runtime-compat.md))。
-- 依赖 = 整仓 checkout 到项目 `vendor/<name>/`,再经 `bake install` 摊平进 `lib/{src,<mt>}`(src/mt 拆分;见[库布局规范](../chez-skiff-library-layout.md));
-  `(activate)` / `chandler run` 挂 **(源 . 对象) 对** `lib/src::lib/<mt>` 并交接 `APP_ROOT`(= 项目库前缀 `lib/`),native 由 bake 生成的 loader **自加载**,Chandler 仅为无 loader 的第三方库兜底(见 [07 §5b](07-bake-integration.md))。
+- **Skiff**(轻舟)= 运行时(Chez + libuv);**Chandler**(船具商)= 包管理器;**bake** = 编译引擎(被 chandler 内嵌消费)。
+- **git-first + prebuilt 可选**:依赖默认从 git 获取,prebuilt 是加速/闭源/中央分发渠道。
+- **版本化中央仓库**:`~/.local/share/chez/<name>/<version>/{src,<mt>}/`,多版本共存。
+- **`(chandler setup)` 启动钩子**:每个 installed app 在 run.sps 里 import 它,动态读 lock 配置 library-directories(等价 Bundler 的 `require 'bundler/setup'`)。
+- **pack = install --prefix + envelope**:app pack 多 `bin/`/`boot/`/`chandler-runtime/`;lib pack 只有 payload。
+- **5 不变量**:Version 自包含 / Payload 字节级统一 / Registry 混合 / Envelope 仅 app pack / Provenance 记录。
 
-## 与同类工具对比(设计参照系)
+## 与 v1 的差异(决策记录)
 
-| | Chandler | Akku | Raven | rebar3 | cargo |
-|---|---|---|---|---|---|
-| 来源模型 | **git-first**(URL+pin 写在 manifest) | 中心化 curated index | 自建 registry | hex.pm + git | crates.io + git |
-| 依赖落点 | 项目 `vendor/`(整仓)+ `lib/{src,<mt>}`(装好的库前缀) | `.akku/lib`(重写路径) | 全局 | `_build/` | `~/.cargo` + target |
-| 版本模型 | git tag/rev/branch 为主,区间辅助 | SemVer 求解 | 简单版本 | SemVer + lock | SemVer + lock |
-| 全局安装 | **可选**(`--global`,带卸载清单) | 无 | 有 | 无 | `cargo install` |
-| 原生构建 | 显式声明 + `--allow-build` 授权 | 无统一契约 | 无 | port 编译 | `build.rs`(默认信任) |
-| 激活方式 | `(activate)` 一行 / `chandler run` | 环境脚本 | — | rebar shell | — |
+| 维度 | v1 | v2 |
+|------|-----|-----|
+| 中央仓库 | flat `<prefix>/{src,<mt>}/`,单版本 | `<name>/<version>/{src,<mt>}/`,多版本 |
+| 路径组件 | name-only | name+version+mt 三层嵌套 |
+| 启动机制 | 启动器硬编码 prefix | `(chandler setup)` 读 lock 动态构造 |
+| pack 布局 | flat `<pack>/<mt>/`,跟 install 同构 | nested,跟 install **字节级一致** |
+| pack 内部 | 独立 bootstrap.ss | run.sps + `(chandler setup)`(跟 install 同构) |
+| lib pack | 不支持(K7 限制 app only) | 支持(lib pack = payload only) |
+| prebuilt | 不支持 | 支持(`source (prebuilt ...)`,带 mt-gate) |
+| registry | per-prefix 单文件 | per-version `.chandler/registry.ss` + 顶层 derived index |
+| 老版本兼容 | — | **不考虑**(v2 是 breaking change) |
 
-取舍:git-first 免去维护 index,代价是**上游须有 `manifest.ss` 或由消费方在自己 manifest 里补全元数据**(见 [03 §依赖元数据的三级来源](03-resolution.md))。
+详见 [00 §10 决策记录](00-design-principles.md#10-设计决策记录)。
 
-## 实现状态
+## 实现进度
 
-**01–08 全部落地实现**(纯 Chez,113 个测试全绿;见仓库根 [README.md](../README.md)、[TASK.md](../TASK.md))。已实现命令:`init/add/remove/install/update/build/verify/list/tree/run/exec` + `install --global`/`uninstall`/`doctor` + `install-self`/`uninstall-self`。**09(pack)设计完成、待实现** —— pack 自 bake 移交,迁移期 bake 侧冻结待删。
-
-与本目录设计的**已知偏差**(TASK.md 有完整记录):
-
-- **依赖布局改为 Bundler 式**(与 [03](03-resolution.md)/[chandler 总设计](../chez-chandler-git-lib-manager-design.md)早期"整仓 checkout 到 `lib/<name>/`"不同):git 依赖整仓 checkout 到 **`vendor/<name>/`**,再由 **`bake install`** 装进**扁平 `lib/`**(结构同 `~/.local/share/chez/lib`);库搜索只挂 `lib/` 一个目录。install 依赖 bake。启动统一走 **`chandler run`**(2026-07-23 起;早期曾生成 `chandler-setup.ss` 一行激活文件,已取消)。run/env/repl/activate 库搜索规则统一。
-
-
-- **`add`/`remove` 用 datum 级改写**而非 [01](01-cli.md) 倾向的文本级插入——对 `init` 生成的规范清单无损,代价是重排手写格式。
-- **`chandler cache` 子命令未接入 CLI**:[04](04-fetch-cache.md) 的 git 镜像缓存层已实现并在 `install` 路径生效,但 `cache dir/list/clean` 的命令壳待补。
-- 新增两个设计未列的基础库:`(chandler hash)`(纯 Scheme SHA-256,Chez 无内建)与 `(chandler proc)`(子进程封装)。
-
-## 命名约定澄清
-
-库构建描述文件统一为 **`recipe.ss`**(bake 读),依赖清单为 `manifest.ss`(chandler 读)。二者各自独立、互不共享。
+见 [../TASK.md](../TASK.md)。
