@@ -64,20 +64,20 @@ chandler --version
 
 **开发期不必安装**:仓库里直接 `./bin/chandler <命令>`(同样 skiff 优先)。
 
-### 构建与任务(`chandler bake`)
+### 构建与任务(`chandler make`)
 
-bake 的编译引擎已整体吸收进 chandler,原来的独立 `bake` 二进制作废。chandler 自己带一份 `chandler-tasks.ss`(原名 `recipe.ss`),由 `chandler bake` 子命令消费:
+bake 的编译引擎已整体吸收进 chandler,原来的独立 `bake` 二进制作废。chandler 自己带一份 `chandler-tasks.ss`(原名 `recipe.ss`),由 `chandler make` 子命令消费:
 
 ```sh
-chandler bake            # = build,编译 (chandler) 库树为 .so → _build/<mt>/
-chandler bake test       # 跑全测试套件
-chandler bake test-ps    # PowerShell 启动器验收(需 pwsh,缺则跳过)
-chandler bake -T         # 列任务
+chandler make            # = build,编译 (chandler) 库树为 .so → _build/<mt>/
+chandler make test       # 跑全测试套件
+chandler make test-ps    # PowerShell 启动器验收(需 pwsh,缺则跳过)
+chandler make -T         # 列任务
 ```
 
 > **多数项目不需要 `chandler-tasks.ss`**:`chandler build` 直接从 `manifest.ss` 的 `(app (entry …))` 推导要编什么。只有需要自定义任务(如上面的 `test`/`test-ps`)时才写。它是**程序**(加载即求值),与**数据**文件 `manifest.ss` 配对。
 >
-> **安装**由自含的 `bootstrap.ss` 负责(装库树 + 生成 CLI 启动器),不经 `chandler bake`。
+> **安装**由自含的 `bootstrap.ss` 负责(装库树 + 生成 CLI 启动器),不经 `chandler make`。
 
 ## 快速上手
 

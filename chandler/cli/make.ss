@@ -1,12 +1,13 @@
 #!chezscheme
-;;; chandler/cli/bake.ss --- `chandler bake …`:任务运行器的 CLI 面(吸收自 bake)
+;;; chandler/cli/make.ss --- `chandler make …`:任务运行器的 CLI 面(吸收自 bake)
 ;;;
 ;;; 来源:bake/cli.ss(§13 选项解析 / §14 -T、-P / §15 help)+ bake/dispatch.ss(§16)。
-;;; 供「只要构建、不要包管理」的用法:`chandler bake build` ≡ 旧的 `bake build`。
+;;; 供「跑 chandler-tasks.ss 里的任务」的用法。名从 `bake`(bake 全吸收后作废的
+;;; 术语)改来;编译入口是 `chandler build`,本子命令主要跑自定义任务。
 ;;;
 ;;; **自带一套 argv 语法**,不走 `(chandler cli args)` —— bake 的短旗标带值
 ;;; (`-f path` / `-j N`),而 chandler 的解析器把未知短旗标一律当布尔,`-j 4` 会被
-;;; 拆成「布尔 -j」+「位置参数 4」。故 `main` 在解析之前就把 `bake` 之后的 argv
+;;; 拆成「布尔 -j」+「位置参数 4」。故 `main` 在解析之前就把 `make` 之后的 argv
 ;;; **原样**交给这里,子 CLI 自己解析自己的语法。
 ;;;
 ;;; 相对 bake 去掉三项(都已无对应物):
@@ -16,8 +17,8 @@
 ;;;   --name/--lib/--force  是 `bake init` 的选项;脚手架归 `chandler init`,
 ;;;                且 chandler-tasks.ss 自 B6b 起是可选的,再来一套 init 只会制造重复
 
-(library (chandler cli bake)
-  (export bake-main bake-parse-opts bake-opt bake-list-tasks bake-show-prereqs)
+(library (chandler cli make)
+  (export make-main make-parse-opts make-opt make-list-tasks make-show-prereqs)
   (import (chezscheme)
           (chandler base)
           (chandler task-engine)
@@ -27,15 +28,15 @@
           (chandler native-build))
 
   ;; ── 选项:alist,不用全局 set!(bake 那份是 *opts-* 一堆全局变量)──
-  (define (bake-opt o k) (alist-ref o k))
+  (define (make-opt o k) (alist-ref o k))
 
   (define (usage-error fmt . args)
-    (apply eprintf (string-append "chandler bake: error: " fmt "\n") args)
-    (eprintf "Try `chandler bake --help` for usage.~%")
+    (apply eprintf (string-append "chandler make: error: " fmt "\n") args)
+    (eprintf "Try `chandler make --help` for usage.~%")
     (*exit-code* exit-usage-error)
     (raise 'bake-error))
 
-  (define (bake-parse-opts argv)
+  (define (make-parse-opts argv)
     (let loop ([args argv] [o '()] [tasks '()])
       (define (put k v rest) (loop rest (cons (cons k v) o) tasks))
       (define (need k args what)
@@ -78,8 +79,8 @@
       [(symbol? a) #t]
       [else #f]))
 
-  (define (bake-list-tasks)
-    ;; 输出形如 "chandler bake <name>    # <描述>",默认任务带 (default) 标记。
+  (define (make-list-tasks)
+    ;; 输出形如 "chandler make <name>    # <描述>",默认任务带 (default) 标记。
     ;; 无描述的任务只在 -A 下露面 —— 一次 library-task 会派生几十个 file 目标,
     ;; 默认全列出来就没法看了。**默认任务恒列出**(bake 那份不列:`library-task`
     ;; 注册的 'build 没有描述,于是 `-T` 偏偏漏掉最该看见的那一个)。
@@ -93,7 +94,7 @@
       (for-each
         (lambda (n)
           (let ([t (hashtable-ref task-registry n #f)])
-            (display "chandler bake ")
+            (display "chandler make ")
             (display (task-name t))
             (when (equal? (default-task-name) (task-name t)) (display " (default)"))
             (display "    # ")
@@ -102,7 +103,7 @@
         shown)))
 
   ;; ── §14 -P:任务图诊断(逐任务打传递前置树)──
-  (define (bake-show-prereqs)
+  (define (make-show-prereqs)
     (define (children name)
       (let ([t (hashtable-ref task-registry name #f)])
         (if t (task-prereqs t) '())))          ; 未物化的名字作叶子打印
@@ -117,8 +118,8 @@
               (list-sort sort-task-names (vector->list (hashtable-keys task-registry)))))
 
   (define (print-help)
-    (printf "chandler bake -- run tasks from a chandler-tasks.ss (the task runner absorbed from bake)~%~%")
-    (printf "Usage: chandler bake [options] [task ...]~%~%")
+    (printf "chandler make -- run tasks from a chandler-tasks.ss (the task runner absorbed from bake)~%~%")
+    (printf "Usage: chandler make [options] [task ...]~%~%")
     (printf "Options:~%")
     (printf "  -f, --file PATH     tasks file to load (default: ./chandler-tasks.ss)~%")
     (printf "  -T, --tasks         list tasks that carry a description~%")
@@ -134,12 +135,12 @@
     (printf "the build from manifest.ss. Write one only for custom tasks (test, release).~%"))
 
   ;; ── §16 dispatch ──
-  (define (bake-main argv)
+  (define (make-main argv)
     (guard (e [(eq? e 'bake-error) (*exit-code*)])
-      (let ([o (bake-parse-opts argv)])
+      (let ([o (make-parse-opts argv)])
         (cond
-          [(bake-opt o 'help) (print-help) exit-ok]
-          [(bake-opt o 'version) (printf "chandler ~a~%" chandler-version) exit-ok]
+          [(make-opt o 'help) (print-help) exit-ok]
+          [(make-opt o 'version) (printf "chandler ~a~%" chandler-version) exit-ok]
           [else (run-tasks o)]))))
 
   (define (run-tasks o)
@@ -147,26 +148,26 @@
     ;; (define-lib-roots …) / (native-task …) 要求求值前环境里就有它们。
     (install-compile-hooks!)
     (install-native-hooks!)
-    (*dry-run*   (and (bake-opt o 'dry) #t))
-    (*quiet*     (and (bake-opt o 'quiet) #t))
-    (*verbose*   (not (bake-opt o 'quiet)))
-    (*trace*     (and (bake-opt o 'trace) #t))
-    (*all-tasks* (and (bake-opt o 'all) #t))
-    (let ([recipe (or (bake-opt o 'recipe) default-tasks-file)])
+    (*dry-run*   (and (make-opt o 'dry) #t))
+    (*quiet*     (and (make-opt o 'quiet) #t))
+    (*verbose*   (not (make-opt o 'quiet)))
+    (*trace*     (and (make-opt o 'trace) #t))
+    (*all-tasks* (and (make-opt o 'all) #t))
+    (let ([recipe (or (make-opt o 'recipe) default-tasks-file)])
       (unless (file-exists? recipe)
         (bail-config "tasks file not found: ~a (use -f to specify)" recipe))
       (load-recipe recipe)
       (load-fp-manifest!)
       (cond
-        [(bake-opt o 'clean)   (cmd-clean) (*exit-code*)]
-        [(bake-opt o 'list)    (bake-list-tasks) exit-ok]
-        [(bake-opt o 'prereqs) (bake-show-prereqs) exit-ok]
+        [(make-opt o 'clean)   (cmd-clean) (*exit-code*)]
+        [(make-opt o 'list)    (make-list-tasks) exit-ok]
+        [(make-opt o 'prereqs) (make-show-prereqs) exit-ok]
         [else
          ;; -j N:先用 N 个子进程把需要的 .so 编出来(designs/11 波前),之后
          ;; 进程内的执行器只管链接 + 跑 phony(编译产物已新鲜)。
-         (when (and (bake-opt o 'jobs) (not (*dry-run*)))
-           (parallel-build! (max 1 (or (string->number (bake-opt o 'jobs)) 1))))
-         (for-each (lambda (t) (invoke t '())) (select-targets (bake-opt o 'tasks)))
+         (when (and (make-opt o 'jobs) (not (*dry-run*)))
+           (parallel-build! (max 1 (or (string->number (make-opt o 'jobs)) 1))))
+         (for-each (lambda (t) (invoke t '())) (select-targets (make-opt o 'tasks)))
          ;; 指纹只在**全程成功且非 dry-run** 后落盘(designs/07 §Manifest)
          (unless (*dry-run*) (write-fp-manifest!))
          exit-ok])))

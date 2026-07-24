@@ -29,7 +29,7 @@
          (prefix (chandler test import-graph) import-graph:)
          (prefix (chandler test compile) compile:)
          (prefix (chandler test native-build) native-build:)
-         (prefix (chandler test cli-bake) cli-bake:)
+         (prefix (chandler test cli-make) cli-make:)
          (prefix (chandler test env) env:))
 
 (define all-suites
@@ -58,7 +58,7 @@
     (cons 'import-graph import-graph:suite)
     (cons 'compile compile:suite)
     (cons 'native-build native-build:suite)
-    (cons 'cli-bake cli-bake:suite)
+    (cons 'cli-make cli-make:suite)
     (cons 'env env:suite)))
 
 (exit (if (run-suites all-suites) 0 1))

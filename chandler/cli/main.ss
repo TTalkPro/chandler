@@ -7,7 +7,7 @@
           (chandler util)
           (chandler runtime-detector)
           (chandler cli args)
-          (chandler cli bake)
+          (chandler cli make)
           (chandler cli commands))
 
   (define chandler-cli-version chandler-version)
@@ -19,11 +19,11 @@
         (with-exception-handler
           (lambda (e) (return (report-error e)))
           (lambda ()
-            ;; `chandler bake …` 自带一套 argv 语法(短旗标带值:-f path / -j N),
+            ;; `chandler make …` 自带一套 argv 语法(短旗标带值:-f path / -j N),
             ;; 与 chandler 的解析器不兼容(它把未知短旗标当布尔,-j 4 会拆成
             ;; 「布尔 -j」+「位置参数 4」)。故在解析**之前**原样转交子 CLI。
-            (if (and (pair? argv) (string=? (car argv) "bake"))
-                (bake-main (cdr argv))
+            (if (and (pair? argv) (string=? (car argv) "make"))
+                (make-main (cdr argv))
                 (let-values ([(sub pos flags rest) (parse-args argv)])
                   (let ([root (or (flag flags 'C) (current-directory))])
                     (dispatch sub pos flags rest root)))))))))
@@ -87,7 +87,7 @@
     (printf " (chez ~a)~%" (chez-version-string)))
 
   (define (list-tasks)
-    (printf "commands: init add remove install update build bake pack verify verify-pack list tree run exec repl version~%"))
+    (printf "commands: init add remove install update build make pack verify verify-pack list tree run exec repl version~%"))
 
   (define (usage)
     (printf "chandler -- git-first library manager for Chez Scheme (Skiff ecosystem)~%~%")
@@ -101,8 +101,8 @@
     (printf "  install [--user|--system]    install lib + deps globally (--user default:~%")
     (printf "                               ~~/.local/share/chez; --system: /usr/local/share/chez)~%")
     (printf "  build [--allow-build[=a,b]]  compile deps + project to lib/<mt>/~%")
-    (printf "  bake [-f R] [-T|-P|-n|-c]    run tasks from chandler-tasks.ss (task runner;~%")
-    (printf "                               `chandler bake --help` for its own options)~%")
+    (printf "  make [-f R] [-T|-P|-n|-c]    run tasks from chandler-tasks.ss (task runner;~%")
+    (printf "                               `chandler make --help` for its own options)~%")
     (printf "  run --script <s.ss> [args]   run a script with the dependency environment~%")
     (printf "                               (loads <root>/.env; --env-file <p> overrides it)~%")
     (printf "  env                          export CHEZSCHEMELIBDIRS + APP_ROOT + .env (eval it)~%")
