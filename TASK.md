@@ -497,7 +497,7 @@ $APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
 
 **验证**:三运行时 **337/337**(新增 1 用例:全局前缀里无 loader 的 native 被拾起、带 loader 的仍跳过)。
 
-**D3(`chandler init` 模板)—— 核对后确认无需改动**:`cmd-init` 从来只写 `manifest.ss` + `.gitignore` + 库骨架,**本就不生成 `recipe.ss`**;B6b 让 recipe 变可选之后,这正是想要的形态。`.gitignore` 里的 `.chandler-build.ss` / `.chandler-install.ss` 是已作废的生成物,**保留**(老项目已有这两行,删掉只会变噪声;新项目多两行无害),已在原处注明。
+**D3(`chandler init` 模板)—— ~~核对后确认无需改动~~ 已于 2026-07-24 反转(见上「`chandler init` 生成 `chandler-tasks.ss`」)**:`cmd-init` 原先只写 `manifest.ss` + `.gitignore` + 库骨架;现改为**同时**生成 `chandler-tasks.ss` 起手模板。`.gitignore` 里的 `.chandler-build.ss` / `.chandler-install.ss` 是已作废的生成物,**保留**(老项目已有这两行,删掉只会变噪声;新项目多两行无害),已在原处注明。
 
 **C0 进度(2026-07-24,未完)**:
 
@@ -548,6 +548,8 @@ $APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
 **验证过程揪出一条关键不变量(非代码 bug,是使用约束)**:进程内编译时,**做构建的 chandler 必须从 `CHANDLER_HOME` 加载**——否则它已加载的 `(chandler runtime-paths)` 实例与 `CHANDLER_HOME` 磁盘对象 UID 不符,app 链到前者,打出的包一启动就报 `different compilation instance`。installed 启动器与 `dist/bin/chandler` 天然满足(CHANDLER_HOME = 它加载 chandler 的地方);`./bin/chandler`(平铺仓库)**不满足**,故只用于跑 CLI / 开发 chandler 自身,构建依赖 chandler 的 app 要用装好的 chandler 或 `dist/bin/chandler`(已在 `bin/chandler` 头注写明)。
 
 **验证**:三运行时 **360/360**。端到端(`dist/bin/chandler`,即"运行 chandler = CHANDLER_HOME"的正确流,PATH 无 bake):`bootstrap --dev` 造 `dist/chez` → 一个声明 `(chandler …)` 门 + 用 `resource-path` 的 app:`deps`(自引用从 `CHANDLER_HOME` copy chandler 进 `_vendor/chandler`)→ `build` → 只挂对象侧加载成功 → `pack`(chandler 来自 `_vendor`)→ `env -i` clean-env 起进程读出资源、整包搬走仍读到、`verify-pack` 17 ok/0 bad/0 extra。skiff-demo 全链路同样跑通:clean-env 服务 `/` `/hello` 均 200、`verify-pack` 131 ok/0 bad/0 extra。
+
+**`chandler init` 生成 `chandler-tasks.ss`(2026-07-24,反转 D3)**:init 现在**同时**产 `manifest.ss`(数据)与 `chandler-tasks.ss`(程序)。后者是起手模板:`(define-lib-roots ".")` + `(library-task 'build <入口>)`(app 用 `--entry`,lib 用 `(name)`)+ 一个 `test` 任务占位 + `(default-task 'build)`,顶部注明「可选,chandler build 已能从 manifest 推导」。**已存在则不覆盖**(除非 `--force`),不抹手写任务。顺带修掉一个既有 bug:`--entry` / `--main` 从来不在 `value-long` 里,被当布尔旗标 → `parse-entry`/`string->symbol` 收到 `#t` 报错;补进 value-long,两者的 `=值` 与 `空格值` 形式都通了。三运行时 **363/363**(新增 3 用例:生成 tasks 文件、app-entry 决定入口、不覆盖已有)。
 
 **`bootstrap.ss --dev`(2026-07-24)**:新增 `--dev` 旗标,在**仓库自己目录下**产一个本地前缀 `<repo>/dist/{bin,chez}` —— 结构与真安装(`~/.local/share/chez` + `~/.local/bin`)**逐层同构**,只是路径本地、更扁平。`dist/chez` 是从**工作副本** build 出来的真 src/mt 前缀(`src/chandler` + `<mt>/chandler` + `.chandler`),`dist/bin/chandler` 是真启动器(`CHANDLER_PREFIX` 绝对化指向 `dist/chez`)。
 
@@ -603,7 +605,7 @@ $APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
 |---|------|------|------|
 | D1 | 两套 bootstrap 合一(chandler `bootstrap.ss` 统一安装编译引擎 + 包管理) | 🔲 待实现 | `bootstrap.ss` |
 | D2 | 两套启动器合一(不再有独立 bake 启动器) | 🔲 待实现 | `bootstrap.ss` |
-| D3 | `chandler init` 模板:核对后**无需改动**(init 本就不生成 recipe.ss;B6b 后 recipe 可选正是想要的形态) | ✅ 已完成(核对) | `chandler/cli/commands.ss` |
+| D3 | `chandler init` 生成 `chandler-tasks.ss`(2026-07-24 反转:改为**主动生成**一份起手模板,含 build/test 任务 + default-task);编译入口按 name/app-entry;已有则不覆盖 | ✅ 已完成 | `chandler/cli/commands.ss`、`chandler/cli/args.ss` |
 
 **发布节奏**:A 已完成(消灭漂移);B 逐模块吸收(B1–B5 串行,B6–B7 一次合仓);C0–C3 可先于 B 落地(per-dep pairs + 统一 resource-path + .env,过渡期 bake 子进程仍跑);C4–C6 依赖 B4(进程内编译);D 是 B7 延伸。
 

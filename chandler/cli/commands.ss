@@ -24,6 +24,7 @@
           (chandler build)
           (chandler pack)
           (chandler env)
+          (only (chandler recipe) default-tasks-file)   ; 只取文件名常量,避开 task/file/run 等宏
           (chandler cli args))
 
   ;; ── pack / verify-pack(designs/09)──
@@ -74,10 +75,43 @@
         (if app?
             (skeleton-app-manifest-datum name entry main)
             (skeleton-manifest-datum name)))
+      (printf "wrote ~a~%" mpath)
+      ;; 与 manifest.ss(数据)配对的 chandler-tasks.ss(程序):跑自定义任务。
+      ;; 编译入口 = app 的 entry 或 lib 的 (name)。
+      (write-tasks-file! root name (or entry (list (string->symbol name))) (flag? flags 'force))
       (ensure-gitignore-lib root)
       (when lib? (scaffold-lib root name))
-      (printf "wrote ~a~%" mpath)
       0))
+
+  ;; 生成 chandler-tasks.ss(由 chandler make 消费)。它是**可选的**——chandler build
+  ;; 已能从 manifest 推导编译;留它是给你写 test / release 之类自定义任务的地儿。
+  ;; 已存在则不覆盖(除非 --force),免得抹掉你手写的任务。
+  (define (write-tasks-file! root name build-lib force?)
+    (let ([tpath (join-paths root default-tasks-file)]
+          [libref (string-append "(" (string-join (map symbol->string build-lib) " ") ")")])
+      (when (or (not (file-exists? tpath)) force?)
+        (write-text tpath
+          (string-append
+            "#!chezscheme\n"
+            ";;; " default-tasks-file " --- " name " 的构建/任务描述(chandler make 消费)\n"
+            ";;;\n"
+            ";;; **可选**:chandler build 会从 manifest.ss 推导编译,不需要本文件。\n"
+            ";;; 留它是为了写自定义任务(如 test)。task/file/rule/default-task 是 DSL,\n"
+            ";;; 加载即求值——它是程序,与数据文件 manifest.ss 配对。\n"
+            "\n"
+            "(define-lib-roots \".\")\n"
+            "\n"
+            ";; build:编译 " libref " 及其 import 闭包(与 `chandler build` 等价,可删)\n"
+            "(library-task 'build '" libref ")\n"
+            "\n"
+            ";; test:跑测试(改成你的测试命令)\n"
+            "(task 'test \"run the test suite\"\n"
+            "  '()\n"
+            "  (lambda ()\n"
+            "    (run \"scheme\" \"--libdirs\" \".\" \"--program\" \"tests/run-tests.sps\")))\n"
+            "\n"
+            "(default-task 'build)\n"))
+        (printf "wrote ~a~%" tpath))))
 
   ;; chandler 是**运行时门**,与 (chez …)/(skiff …) 同类:只声明版本区间,不声明
   ;; 来源 —— 实体是全局前缀里装好的那一份,`chandler deps` 校验版本并把它的 runtime

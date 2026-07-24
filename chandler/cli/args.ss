@@ -16,7 +16,7 @@
   ;; 取值短旗标(-C dir)
   (define value-short '(#\C))
   ;; 取值长旗标(--tag v / --tag=v 皆可):其余长旗标为布尔
-  (define value-long '(tag rev branch path name runtime prefix script env-file))
+  (define value-long '(tag rev branch path name runtime prefix script env-file entry main))
 
   (define (parse-args argv)
     (let loop ([args argv] [pos '()] [flags '()] [rest #f])

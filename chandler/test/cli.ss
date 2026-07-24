@@ -94,6 +94,32 @@
         (assert-raises
           (lambda () (main (list "-C" app "init" "--lib" "--app" "--name=foo"))))))
 
+    ;; init 也生成 chandler-tasks.ss(程序,与 manifest 数据配对),编译入口按 name/entry。
+    (init-writes-tasks-file
+      (let ([app (mktmp)])
+        (main (list "-C" app "init" "--name=foo"))
+        (let ([tp (string-append app "/chandler-tasks.ss")])
+          (assert-true (file-exists? tp))
+          (let ([txt (read-file tp)])
+            (assert-true (substr? txt "(library-task 'build '(foo))"))
+            (assert-true (substr? txt "(default-task 'build)"))
+            (assert-true (substr? txt "(task 'test"))))))
+
+    ;; app 的 --entry 决定编译入口(可与 name 不同名)
+    (init-tasks-uses-app-entry
+      (let ([app (mktmp)])
+        (main (list "-C" app "init" "--app" "--name=coolapp" "--entry=(coolapp core)"))
+        (assert-true (substr? (read-file (string-append app "/chandler-tasks.ss"))
+                              "(library-task 'build '(coolapp core))"))))
+
+    ;; 已有 chandler-tasks.ss 不被覆盖(手写任务不能被 init 抹掉)
+    (init-does-not-clobber-existing-tasks
+      (let ([app (mktmp)])
+        (write-file (string-append app "/chandler-tasks.ss") ";; MY HAND-WRITTEN TASKS\n")
+        (main (list "-C" app "init" "--name=foo"))
+        (assert-true (substr? (read-file (string-append app "/chandler-tasks.ss"))
+                              "MY HAND-WRITTEN TASKS"))))
+
     ;; ── 端到端:init→add→deps→list 全经 main ──
     (main-full-workflow
       (parameterize ([cache-root (mktmp)])
