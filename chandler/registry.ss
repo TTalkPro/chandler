@@ -11,7 +11,8 @@
 ;;; 路径已含 src//<mt>/ 前缀,故冲突检测/卸载/doctor 逻辑不变,只是相对路径带了命名空间。
 
 (library (chandler registry)
-  (export default-user-libdir default-system-libdir chandler-home
+  (export default-user-libdir default-system-libdir default-user-bindir default-system-bindir
+          chandler-home
           install-global uninstall-global list-global doctor-global
           registry-dir registry-file installed-files)
   (import (chezscheme)
@@ -38,6 +39,18 @@
     (if (win?)
         (join-paths (or (getenv* "ProgramData") "C:/ProgramData") "chez")
         "/usr/local/share/chez"))
+
+  ;; bin/ 落点(P3:app install 的命令行入口)。POSIX 不在前缀内(~/.local/bin 而非
+  ;; ~/.local/share/chez/bin,遵循 XDG 惯例);Windows 在前缀子目录(chez\bin)。
+  (define (default-user-bindir)
+    (if (win?)
+        (join-paths (default-user-libdir) "bin")
+        (string-append (home-dir) "/.local/bin")))
+
+  (define (default-system-bindir)
+    (if (win?)
+        (join-paths (default-system-libdir) "bin")
+        "/usr/local/bin"))
 
   ;; ── CHANDLER_HOME:正在跑的 chandler 自己的库前缀(src/mt 布局)──
   ;;

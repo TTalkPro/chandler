@@ -290,11 +290,30 @@
                      ((builtin-lib? ref) 'builtin)
                      ((own-source-path ref) => values)
                      ((prebuilt-lib-obj ref) 'prebuilt)
+                     ;; 运行时门库(chandler …)若此时能被 resolve-lib-path 从某个
+                     ;; 搜索根的源码侧解析到,**绝不**让它回落重编 —— 那会产生新实例,
+                     ;; 与 pack 交付的对象不一致(BUG-1)。对象必须由 build-chandler-runtime!
+                     ;; 预备好(经 gate-prebuilt-roots 挂为预构建根,上面 prebuilt-lib-obj
+                     ;; 即命中);命不到 prebuilt 而源码在手 = 漏了 deps/build,硬错把
+                     ;; 「实例对不上」从部署期提前到构建期。若源码也不在(完全解析不到),
+                     ;; 则不触发本分支,继续到 resolve-lib-path → #f,由 build-graph 报
+                     ;; "cannot locate" —— 那同样是可操作的错。自举例外:构建 chandler
+                     ;; 自己时,own-source-path 已命中项目源码,走不到这里。
+                     ((and (runtime-gate-libref? ref) (resolve-lib-path ref))
+                      (error 'classify-libref
+                             (format "runtime gate library ~a must not be recompiled from source~%  (it has no prebuilt object; run `chandler deps`/`chandler build` to build the (chandler …) runtime subset first)"
+                                     (ref->string ref))))
                      ((resolve-lib-path ref) => values)
                      (else #f))))
             (hashtable-set! classify-cache key r)
             r)
           hit)))
+
+  ;; 运行时门库 = (chandler …) 前缀。chandler 是「门」不是普通依赖:它的对象由
+  ;; build-chandler-runtime! 预备在 _vendor/chandler/_build/<mt>/,经 gate-prebuilt-roots
+  ;; 挂为预构建根。命中 prebuilt 即正常消费;命不到说明 deps/build 没跑,报错指引。
+  (define (runtime-gate-libref? ref)
+    (and (pair? ref) (eq? (car ref) 'chandler)))
 
   ;; 同一进程里连着建两次时清缓存:两次之间磁盘可能变了(codegen 生成了 loader
   ;; 源码、依赖被重新铺过),而缓存键只带 roots、不带文件存在与否。bake 是

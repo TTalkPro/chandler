@@ -23,7 +23,7 @@
           vendor-dir lib-dir project-lock-path project-manifest-path
           library-search-dirs native-load-paths
           chandler-runtime-sublibs chandler-dev-only-rel?
-          copy-chandler-runtime!
+          copy-tree!
           project-libdir project-lib-pair project-obj-dir
           global-prefix global-libdir path-dep-source-dirs
           project-mode? resolved-libdirs)
@@ -74,9 +74,12 @@
           ;; chandler 是**运行时门**不是依赖:实体取自全局前缀,进 vendor/chandler
           (when (manifest-chandler mf) (install-chandler-runtime! root (manifest-chandler mf)))
           (clean-orphans root lk (if (manifest-chandler mf) '("chandler") '()) opts)
-          ;; 2) chandler 运行时门的对象:从全局前缀取那份**已编译**的,摆进
-          ;;    _vendor/chandler/_build/<mt>/(与别的依赖同一形状,不必也不该重编)。
-          (when (manifest-chandler mf) (copy-chandler-runtime! root))
+          ;; **对象不再由 deps 拷**(BUG-1,2026-07-24):原先从全局前缀拷已编译的 .so,
+          ;; 但前缀里那份实例未必与 build 期 app 链到的实例一致 —— Chez 每次编译盖
+          ;; 新实例印章,pack 出来的包一加载就报 "different compilation instance"。
+          ;; 改为:deps 只铺源码(上面的 install-chandler-runtime!),对象的编译由
+          ;; build 层负责(`build-chandler-runtime!`),就地从 vendored 源码编一次,
+          ;; build 与 pack 同源 → 实例一致。cli 层(cmd-deps)在 install 后触发编译。
           ;; **不再往 lib/ 拷任何东西**(C0):依赖的源码、对象、资源各自 live 在
           ;; _vendor/<dep>/ 里,由 resolved-libdirs 逐依赖挂成 (src . obj) 对。
           (printf "deps: ~a ~a vendored to _vendor/~%"
@@ -202,17 +205,11 @@
       (rm-rf (vendor-dir root (quote chandler)))
       (copy-runtime-subset! src dst ".ss")))
 
-  ;; 已编译对象 → _vendor/chandler/_build/<mt>/chandler/ —— 与别的依赖同一形状,
-  ;; 于是 dep-pair 不必为 chandler 开特例。源码由 install-chandler-runtime! 摆进
-  ;; _vendor/chandler/chandler/,就地即是 src 侧。前缀里那份对象由同一个运行时编出,
-  ;; 直接用,不该也不必在这里重编。
-  (define (copy-chandler-runtime! root)
-    (let* ([prefix (global-prefix)]
-           [mt (current-machine-type)]
-           [dst (join-paths (vendor-dir root 'chandler) "_build" mt "chandler")])
-      (copy-runtime-subset! (join-paths prefix mt "chandler") dst
-                            (string-append "." (so-ext)))
-      (copy-runtime-subset! (join-paths prefix mt "chandler") dst ".so")))
+  ;; **对象编译移交 build 层**(BUG-1,2026-07-24):原先这里有个 copy-chandler-runtime!
+  ;; 从全局前缀拷已编译 .so 进 _vendor/chandler/_build/<mt>/。但前缀里的实例与 build
+  ;; 期 app 链到的实例可能不同(Chez 每次编译盖新印章),pack 出来的包一加载就报
+  ;; "different compilation instance"。改为由 `(chandler build)` 的 build-chandler-runtime!
+  ;; 就地编译 vendored 源码,build/pack 同源。本模块不再负责 chandler 对象。
 
   ;; 平铺复制 <from>/<sub><ext> —— 只取 runtime 子集,子目录(cli/test)整个不看
   (define (copy-runtime-subset! from to ext)
@@ -227,6 +224,37 @@
                 (ensure-parent dst)
                 (copy-file p dst)))))
         (dir-entries from))))
+
+  ;; ── 通用树拷贝原语(P7:install/pack 共享,消除 merge-tree!/copy-obj-tree! 重复)──
+  ;; 把 src 下所有文件拷到 dst。语义差异由参数表达(而非两个函数):
+  ;;   skip-dirs   路径首段在其中的整棵跳过(如 ("_build" ".git"))
+  ;;   file-filter 谓词 (rel → bool),只拷满足的文件;全拷传 (lambda (_) #t)
+  ;;   policy      'skip-existing — dst 已存在则跳(累积前缀,如 install --global)
+  ;;               'overwrite      — 总是拷(隔离目标,如 pack 的 rm-rf 后目录)
+  ;;   warn?       skip-existing 命中时往 stderr 警告(抓依赖间同名悄悄丢的 latent bug)
+  ;;
+  ;; **为什么不硬编码 policy**:全局前缀是跨安装的**累积存储**(不是 R6RS 单程序),
+  ;; 别包拥有的文件不许静默覆盖(registry check-conflicts 兜硬错;这里补的 warn 抓
+  ;; merge-tree! 原先静默 skip 的 latent bug)。pack 写进 rm-rf 过的隔离目录,无累积
+  ;; 污染可能,overwrite 安全。安全来自目标隔离,不来自 R6RS 单命名空间。
+  (define (copy-tree! src dst skip-dirs file-filter policy warn?)
+    (when (file-directory? src)
+      (ensure-dir dst)
+      (let ([pre (string-append src "/")])
+        (for-each
+          (lambda (abs)
+            (let* ([rel (strip-prefix abs pre)]
+                   [head (let ([i (char-index rel #\/)]) (if i (substring rel 0 i) rel))])
+              (unless (member head skip-dirs)
+                (when (file-filter rel)
+                  (let ([d (join-paths dst rel)])
+                    (cond
+                      [(and (eq? policy 'skip-existing) (file-exists? d))
+                       (when warn?
+                         (fprintf (current-error-port)
+                                  "warning: skip existing file (name collision): ~a~%" d))]
+                      [else (ensure-parent d) (copy-file abs d)]))))))
+          (files-under src)))))
 
   ;; ── 孤儿清理:vendor/ 下有、lock 无的目录(extra-keep:非 lock 来源的合法住户)──
   (define (clean-orphans root lk extra-keep opts)

@@ -24,7 +24,8 @@
   (export build build-project tree-library-files
           read-approvals write-approvals approval-hash
           dep-native-spec
-          derive-library-tasks! derive-native-tasks! build-tree!)
+          derive-library-tasks! derive-native-tasks! build-tree!
+          build-chandler-runtime!)
   (import (chezscheme)
           (chandler util)
           (chandler fs)
@@ -107,7 +108,12 @@
         ;; 已经建好的上游按**它们各自的**预构建根消费(C0:不再有汇总的 lib/)。
         ;; topo 序保证「排在自己前面的」都已编好;prebuilt 根在 compile 里会变成
         ;; (obj . obj),即只给对象、不给源码 —— 那正是避免「不同编译实例」的做法。
-        (cons "." (append (upstream-prebuilt-roots root d) (fallback-roots root)))
+        ;; gate-prebuilt-roots 排在 upstream 与 fallback 之间:chandler 运行时门的对象
+        ;; 在 _vendor/chandler/_build/<mt>/(build-chandler-runtime! 编的),优先于
+        ;; 全局前缀(避免实例分歧,BUG-1)。
+        (cons "." (append (gate-prebuilt-roots root)
+                          (upstream-prebuilt-roots root d)
+                          (fallback-roots root)))
         (lambda ()
           ;; 顺序与旧的生成 recipe 一致:native 先(它把 _build/.gen 挂进搜索根,
           ;; 随后的 library-task 才解析得到生成的 (<lib> native-loader)),库在后。
@@ -149,6 +155,62 @@
   (define (fallback-roots root)
     (let ([g (global-libdir)])
       (if (and (pair? g) (file-directory? (cdr g))) (list g) '())))
+
+  ;; ── chandler 运行时门:把 CHANDLER_HOME 的对象 copy 进 _vendor(BUG-1,2026-07-24)──
+  ;; deps 的 install-chandler-runtime! 已把 runtime subset 源码铺进
+  ;; _vendor/chandler/chandler/<sub>.ss;此处把 CHANDLER_HOME(= 正在跑的 chandler 的
+  ;; 前缀)里**已编译**的 runtime subset .so copy 进 _vendor/chandler/_build/<mt>/chandler/。
+  ;;
+  ;; **为什么 copy 而不是就地重编**:Chez 编译 app(import (chandler …))时,R6RS 语义
+  ;; 下已加载的库(library-list)**优先**于 library-directories。chandler 自己就在跑,
+  ;; (chandler runtime-paths) 等已活在进程内存里 —— Chez 编译 app 时用的是**这个内存
+  ;; 实例**,其 UID = CHANDLER_HOME/ta6le/chandler/runtime-paths.so 的 UID。就地重编产生
+  ;; 的是**另一个**实例,Chez 根本不看它;pack 若交付重编的那份,启动即报
+  ;; "different compilation instance"。copy CHANDLER_HOME 的对象则与内存实例同源 →
+  ;; build 用的实例 = pack 交付的实例 = 同一个物理对象文件。
+  ;;
+  ;; 故本函数**不编译**(名字沿用作 cli 入口,语义是"确保 chandler runtime 对象就位")。
+  ;; 前提:正在跑的 chandler 经 bootstrap 安装(CHANDLER_HOME 有编译对象);平铺仓库
+  ;; `./bin/chandler` 不满足,不应构建依赖 chandler 的 app。
+  (define (build-chandler-runtime! root)
+    (let* ([home (global-prefix)]            ; = chandler-home = CHANDLER_HOME
+           [mt   (current-machine-type)]
+           [src  (join-paths home mt "chandler")]
+           [vdir (vendor-dir root 'chandler)]
+           [bd   (join-paths vdir "_build" mt "chandler")])
+      (unless (file-directory? (join-paths vdir "chandler"))
+        (error 'build
+               (format "chandler runtime source not vendored at ~a~%  (run `chandler deps` first)"
+                       (join-paths vdir "chandler"))))
+      (unless (file-directory? src)
+        (error 'build
+               (format "chandler runtime objects not found at ~a~%  (CHANDLER_HOME has no compiled chandler; the running chandler must be installed via bootstrap.ss, not run from a flat checkout)"
+                       src)))
+      (rm-rf (join-paths vdir "_build"))
+      (for-each
+        (lambda (sub)
+          (let* ([f (string-append (symbol->string sub) ".so")]
+                 [s (join-paths src f)])
+            (when (file-exists? s)
+              (let ([d (join-paths bd f)])
+                (ensure-parent d)
+                (copy-file s d)))))
+        chandler-runtime-sublibs)))
+
+  ;; chandler 运行时门的预构建根(BUG-1):清单声明 (chandler …) 且 _vendor/chandler
+  ;; 已就地编译(对象在 _vendor/chandler/_build/<mt>/)时,返回一个 (src . obj) 预构建根。
+  ;; import-graph 的 classify-libref 对 (chandler …) 遂命中 prebuilt —— 既不下降(无源码
+  ;; 边可解析),也不回落到前缀源码重编(实例分歧根因)。排在 fallback 之前:项目本地
+  ;; 这份才是 build/pack 同源的对象;home 前缀那份可能是另一个实例。
+  (define (gate-prebuilt-roots root)
+    (let* ([vdir (vendor-dir root 'chandler)]
+           [obj  (join-paths vdir "_build" (current-machine-type))]
+           [mpath (join-paths root "manifest.ss")])
+      (if (and (file-directory? obj)
+               (file-exists? mpath)
+               (manifest-chandler (read-manifest mpath)))
+          (list (prebuilt vdir obj))
+          '())))
 
   ;; ── 进程内构建一棵树:切 cwd、复位状态、设搜索根、排单、跑 ──
   ;;
@@ -260,7 +322,11 @@
                   root
                   ;; C0:项目 import 的依赖在各 _vendor 树里,按预构建根消费
                   ;; (已 build 过的对象直接用,不重编);不再有汇总的 lib/。
-                  (cons sd (append (all-dep-prebuilt-roots root) (fallback-roots root)))
+                  ;; gate-prebuilt-roots:chandler 运行时门对象(_vendor/chandler/_build/<mt>/
+                  ;; —— build-chandler-runtime! 编的),优先于全局前缀,避免实例分歧(BUG-1)。
+                  (cons sd (append (all-dep-prebuilt-roots root)
+                                   (gate-prebuilt-roots root)
+                                   (fallback-roots root)))
                   (lambda ()
                     ;; 你自己 manifest 里的 native 是**可信**的(designs/08 §3
                     ;; 「你 manifest 里 path native 的构建」),不需要 --allow-build。

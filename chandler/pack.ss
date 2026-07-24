@@ -174,17 +174,13 @@
          (not (string-suffix? ".wpo" rel))))
 
   ;; 拷一棵对象树进包(剥源码:只带 Chez 编译产物 .so 与 native 的 OS 扩展名)
+  ;; P7:改调共享 copy-tree!(overwrite,隔离目标)。
   (define (copy-obj-tree! from to)
-    (let ([nx (string-append "." (so-ext))])
-      (for-each
-        (lambda (abs)
-          (let ([rel (strip-prefix abs (string-append from "/"))])
-            (when (and (deliverable? rel)
-                       (or (string-suffix? ".so" rel) (string-suffix? nx rel)))
-              (let ([dst (join-paths to rel)])
-                (ensure-parent dst)
-                (copy-file abs dst)))))
-        (files-under from))))
+    (let* ([nx (string-append "." (so-ext))]
+           [obj? (lambda (rel)
+                   (and (deliverable? rel)
+                        (or (string-suffix? ".so" rel) (string-suffix? nx rel))))])
+      (copy-tree! from to '() obj? 'overwrite #f)))
 
   ;; 只搬 lock 里**声明过的**依赖命名空间 —— 不整棵拷 lib/<mt>/。
   ;;
@@ -198,7 +194,10 @@
   ;; N6: chandler 只有 runtime 子集能进包(designs/12 §6.3)。子集定义与判据都在
   ;; (chandler install) —— deps 阶段从全局前缀取的是同一份,两处共用免漂移。
   (define (copy-dep-trees! obj to locked)
-    (let ([nx (string-append "." (so-ext))])
+    (let* ([nx (string-append "." (so-ext))]
+           [base-obj? (lambda (rel)
+                        (and (deliverable? rel)
+                             (or (string-suffix? ".so" rel) (string-suffix? nx rel))))])
       (for-each
         (lambda (d)
           (let* ([ns (symbol->string (locked-dep-name d))]
@@ -210,16 +209,19 @@
             (when (and (file-exists? um) (not chandler?))
               (let ([dst (join-paths to (string-append ns ".so"))])
                 (ensure-parent dst) (copy-file um dst)))
+            ;; 子目录对象 → <pack>/<mt>/<ns>/。
+            ;; P7:内层遍历改调共享 copy-tree!(overwrite)。chandler 的 dev-only 过滤
+            ;; 需 "chandler/" 前缀(chandler-dev-only-rel? 检查该前缀),而 copy-tree!
+            ;; 的 rel 相对 dir(= obj/<ns>),故 filter 里补前缀。
             (when (file-directory? dir)
-              (for-each
-                (lambda (abs)
-                  (let ([rel (strip-prefix abs (string-append obj "/"))])
-                    (when (and (deliverable? rel)
-                               (or (string-suffix? ".so" rel) (string-suffix? nx rel))
-                               (not (and chandler? (chandler-dev-only-rel? rel))))
-                      (let ([dst (join-paths to rel)])
-                        (ensure-parent dst) (copy-file abs dst)))))
-                (files-under dir)))))
+              (copy-tree! dir (join-paths to ns) '()
+                          (if chandler?
+                              (lambda (rel)
+                                (and (base-obj? rel)
+                                     (not (chandler-dev-only-rel?
+                                            (string-append "chandler/" rel)))))
+                              base-obj?)
+                          'overwrite #f))))
         locked)))
 
   ;; 应用资源:源码态的 <project>/resources/ **原样**搬进 <pack>/src/resources/。
@@ -847,9 +849,10 @@
                    (format "entry library ~a has no compiled object at ~a~%  (pass --entry '(<lib>)', or run `bake build` if it is simply not built)"
                            entry e))))
         ;; chandler 的 runtime 子集:它不是 lock 里的依赖(是运行时门,designs/12 §5),
-        ;; 故 copy-dep-trees! 不管它。**从 `_vendor/chandler` 取**(deps 已把编译好的
-        ;; 子集铺在那)—— 包必须自包含,不能指望目标机装了 chandler。deps 铺时已过
-        ;; dev-only 滤,这里原样搬。
+        ;; 故 copy-dep-trees! 不管它。**从 `_vendor/chandler/_build/<mt>/` 取**(deps 期
+        ;; build-chandler-runtime! 已就地编译 vendored 源码;与 build 同源 → 实例一致,
+        ;; BUG-1)—— 包必须自包含,不能指望目标机装了 chandler。dev-only 已在 deps 铺
+        ;; 源码时滤掉,这里原样搬对象。
         (when (and mf (manifest-chandler mf))
           (copy-chandler-into-pack! project objdir (manifest-chandler mf)))
         ;; 2) src/resources/<app>/(应用数据)+ src/resources/<dep>/(依赖库资源,M2)
@@ -885,8 +888,9 @@
         0)))
 
   ;; _vendor/chandler/_build/<mt>/chandler/<sub>.so → <pack>/<mt>/chandler/<sub>.so。
-  ;; **来源改 _vendor**(2026-07-24):deps 已把编译好的 runtime 子集(dev-only 已滤)
-  ;; 铺在那,pack 原样搬 —— 不再读全局前缀。版本门用进程内常量,不再读快照。
+  ;; **来源 = _vendor/chandler/_build/<mt>/**(BUG-1,2026-07-24):与 build-chandler-runtime!
+  ;; 编译产物同源(就地编译 vendored chandler 源码),不再读全局前缀 —— 故 app 链到的
+  ;; 实例与包内交付的实例是同一个物理对象文件。版本门用进程内常量,不再读快照。
   (define (copy-chandler-into-pack! project objdir range)
     (unless (version-match? range chandler-version)
       (error 'pack

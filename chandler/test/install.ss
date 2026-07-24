@@ -125,16 +125,14 @@
           (with-chandler-prefix prefix
             (lambda ()
               (assert-equal 0 (install app '()))
-              ;; runtime 子集:源码进 vendor/ 与 lib/src,对象进 lib/<mt>
-              ;; C0:源码就地在 _vendor/chandler/chandler/,对象摆进它自己的 _build/<mt>/
+              ;; runtime 子集**源码**进 _vendor/chandler/chandler/(install-chandler-runtime!)
               (assert-true (file-exists? (join-paths app "_vendor" "chandler" "chandler" "runtime-paths.ss")))
               (assert-true (file-exists? (join-paths app "_vendor" "chandler" "chandler" "base.ss")))
-              (assert-true (file-exists? (join-paths app "_vendor" "chandler" "_build"
-                                                    (current-machine-type) "chandler" "runtime-paths.so")))
+              ;; BUG-1(2026-07-24):install 只铺源码,不再拷/编对象。对象由 build 层的
+              ;; build-chandler-runtime! 就地编译,故 install 后 _build/ 尚不存在。
+              (assert-false (file-directory? (join-paths app "_vendor" "chandler" "_build")))
               ;; dev-only 的一律不来(工具不该进应用的库搜索路径)
               (assert-false (file-exists? (join-paths app "_vendor" "chandler" "chandler" "pack.ss")))
-              (assert-false (file-exists? (join-paths app "_vendor" "chandler" "_build"
-                                                    (current-machine-type) "chandler" "pack.so")))
               (assert-false (file-directory? (join-paths app "_vendor" "chandler" "chandler" "cli"))))))))
 
     ;; 装的比区间旧 → 当场报错(expected vs actual),不静默用旧的
