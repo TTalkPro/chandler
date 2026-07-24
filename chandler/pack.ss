@@ -263,33 +263,33 @@
               "(manifest (format 1) (name \"" app "\") (version \"" version "\")\n"
               "  (app (entry " (datum->str entry) ") (main " (symbol->string main-proc) ")))\n")))))
 
-  ;; M2: 依赖库的资源(ABI-independent,designs/11 §5;落点见 C4)
-  ;; 从项目安装前缀 lib/src/resources/ 复制到 pack 的 src/resources/,不套 .so filter。
-  ;; lock 驱动:只复制 locked-dep-resources 声明的 libref 对应目录。
+  ;; M2: 依赖库的资源(ABI-independent,designs/11 §5;落点 C4;来源 C0)
+  ;; 从各依赖**自己的源码树** _vendor/<dep>/<srcdir>/resources/<libpath>/ 复制到
+  ;; <pack>/src/resources/<libpath>/ —— 源码树里的相对位置与前缀里的**完全同形**,
+  ;; 故这一步是原样搬,不做路径映射。不套 .so filter。
   (define (copy-share! project root locked)
-    (let ([share-src (join-paths (project-libdir project) "src" resources-dirname)])
-      (when (file-directory? share-src)
-        (for-each
-          (lambda (d)
-            (let ([resources (locked-dep-resources d)])
-              (when resources
-                (for-each
-                  (lambda (entry)
-                    (copy-share-entry share-src root (car entry) (cdr entry)))
-                  resources))))
-          locked))))
+    (for-each
+      (lambda (d)
+        (let* ([src-root (dep-src-root project d)]
+               [res (join-paths src-root resources-dirname)])
+          (when (file-directory? res)
+            (for-each
+              (lambda (abs)
+                (let ([dst (join-paths root "src" resources-dirname
+                                       (strip-prefix abs (string-append res "/")))])
+                  (ensure-parent dst)
+                  (copy-file abs dst)))
+              (files-under res)))))
+      locked))
 
-  (define (copy-share-entry share-src root libref rel-path)
-    (let* ([libpath (string-join (map symbol->string libref) "/")]
-           [src-dir (join-paths share-src libpath)])
-      (when (file-directory? src-dir)
-        (for-each
-          (lambda (abs)
-            (let* ([rel (strip-prefix abs (string-append src-dir "/"))]
-                   [dst (join-paths (prefix-resource-dir root libpath) rel)])
-              (ensure-parent dst)
-              (copy-file abs dst)))
-          (files-under src-dir)))))
+  ;; 一个依赖在 _vendor 里的源码根(= 它的库搜索根,也是 `chandler build` 的 cwd)
+  (define (dep-src-root project d)
+    (srcdir-join (vendor-dir project (locked-dep-name d))
+                 (or (locked-dep-srcdir d) ".")))
+
+  ;; 该依赖的编译产物树:它自己的 _build/<mt>/
+  (define (dep-obj-dir project d)
+    (join-paths (dep-src-root project d) "_build" (current-machine-type)))
 
   ;; ═══════════════════════════════════════════════════════════════════
   ;; §4 native 清点
@@ -829,8 +829,13 @@
         ;; 1) 对象根 = lock 声明的依赖闭包 + 应用自己的编译树。
         ;;    应用**后拷**:它永远赢 —— lib/<mt>/ 里可能留着上一轮 `chandler build`
         ;;    同步进去的、同名的旧应用产物。
-        (let ([deps (project-obj-dir project)])
-          (when (file-directory? deps) (copy-dep-trees! deps objdir locked)))
+        ;; C0:每个依赖的对象在**它自己的** _vendor/<dep>/<srcdir>/_build/<mt>/,
+        ;; 不再有汇总的 lib/<mt>/。逐依赖拷,顺带天然避开了「别的依赖的同名文件」。
+        (for-each
+          (lambda (d)
+            (let ([o (dep-obj-dir project d)])
+              (when (file-directory? o) (copy-dep-trees! o objdir (list d)))))
+          locked)
         (copy-obj-tree! (join-paths project "_build" mt) objdir)
         ;; 入口库必须真的在包里 —— 否则打出的包一路正常,到启动 import 才报
         ;; "library (x) not found"。这一步把那个失败提前到打包期。
@@ -920,36 +925,32 @@
       (if (file-exists? lpath) (lock-deps (read-lock lpath)) '())))
 
   ;; ── 前置校验:pack 只组装。缺什么就说清楚该跑哪个命令补 ──
+  ;; C0:每个依赖各有自己的对象树(_vendor/<dep>/<srcdir>/_build/<mt>/),故逐依赖查,
+  ;; 报错也能指名道姓「是哪个依赖没编」——比先前一句笼统的「lib/<mt> 不在」可操作。
   (define (preflight project mt locked)
-    (let ([bdir  (join-paths project "_build" mt)]
-          [obj   (project-obj-dir project)])
+    (let ([bdir (join-paths project "_build" mt)])
       (unless (file-directory? bdir)
         (error 'pack
-               (format "~a not found; the application itself is not compiled -- run `bake build` first" bdir)))
-      (begin
-        (begin
-          (unless (null? locked)
+               (format "~a not found; the application itself is not compiled -- run `chandler build` first" bdir)))
+      (for-each
+        (lambda (d)
+          (let* ([n   (symbol->string (locked-dep-name d))]
+                 [obj (dep-obj-dir project d)])
             (unless (file-directory? obj)
               (error 'pack
-                     (format "~a not found; dependencies are not compiled -- run `chandler build` first" obj)))
-            (let ([missing (filter (lambda (d)
-                                     (let ([n (symbol->string (locked-dep-name d))])
-                                       (not (or (file-exists? (join-paths obj (string-append n ".so")))
-                                                (file-directory? (join-paths obj n))))))
-                                   locked)])
-              (unless (null? missing)
-                (error 'pack
-                       (format "these dependencies have no compiled objects in ~a -- run `chandler build`: ~a"
-                               obj
-                               (string-join (map (lambda (d) (symbol->string (locked-dep-name d))) missing)
-                                            ", ")))))
+                     (format "~a not compiled (~a not found) -- run `chandler build` first" n obj)))
+            (unless (or (file-exists? (join-paths obj (string-append n ".so")))
+                        (file-directory? (join-paths obj n)))
+              (error 'pack
+                     (format "dependency ~a has no compiled objects in ~a -- run `chandler build`" n obj)))
             ;; native 无法在消费方现编,故缺了必须当场停 —— 否则打出的包会一路正常,
             ;; 直到第一次 foreign call 才炸。
-            (let ([miss (missing-dep-natives obj locked)])
+            (let ([miss (missing-dep-natives obj (list d))])
               (unless (null? miss)
                 (error 'pack
                        (format "declared native libraries are missing -- run `chandler build --allow-build`:~%  ~a"
-                               (string-join miss "\n  "))))))))))
+                               (string-join miss "\n  ")))))))
+        locked)))
 
   ;; ═══════════════════════════════════════════════════════════════════
   ;; §9 verify-pack:完整性 + (可选)format/target 校验(designs/09 §9, 10 §7)

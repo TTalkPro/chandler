@@ -444,7 +444,7 @@ $APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
 
 | # | 任务 | doc 14 | 状态 | 文件 |
 |---|------|--------|------|------|
-| C0 | `resolved-libdirs` 改 per-dep pairs;`vendor/`→`_vendor/`;删掉所有往 `lib/` 的拷贝 | P0 | 🟡 **部分完成** —— dev 通路(deps/build/run/repl/activate)已切换;**pack 与全局 install 仍读 `lib/`,待改** | `chandler/install.ss`、`chandler/build.ss`、`chandler/cli/commands.ss` |
+| C0 | `resolved-libdirs` 改 per-dep pairs;`vendor/`→`_vendor/`;删掉所有往 `lib/` 的拷贝;pack / 全局 install 改从各依赖自己的树取 | P0 | ✅ 已完成 | `chandler/{install,build,pack}.ss`、`chandler/cli/commands.ss` |
 | C1 | 统一 `resource-path`:扫 `(library-directories)` 的 **src/obj 两侧** + prefix-fallback;删旧四 API;**资源定位不再依赖 `APP_ROOT`** | P1 | ✅ 已完成 | `chandler/runtime-paths.ss`、`chandler/pack.ss` |
 | C2 | `native-load-paths` 改扫所有挂载条目的 obj 侧(不再只扫 `lib/<mt>`) | P2 | ✅ 已完成 | `chandler/install.ss` |
 | C3 | `.env` 读取模块(`chandler/env.ss`);`run`/`repl`/`env`/`install` 消费 `.env` | P3 | 🔲 待实现 | `chandler/env.ss`(新)、`chandler/cli/commands.ss` |
@@ -509,13 +509,24 @@ $APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
 - **dev 期不设 `APP_ROOT`**:它只服务 native-loader 候选 1,而 dev 期 native 分散在各 `_vendor/.../_build/<mt>/`,没有单一前缀能覆盖 —— 硬造一个只会让候选 1 恒 miss。候选 2(扫 `library-directories` obj 侧)恰好命中。外层已显式设了则原样透传;pack 仍设(那里是真前缀)。
 - `chandler build` 编依赖时,上游按**各自的**预构建根 `(prebuilt <src> <obj>)` 消费(compile 会把它变成「只给对象」,正是避免「不同编译实例」的做法)。
 
-**仍待改(下一步)**:
-1. **`chandler pack`** —— `copy-obj-tree!` / `copy-share!` 仍读 `lib/{src,<mt>}`。来源应改为逐依赖 `_vendor/<dep>/<srcdir>/_build/<mt>/` + 项目 `_build/<mt>/` + 各自的 `resources/<ns>/`(这正是 C5 原文的另一半)。**注意:pack 的测试目前是绿的,但那是因为它们自己伪造 `lib/`(`fake-dep-objs!`)—— 真实 pack 现在会失败。**
-2. **全局 install** —— `merge-lib-to-global!` 仍合并 `lib/{src,<mt>}` → 全局前缀,同样要改成逐依赖树。
-3. `project-libdir` / `project-lib-pair` / `project-obj-dir` 三个函数已无实际含义(仍指向不存在的 `lib/`),上面两处改完即可删除。
-4. e2e 复验:`deps → build → run` 已在改动前跑通,C0 之后**尚未重跑**。
+**交付通路(pack / 全局 install)——「pack 无源码、install 是完整前缀」**:
 
-**当前状态**:三运行时 **337/337 全绿**,但绿色只覆盖到 dev 通路;pack / 全局 install 的真实路径未验。
+一个依赖在 `_vendor/<dep>/<srcdir>/` 下有三样东西,两条通路各取所需:
+
+| | 取什么 | 落到哪 |
+|---|---|---|
+| `chandler pack` | `_build/<mt>/**` + `resources/**` | `<pack>/<mt>/` + `<pack>/src/resources/` |
+| `chandler install`(全局) | 源码树(除 `_build/`、`.git/`)+ `_build/<mt>/**` | `<prefix>/src/` + `<prefix>/<mt>/` |
+
+**资源不必单独搬** —— 它在源码树里就住在 `resources/<ns>/`,而前缀要的正是 `src/resources/<ns>/`,拷源码树时**自动就位**。这是 C4 选这个落点的收益之一,当时没想到会在这里兑现。
+
+`preflight` 顺带变得更可操作:逐依赖查它自己的 `_build/<mt>/`,报错能指名道姓「是哪个依赖没编」,而不是笼统一句「`lib/<mt>` 不在」。
+
+**验证**:三运行时 **337/337 全绿**。pack 的测试夹具(`fake-dep-objs!`)也改成往 `_vendor/<dep>/_build/<mt>/` 写 —— 先前它伪造 `lib/`,一度让 pack 测试在真实 pack 已经坏掉时仍然是绿的。
+
+**未重跑**:`deps → build → run` 与 `pack → clean-env 启动` 的端到端在 C0 之后尚未实跑(只有单元测试覆盖)。
+
+**测试夹具的一个既有问题(未修)**:`(chandler test fixtures)` 的 `mktmp` 被调用约 250 次/轮,而多数调用方从不清理 —— 本次会话十几轮三运行时全跑下来,`/tmp` 攒了 **12160 个目录、7.7G**,直接把 tmpfs 撑到 100%,后续所有 `mktemp` 返回空串,测试大面积假失败(报的是 `cannot set current directory to ""` / `Permission denied`,与被测代码无关)。已手工清理。修法:让 `mktmp` 把目录登记进一张表,`run-suites` 收尾统一 `rm-rf`;或给夹具加 `with-tmp` 形式强制 dynamic-wind。
 
 **依赖序**:
 - C0–C3 可**先于阶段 B** 落地(不依赖 bake 吸收)——过渡期 bake 子进程仍跑,但 libdirs 已是 per-dep 对、resources 已统一、`.env` 已生效。

@@ -32,8 +32,9 @@
       b))
 
   ;; 造一个「chandler build 过」的依赖对象树:lib/<mt>/<dep>{.so,/…}
+  ;; C0:依赖的对象在**它自己的** _vendor/<dep>/_build/<mt>/,不再有汇总的 lib/<mt>/
   (define (fake-dep-objs! root dep)
-    (let ([o (join-paths root "lib" mt)])
+    (let ([o (join-paths root "_vendor" dep "_build" mt)])
       (put! (join-paths o (string-append dep ".so")) "dep-umbrella")
       (put! (join-paths o dep "sub.so") "dep-sub")
       o))
@@ -162,7 +163,7 @@
           (install app '())
           (fake-build! app "myapp")
           (fake-dep-objs! app "n")
-          (put! (join-paths app "lib" mt "n" "native" (string-append "libn." (so-ext))) "ELF")
+          (put! (join-paths app "_vendor" "n" "_build" mt "n" "native" (string-append "libn." (so-ext))) "ELF")
           (pack-until-runtime app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . petite)))
           (let* ([d (pack-out app "myapp" "1.0")]
                  [m (join-paths d "pack.manifest")])
@@ -184,7 +185,7 @@
                [app (make-app (list (cons 'b b)))])
           (install app '())
           (fake-build! app "myapp")
-          (rm-rf (join-paths app "lib" mt))       ; 依赖没编译 → 该跑 chandler build
+          (rm-rf (join-paths app "_vendor" "b" "_build" mt))       ; 依赖没编译 → 该跑 chandler build
           (assert-raises
             (lambda () (pack app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . petite))))))))
 

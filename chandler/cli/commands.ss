@@ -159,8 +159,8 @@
       (let ([name (or (manifest-name mf) (basename root))]
             [version (or (manifest-version mf) "0.0.0")])
         ;; 前置:deps + build 必须已完成
-        (unless (file-directory? (project-libdir root))
-          (error 'install "lib/ not found; run `chandler deps` first"))
+        (unless (file-exists? (project-lock-path root))
+          (error 'install "manifest.lock not found; run `chandler deps` first"))
         ;; 1. 安装项目自身(经 registry:冲突检测 + hash 追踪 + 清卸)
         (let* ([meta (list name version `(path ,root) (now-iso) 'chandler)]
                [opts (list (cons 'adopt (flag? flags 'adopt))
@@ -177,24 +177,41 @@
         (printf "installed ~a ~a + dependencies to ~a~%" name version libdir)
         0)))
 
-  ;; 将 lib/{src,<mt>}/** → <global>/(合并,不覆盖同名)
-  ;; 资源自 C4 起住在 src/resources/<ns>/,随 src/ 这一棵一起过去 —— 不再有第三棵。
+  ;; 把各依赖装进全局前缀(合并,不覆盖同名)。C0:来源是**每个依赖自己的树**,
+  ;; 不再有汇总的 lib/。一个依赖贡献三样,恰好对应前缀的两层:
+  ;;   <src-root>/**(除 _build/、.git/)  → <prefix>/src/     源码 + resources/<ns>/
+  ;;   <src-root>/_build/<mt>/**          → <prefix>/<mt>/    编译对象 + native
+  ;; **资源不必单独搬**:它在源码树里就住在 `resources/<ns>/`,而前缀要的是
+  ;; `src/resources/<ns>/` —— 拷源码树时自动就位(C4 选这个落点的收益之一)。
   (define (merge-lib-to-global! root libdir)
-    (let* ([mt (current-machine-type)]
-           [libdir-proj (project-libdir root)])
-      (merge-tree! (join-paths libdir-proj "src") (join-paths libdir "src"))
-      (merge-tree! (join-paths libdir-proj mt) (join-paths libdir mt))))
+    (let ([mt (current-machine-type)])
+      (for-each
+        (lambda (d)
+          (let* ([src-root (srcdir-join (vendor-dir root (locked-dep-name d))
+                                        (or (locked-dep-srcdir d) "."))]
+                 [obj (join-paths src-root "_build" mt)])
+            (merge-tree! src-root (join-paths libdir "src") '("_build" ".git"))
+            (merge-tree! obj (join-paths libdir mt) '())))
+        (project-locked-deps root))))
 
-  (define (merge-tree! src-dir dst-dir)
+  (define (project-locked-deps root)
+    (let ([lpath (project-lock-path root)])
+      (if (file-exists? lpath) (lock-deps (read-lock lpath)) '())))
+
+  ;; skip:相对路径的首段落在其中就整棵跳过(_build 是产物、.git 是仓库元数据,
+  ;; 都不该进库前缀)。
+  (define (merge-tree! src-dir dst-dir skip)
     (when (file-directory? src-dir)
       (ensure-dir dst-dir)
       (let ([pre (string-append src-dir "/")])
         (for-each
           (lambda (abs)
             (let* ([rel (strip-prefix abs pre)]
-                   [dst (join-paths dst-dir rel)])
-              (ensure-parent dst)
-              (unless (file-exists? dst) (copy-file abs dst))))
+                   [head (let ([i (char-index rel #\/)]) (if i (substring rel 0 i) rel))])
+              (unless (member head skip)
+                (let ([dst (join-paths dst-dir rel)])
+                  (ensure-parent dst)
+                  (unless (file-exists? dst) (copy-file abs dst))))))
           (files-under src-dir)))))
 
   ;; 安装项目自身的 resources(manifest 的 (resources ...) 声明)
