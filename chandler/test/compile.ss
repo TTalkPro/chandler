@@ -20,6 +20,10 @@
           (chandler import-graph)
           (chandler compile))
 
+  ;; 仓库根 —— 库实例化时捕获(测试从仓库根启动;with-proj 之后 cwd 会变)。
+  ;; 有一条用例必须在**独立子进程**里构建,那时要用它当 --libdirs。
+  (define repo-root (current-directory))
+
   ;; 两个库一条边:(app core) → (app util)
   (define basic-files
     '(("app/util.sls" . "(library (app util) (export u) (import (rnrs)) (define u 41))")
@@ -166,6 +170,46 @@
             (write-text "app/core.sls"
                         "(library (app core) (export c) (import (rnrs) (app util)) (define c (* u 2)))")
             (assert-true (member (ref->so '(app core)) (build!))))))))
+
+    ;; 内容指纹(我们)与 mtime 判据(Chez 在 compile-library 内部解析上游)的收口。
+    ;; 场景:上游只被 touch(内容不变)、下游内容真改 → 下游要重编,而 Chez 会按
+    ;; mtime 认为上游过期、在**内存里**重编它;若不同步对象的 mtime,产出的下游
+    ;; .so 记的编译实例就与磁盘上那个上游 .so 对不上。
+    ;;
+    ;; 两处细节决定这条用例有没有牙(都踩过):
+    ;;   ① 两次构建必须在**独立进程**里 —— 同进程里 (app util) 从第一次构建起就
+    ;;      驻留着,Chez 不会再去读源码,分歧根本不发生,断言恒真。
+    ;;   ② 收尾必须用**只给对象根**的子进程加载 —— 挂成 src::obj 对时 Chez 会从
+    ;;      源码重编出一套自洽的实例,同样验不出来。而只挂对象侧正是 pack 启动器
+    ;;      的加载方式,也是这个 bug 唯一现形的地方。
+    (touched-upstream-does-not-poison-downstream
+      (needs-compiler (lambda ()
+        (with-proj basic-files
+          (lambda (d)
+            (write-file "build-once.ss"
+              (string-append
+                "(import (chezscheme) (chandler recipe) (chandler compile) (chandler task-engine))\n"
+                "(install-compile-hooks!)\n"
+                "(load-recipe \"recipe.ss\") (load-fp-manifest!)\n"
+                "(invoke-task 'build) (write-fp-manifest!)\n"))
+            (let ((build-in-subprocess
+                    (lambda ()
+                      (let ((r (run-capture "scheme"
+                                            (list "-q" "--libdirs" repo-root
+                                                  "--script" (join-paths d "build-once.ss"))
+                                            (list (cons 'cwd d)))))
+                        (assert-equal 0 (proc-result-code r))))))
+              (build-in-subprocess)
+              (write-text "app/util.sls" (read-file-string "app/util.sls"))  ; 同内容,新 mtime
+              (write-text "app/core.sls"
+                          "(library (app core) (export c) (import (rnrs) (app util)) (define c (+ u 2)))")
+              (build-in-subprocess))
+            (write-file "check.ss" "(import (app core))(display c)(newline)")
+            (let ((r (run-capture "scheme"
+                                  (list "-q" "--libdirs" (join-paths d (build-dir))
+                                        "--script" (join-paths d "check.ss")))))
+              (assert-equal 0 (proc-result-code r))
+              (assert-string= "43" (string-trim (proc-result-out r))))))))) 
 
     (flag-change-invalidates
       ;; 换编译旗标 → 指纹变 → 重编(mtime 判据同样抓不到)。

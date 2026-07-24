@@ -445,7 +445,7 @@ $APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
 | # | 任务 | doc 14 | 状态 | 文件 |
 |---|------|--------|------|------|
 | C0 | `resolved-libdirs` 改 per-dep pairs;`vendor/`→`_vendor/` 改名;删 `install-dep-sources!`(不再拷源码进 lib/) | P0 | 🔲 待实现 | `chandler/install.ss` |
-| C1 | 统一 `resource-path`:scan-src-sides + prefix-fallback;删旧四 API(`app-resource-path`/`find-app-resource-path`/`lib-resource-path`/`find-lib-resource-path`) | P1 | 🔲 待实现 | `chandler/runtime-paths.ss` |
+| C1 | 统一 `resource-path`:扫 `(library-directories)` 的 **src/obj 两侧** + prefix-fallback;删旧四 API;**资源定位不再依赖 `APP_ROOT`** | P1 | ✅ 已完成 | `chandler/runtime-paths.ss`、`chandler/pack.ss` |
 | C2 | `native-load-paths` 改扫所有 pair obj 侧(不再只扫 `lib/<mt>`) | P2 | 🔲 待实现 | `chandler/install.ss` |
 | C3 | `.env` 读取模块(`chandler/env.ss`);`run`/`repl`/`env`/`install` 消费 `.env` | P3 | 🔲 待实现 | `chandler/env.ss`(新)、`chandler/cli/commands.ss` |
 | C4 | install 落点:resources → `src/resources/<namespace>/`(替代 `share/<namespace>/resources/`) | P5 | ✅ 已完成 | `chandler/layout.ss`、`chandler/install.ss`、`chandler/runtime-paths.ss`、`chandler/cli/commands.ss` |
@@ -465,6 +465,28 @@ $APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
 **验证**:三运行时 **333/333 全绿**。端到端(**PATH 无 bake**,用一份现装到临时前缀的 chandler + `CHANDLER_PREFIX`,确保读写两侧都是新代码):
 - `chandler deps` → 资源落 `lib/src/resources/resdemo/hello.txt`;`chandler run` 打印 `APP_ROOT=<project>/lib` 并读出内容。
 - `chandler build` → `chandler pack --runtime petite` → 包内 `src/resources/resdemo/hello.txt`;`env -i ./bin/resdemo` clean-env 启动读出内容;**整包 `cp` 到别处仍读得到**(`APP_ROOT` 跟着走);`verify-pack --target` **17 ok / 0 bad / 0 extra**。
+
+**C1 实现期决定(2026-07-24)**:
+
+1. **一个 API,app 不再特殊**:`(resource-path '(mylib sub) "schema.json")` / `find-resource-path`。app 本来就是一个库,写自己的库名即可 —— 于是 `app-name` 推断、`APP_NAME`、`.chandler/` 嗅探全部退出资源通路。四个旧 API(`app-`/`lib-` × 严格/可选)删除;`define-resource-path-resolver` 收敛成一种形式。
+2. **解析序**:① 顺序扫 `(library-directories)` 每个条目的 **src 侧与 obj 侧**(`<side>/resources/<libpath>/<segs>`)—— 条目序即优先级,故项目前缀自然遮蔽全局装的同名库;② 兜底 `(library-object-filename libref)` 反推前缀,覆盖「库从不在搜索表上的前缀被加载」。
+3. **为什么不再需要 `APP_ROOT`**:资源与库住在同一个前缀里,而进程要能 `import` 那个库,该前缀本来就必须在 `library-directories` 上 —— 那张表就是「我在对着哪些前缀跑」的权威答案;再要一个环境变量说同一件事是重复,还多一条会漂移的路径。
+4. **`APP_ROOT` 仍然导出,但只服务 native-loader**:生成的 loader 可能在 library-invoke 期就跑,那时 `library-directories` 未必已设([designs/24](../bake/designs/24-native-loader-codegen.md) §约束 3)。两件事自此分开,`run`/`repl`/`activate`/pack 启动器照常交接。
+5. **pack 的 bootstrap 改挂 `(src . <mt>)` 对**(原为 `(obj . obj)`):包是源码-less 的,`src/` 里只有资源没有 `.ss`,但资源定位要扫 src 侧。实测 Chez 在 src 侧找不到任何 `.ss`,解析照旧落到 obj 侧,行为不变。
+
+**验证**:三运行时 **336/336 全绿**(runtime-paths 由 18 增至 20 用例:两侧扫描、条目序即优先级、落空继续找下一个、**APP_ROOT 指向别处照样命中**、libref 校验)。端到端:
+- `env -i` 起进程、**只给 `--libdirs`、绝无 `APP_ROOT`**(应用打印 `APP_ROOT=<unset>`)→ 读出资源。
+- `chandler pack` → clean-env `./bin/resdemo` 与整包搬走后均读出资源;`verify-pack --target` 17 ok / 0 bad / 0 extra。
+
+**顺带修掉一个既有 bug(非本次引入,bake 时代就有)**:重编判据是**内容指纹**,而 Chez 在 `compile-library` 内部解析上游库用的是 **mtime**。源码 mtime 变新但内容不变时(切分支、把源码拷进已建好的树),指纹说「无需重编」,Chez 却在编译**下游**时于内存里重编了上游 —— 产出的下游 `.so` 记的编译实例与磁盘上那个上游 `.so` 对不上。
+
+**症状只在部署态现形**:该批对象只能以 `src::obj` **对**加载;只挂对象侧(pack 启动器、`(prebuilt …)` 消费)就报 `different compilation instance`。`rm -rf _build` 干净重建即恢复 —— 所以它能一直藏着。
+
+**修法**:指纹判「无需重编」但对象比源码旧时,**touch 对象**(内容已由指纹证明相同)而不是重编 —— 既保住「touch 不重编」(designs/07),又让 Chez 的视角与我们一致。Chez 没有 utime 绑定,故用「拷到临时名 + `rename`」做原子替换。落点在 `needed-compile?` 判 `#f` 的那一支:`invoke` 先处理前置再处理目标,故上游在这里被 touch,恰好早于下游的编译。
+
+(另一条路是编译时把自己的根也按「只给对象」挂,让 Chez 根本看不见源码 —— 更彻底,但会把「图里漏了一条边」从静默回退变成硬错,影响面大得多,未采用。)
+
+**回归用例有两处细节决定它有没有牙**(都踩过,写进注释了):① 两次构建必须在**独立进程**里 —— 同进程里上游库从第一次构建起就驻留着,Chez 不会再读源码,分歧根本不发生;② 收尾必须用**只给对象根**的子进程加载 —— 挂成对时 Chez 会从源码重编出一套自洽的实例,同样验不出来。实测:去掉修复后该用例失败(退出码 255),加回即过。
 
 **依赖序**:
 - C0–C3 可**先于阶段 B** 落地(不依赖 bake 吸收)——过渡期 bake 子进程仍跑,但 libdirs 已是 per-dep 对、resources 已统一、`.env` 已生效。

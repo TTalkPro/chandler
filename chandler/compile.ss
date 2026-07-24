@@ -232,11 +232,63 @@
             fp))))
 
   ;; 一个编译任务需要做,当且仅当 .so 不在、或指纹与上次成功编译时记录的不同。
+  ;;
+  ;; 判「不需要」时还要**保证对象不比源码旧**,见 refresh-object-mtime! —— 这是
+  ;; 「内容指纹」与 Chez 内部「mtime 判据」不一致处的收口,放在这里是因为顺序要紧:
+  ;; invoke 先处理前置再处理目标,故上游在这里被 touch,恰好早于下游的编译。
   (define (needed-compile? t node)
     (let ((target (task-name t)))
-      (or (not (file-exists? target))
-          (let ((recorded (hashtable-ref fp-manifest target #f)))
-            (not (and recorded (string=? recorded (fingerprint-of target))))))))
+      (cond
+        ((not (file-exists? target)) #t)
+        (else
+         (let ((recorded (hashtable-ref fp-manifest target #f)))
+           (cond
+             ((and recorded (string=? recorded (fingerprint-of target)))
+              (refresh-object-mtime! target)
+              #f)
+             (else #t)))))))
+
+  ;; ── 内容指纹 vs Chez 的 mtime 判据:一处必须收口的分歧 ──
+  ;;
+  ;; 我们按**内容**决定重编(designs/07:touch 不重编);而 Chez 在
+  ;; `compile-library` 内部解析上游库时按 **mtime** 判新旧。源码 mtime 变新但内容
+  ;; 不变时(切分支、把源码拷进已建好的树),两者会打架:指纹说「无需重编」,Chez
+  ;; 却在编译**下游**时于内存里重编了上游 —— 产出的 `.so` 记的编译实例与磁盘上那个
+  ;; 上游 `.so` 对不上。
+  ;;
+  ;; 症状很刺眼且**只在部署态现形**:这批对象只能以 `src::obj` **对**加载;只挂对象
+  ;; 侧(pack 启动器、`(prebuilt …)` 消费)就报
+  ;;   "loading …/fs.so yielded a different compilation instance of (chandler fs)
+  ;;    from that required by compiled (chandler runtime-paths)"
+  ;;
+  ;; 修法:内容既然已由指纹证明相同,**touch 对象**即可,不必重编 —— 既保住
+  ;; 「touch 不重编」,又让 Chez 的视角与我们一致。Chez 没有 utime 绑定,故用
+  ;; 「拷到临时名 + rename」做原子替换(rename 保证中途失败不会留下半个对象)。
+  ;;
+  ;; (另一条路是编译时把自己的根也按「只给对象」挂,让 Chez 根本看不见源码 ——
+  ;;  更彻底,但会把「图里漏了一条边」从静默回退变成硬错,影响面大得多。)
+  (define (refresh-object-mtime! target)
+    (let ((node (hashtable-ref compile-nodes target #f)))
+      (when node
+        (let ((newest (newest-source-mtime node)))
+          (when (and newest (time>? newest (file-modification-time target)))
+            (touch-file! target))))))
+
+  (define (newest-source-mtime node)
+    (let loop ((ps (cons (lib-node-path node) (lib-node-includes node))) (best #f))
+      (cond
+        ((null? ps) best)
+        ((not (file-exists? (car ps))) (loop (cdr ps) best))
+        (else
+         (let ((m (file-modification-time (car ps))))
+           (loop (cdr ps) (if (or (not best) (time>? m best)) m best)))))))
+
+  (define (touch-file! path)
+    (let ((tmp (string-append path ".chandler-touch")))
+      (ignore-errors
+        (copy-file path tmp)
+        (move-file tmp path))
+      (ignore-errors (when (file-exists? tmp) (delete-file tmp)))))
 
   (define (fp-manifest-path) (string-append (build-dir) "/.bake-manifest"))
 

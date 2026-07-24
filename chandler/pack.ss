@@ -683,8 +683,12 @@
       verify-format-src
       full-target-check-src
       "(define %lib (string-append %root \"/" mt "\"))\n"
+      "(define %src (string-append %root \"/src\"))\n"
       "(compile-imported-libraries #f)\n"       ; 部署态只载入,永不重编
-      "(library-directories (list (cons %lib %lib)))\n"
+      ;; 挂**一对** (src . obj):包是源码-less 的,`src/` 里只有资源没有 .ss,
+      ;; 但资源定位靠扫 library-directories 的两侧(2026-07-24),故 src 侧必须在表上。
+      ;; Chez 在 src 侧找不到任何 .ss,解析照旧落到 obj 侧,行为不变。
+      "(library-directories (list (cons %src %lib)))\n"
       native-walk-src
       "(%load-natives %lib)\n"
       "(import " (datum->str entry) ")\n"

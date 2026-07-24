@@ -395,8 +395,12 @@
                         (list (cons 'env (app-root-env root)))))))
 
   ;; APP_ROOT = 项目库前缀 <root>/lib —— 与全局前缀、解开的 pack 同构(designs/09、11)。
-  ;; 应用读 $APP_ROOT/src/resources/<app>/,生成的 native-loader 读
-  ;; $APP_ROOT/<mt>/<lib>/native/ —— 三态一种拼法,故这里只交接「前缀在哪」。
+  ;;
+  ;; **2026-07-24 起它只服务 native-loader**:资源定位改成扫 (library-directories)
+  ;; 的 src/obj 两侧((chandler runtime-paths) 的 resource-path),不再读这个变量 ——
+  ;; 能 import 那个库,就说明它的前缀已经在库搜索表上,再要一个 env 说同一件事是重复。
+  ;; 但生成的 native-loader 仍需要它:loader 可能在 library-invoke 期就跑,那时
+  ;; library-directories 未必已设(designs/24 §约束 3),故这里照常交接。
   ;; 环境里已有值则不覆盖:外层(pack 启动器 / 用户显式设)先到且权威。
   ;; 绝对化:APP_ROOT 要交给子进程,相对路径一旦对方换 cwd 就废
   (define (app-root-env root)

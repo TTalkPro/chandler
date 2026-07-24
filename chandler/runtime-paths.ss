@@ -2,8 +2,8 @@
 ;;; chandler/runtime-paths.ss --- 应用 + 库资源定位 API(designs/11 §3-4,§7)
 
 (library (chandler runtime-paths)
-  (export app-root app-name app-resource-path find-app-resource-path
-          lib-resource-path find-lib-resource-path
+  (export app-root app-name
+          resource-path find-resource-path
           define-resource-path-resolver)
   (import (chezscheme)
           (chandler util)
@@ -36,12 +36,10 @@
       [(string-contains? seg "/")
        (error 'runtime-paths "resource segment with path separator rejected" seg)]))
 
-  ;; 应用名 —— 资源落在 <app-root>/src/resources/<app>/(C4:与依赖资源
-  ;; src/resources/<libpath>/ 及全局安装前缀逐层同构),故必须回答「我是谁」。三级:
-  ;;   ① APP_NAME 显式(共享前缀里装了多个应用时,启动器传);
-  ;;   ② <app-root>/.chandler/ 下的唯一条目 —— pack 恒只写一个(chandler pack 的
-  ;;      write-app-manifest!),故包内不必再加第二个 env,APP_ROOT 仍是唯一必需变量;
-  ;;   ③ 取不到 → #f(认不出前缀属于谁,不猜)。
+  ;; 应用名 —— 「这个前缀属于谁」。**不再参与资源定位**(2026-07-24:资源改为扫
+  ;; library-directories,见下),仅供需要辨认前缀归属的调用方。三级:
+  ;;   ① APP_NAME 显式;② <app-root>/.chandler/ 下的唯一条目(pack 恒只写一个);
+  ;;   ③ 取不到 → #f(不猜)。
   (define (app-name)
     (or (getenv* "APP_NAME")
         (sole-chandler-entry (app-root))))
@@ -53,102 +51,95 @@
                              (dir-entries d))])
              (and (pair? es) (null? (cdr es)) (car es))))))
 
-  ;; 一种拼法:<prefix>/src/resources/<app>/…(落点定义见 (chandler layout) 的
-  ;; prefix-resource-dir)。APP_ROOT 恒指向一个**库前缀**,三态同构(全局装
-  ;; ~/.local/share/chez · 项目自己的 lib/ · 解开的 pack),故这里不分支、也没有
-  ;; 第二条候选;项目源码里的 resources/ 由 chandler 铺进 lib/src/resources/<name>/。
-  ;; 严格与可选查找共用路径构造,只有缺失处理不同。
-  (define (build-app-resource-path segs)
-    (for-each validate-resource-segment segs)
-    (let ([app (app-name)])
-      (unless app
-        (error 'app-resource-path
-               (string-append
-                 "cannot tell which app this prefix belongs to: no APP_NAME, and "
-                 (join-paths (app-root) ".chandler")
-                 " does not hold exactly one entry (run via `chandler run` or a pack launcher)")))
-      (apply join-paths (cons (prefix-resource-dir (app-root) app) segs))))
-
-  (define (app-resource-path . segs)
-    (let ([path (build-app-resource-path segs)])
-      (if (file-exists? path)
-          path
-          (error 'app-resource-path (string-append "resource not found: " path)))))
-
-  ;; 可选查找:认不出应用名也只是「找不到」,但**非法 segment 照旧当场拒**
-  ;; (路径穿越不该被降级成 #f 静默放过)。
-  (define (find-app-resource-path . segs)
-    (for-each validate-resource-segment segs)
-    (let ([app (app-name)])
-      (and app
-           (let ([path (apply join-paths
-                              (cons (prefix-resource-dir (app-root) app) segs))])
-             (and (file-exists? path) path)))))
-
   ;; ══════════════════════════════════════════════════════════════════
-  ;; lib 资源定位(designs/11 §4):基于 (library-object-filename) 反推 prefix
+  ;; 资源定位:**扫 (library-directories)**(2026-07-24 起的统一 API)
+  ;;
+  ;; 一个调用覆盖全部四态,且**不依赖任何环境变量**:
+  ;;
+  ;;   (resource-path '(mylib sub) "schema.json")
+  ;;   (resource-path '(myapp) "hello.txt")          ; app 就是一个库,不特殊
+  ;;
+  ;; 解析序:
+  ;;   ① 顺序扫 (library-directories) 的每个条目,**src 侧与 obj 侧都看**:
+  ;;        <side>/resources/<libpath>/<segs>
+  ;;      条目序即优先级 —— chandler 的 run/repl/activate 把项目前缀排在全局之前,
+  ;;      故项目自己的资源自然遮蔽全局装的同名库。
+  ;;   ② 兜底:(library-object-filename libref) 反推安装前缀,再拼
+  ;;        <prefix>/src/resources/<libpath>/<segs>
+  ;;      —— 覆盖「库从某个不在 library-directories 里的前缀被加载」的情形。
+  ;;
+  ;; **为什么不再需要 APP_ROOT**:资源与库住在同一个前缀里,而进程要能 import 那个
+  ;; 库,该前缀本来就必须在 library-directories 上 —— 那张表本身就是「我在对着哪些
+  ;; 前缀跑」的权威答案,再要一个环境变量说同一件事是重复,还多一条会漂移的路径。
+  ;; (APP_ROOT 仍由 run/repl/activate 与 pack 启动器导出,但那是给**生成的
+  ;; native-loader** 用的候选 1 —— loader 可能在 library-invoke 期就跑,那时
+  ;; library-directories 未必已设,见 designs/24 §约束 3。两件事自此分开。)
+  ;;
+  ;; obj 侧也扫:一个只挂了对象目录的前缀(src=obj 的字符串条目)照样能命中。
   ;; ══════════════════════════════════════════════════════════════════
 
   ;; libref → path 形:(mylib sub) → "mylib/sub"
   (define (libref->path libref)
     (string-join (map symbol->string libref) "/"))
 
-  ;; 从 object filename 反推 install prefix:
-  ;; /prefix/<mt>/mylib/sub.so → N+1 次 parent-dir(N = libref 段数)
-  (define (prefix-from-object obj-path n)
-    (if (= n 0)
-        obj-path
-        (prefix-from-object (parent-dir obj-path) (- n 1))))
+  ;; 一个 library-directories 条目 → 它的 (src obj) 两侧(字符串条目两侧同一)
+  (define (entry-sides e)
+    (if (pair? e)
+        (if (string=? (car e) (cdr e)) (list (car e)) (list (car e) (cdr e)))
+        (list e)))
 
-  ;; 主路径:object filename → prefix → src/resources/<libpath>/<segs>
-  ;; library-object-filename 对未加载库抛异常 —— ignore-errors 捕获后走 source fallback
-  (define (lib-resource-via-object libref segs)
+  (define (scan-library-directories libpath segs)
+    (let loop ([entries (library-directories)])
+      (and (pair? entries)
+           (or (let side-loop ([sides (entry-sides (car entries))])
+                 (and (pair? sides)
+                      (let ([path (apply join-paths
+                                         (cons (src-resource-dir (car sides) libpath) segs))])
+                        (if (file-exists? path) path (side-loop (cdr sides))))))
+               (loop (cdr entries))))))
+
+  ;; 兜底:从 object filename 反推安装前缀
+  ;;   /prefix/<mt>/mylib/sub.so → N+1 次 parent-dir(N = libref 段数)
+  ;; library-object-filename 对未加载库抛异常 —— ignore-errors 捕获后返回 #f
+  (define (prefix-from-object obj-path n)
+    (if (= n 0) obj-path (prefix-from-object (parent-dir obj-path) (- n 1))))
+
+  (define (via-object libref libpath segs)
     (let ([obj (ignore-errors (library-object-filename libref))])
       (and obj
-           (let* ([n (+ (length libref) 1)]              ; N 段 libref + 1 段 <mt>
-                  [prefix (prefix-from-object obj n)]
-                  [libpath (libref->path libref)]
-                  [base (prefix-resource-dir prefix libpath)]
-                  [path (apply join-paths (cons base segs))])
+           (let* ([prefix (prefix-from-object obj (+ (length libref) 1))]
+                  [path (apply join-paths
+                               (cons (prefix-resource-dir prefix libpath) segs))])
              (and (file-exists? path) path)))))
 
-  ;; fallback:source-only / built-in → 遍历 library-directories 的 src 侧
-  (define (lib-resource-via-source libref segs)
-    (let ([libpath (libref->path libref)]
-          [dirs (library-directories)])
-      (let loop ([entries dirs])
-        (if (null? entries)
-            #f
-            (let* ([entry (car entries)]
-                   [src-dir (if (pair? entry) (car entry) entry)])
-              (let ([src-file (join-paths src-dir (string-append libpath ".ss"))])
-                (if (file-exists? src-file)
-                    ;; src-dir 就是 <prefix>/src,资源正在它下面 —— 不必再回到 prefix
-                    (let* ([base (src-resource-dir src-dir libpath)]
-                           [path (apply join-paths (cons base segs))])
-                      (or (and (file-exists? path) path)
-                          (loop (cdr entries))))
-                    (loop (cdr entries)))))))))
-
-  ;; 公共 API:先校验 segment,再尝试 object / source 两条路径
-  (define (lib-resource-path libref . segs)
+  (define (locate-resource libref segs)
+    (unless (and (pair? libref) (for-all symbol? libref))
+      (error 'resource-path "library reference must be a list of symbols" libref))
     (for-each validate-resource-segment segs)
-    (or (lib-resource-via-object libref segs)
-        (lib-resource-via-source libref segs)
-        (error 'lib-resource-path
-               "resource not found for library" libref)))
+    (let ([libpath (libref->path libref)])
+      (or (scan-library-directories libpath segs)
+          (via-object libref libpath segs))))
 
-  (define (find-lib-resource-path libref . segs)
-    (for-each validate-resource-segment segs)
-    (or (lib-resource-via-object libref segs)
-        (lib-resource-via-source libref segs)))
+  ;; 严格:找不到即报错,并把**搜过哪里**说出来(可操作)
+  (define (resource-path libref . segs)
+    (or (locate-resource libref segs)
+        (error 'resource-path
+               (format "resource not found: ~a under resources/~a/ in any library directory~%  searched: ~a"
+                       (if (null? segs) "(the directory itself)" (car (reverse segs)))
+                       (libref->path libref)
+                       (string-join (map (lambda (e) (car (entry-sides e)))
+                                         (library-directories))
+                                    ", ")))))
 
-  ;; M5:声明式 resolver 宏(designs/11 §7.2)—— 薄 wrapper,不缓存 prefix
+  ;; 可选:找不到返回 #f;**非法 segment 照旧当场拒**(路径穿越不该被降级成静默 #f)
+  (define (find-resource-path libref . segs)
+    (locate-resource libref segs))
+
+  ;; 声明式 resolver 宏(designs/11 §7.2)—— 薄 wrapper,不缓存 prefix。
+  ;; app 与 lib 自此同一形式:app 也是一个库,写自己的库名即可。
+  ;;   (define-resource-path-resolver res '(myapp))
   (define-syntax define-resource-path-resolver
-    (syntax-rules (app)
-      [(_ name app)
-       (define (name . segs)
-         (apply app-resource-path segs))]
+    (syntax-rules ()
       [(_ name 'libref)
        (define (name . segs)
-         (apply lib-resource-path 'libref segs))])))
+         (apply resource-path 'libref segs))])))

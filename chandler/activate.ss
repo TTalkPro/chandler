@@ -35,6 +35,7 @@
        (activate-natives root)]))
 
   ;; APP_ROOT = 项目库前缀 <root>/lib(与 `chandler run`、pack 启动器同一约定,
+  ;; 2026-07-24 起只服务 native-loader —— 资源定位已改为扫 library-directories,
   ;; designs/09、11)。已有值不覆盖:外层启动器先到且权威。
   (define (set-app-root! root)
     (let ([cur (getenv "APP_ROOT")])
