@@ -1,13 +1,13 @@
 # Chandler
 
-> git-first 的 Chez Scheme 包管理器 + 构建器,**Skiff** 运行时生态里的包供应商(船具商)。读 `manifest.ss`,把 git 仓库里的 R6RS 库装进项目,一行 `chandler run` 挂载整个依赖环境并运行。标准 Chez 与 Skiff **双运行时**皆可用。
+> git-first 的 Chez Scheme 包管理器 + 构建器,**Skiff** 运行时生态里的包供应商(船具商)。读 `chandler-manifest.ss`,把 git 仓库里的 R6RS 库装进项目,一行 `chandler run` 挂载整个依赖环境并运行。标准 Chez 与 Skiff **双运行时**皆可用。
 
 **中文 | [English](README.en.md)** — 设计文档见 [designs/](designs/);实现任务与进度见 [TASK.md](TASK.md)。
 
 ## 定位
 
 - **Skiff**(轻舟)= 运行时(Chez + libuv);**Chandler**(船具商)= 包管理器 + 构建器,管**依赖获取、编译、激活、打包**。
-- git-first:依赖来源(URL + tag/rev/branch pin)写在 `manifest.ss`,无需中心 registry。
+- git-first:依赖来源(URL + tag/rev/branch pin)写在 `chandler-manifest.ss`,无需中心 registry。
 - 依赖 = 整仓 checkout 到 `_vendor/<name>/`,各依赖**就地编译**(产物留在它自己的 `_build/<mt>/`);`manifest.lock` 锁确切 commit,可复现。
 - 消费方用 Chez 库目录**对** `<src>::<obj>`(`::` = 源::对象)同时解析源码与对象;native 收进所属库 `<obj>/<lib>/native/`。
 
@@ -73,14 +73,14 @@ chandler make test-ps    # PowerShell 启动器验收(需 pwsh,缺则跳过)
 chandler make -T         # 列任务
 ```
 
-> **多数项目不需要 `chandler-tasks.ss`**:`chandler build` 直接从 `manifest.ss` 的 `(app (entry …))` 推导要编什么。只有需要自定义任务(如上面的 `test`/`test-ps`)时才写。它是**程序**(加载即求值),与**数据**文件 `manifest.ss` 配对。
+> **多数项目不需要 `chandler-tasks.ss`**:`chandler build` 直接从 `chandler-manifest.ss` 的 `(app (entry …))` 推导要编什么。只有需要自定义任务(如上面的 `test`/`test-ps`)时才写。它是**程序**(加载即求值),与**数据**文件 `chandler-manifest.ss` 配对。
 >
 > **安装**由自含的 `bootstrap.ss` 负责(装库树 + 生成 CLI 启动器),不经 `chandler make`。
 
 ## 快速上手
 
 ```sh
-chandler init --name=myapp                 # 生成骨架 manifest.ss + chandler-tasks.ss(_vendor/ 入 .gitignore)
+chandler init --name=myapp                 # 生成骨架 chandler-manifest.ss + chandler-tasks.ss(_vendor/ 入 .gitignore)
 chandler add http https://github.com/x/http --tag v1.2.0
 chandler deps                              # 解析 → 写 lock → git 依赖整仓 checkout 到 _vendor/
 chandler build                             # 进程内编译依赖闭包 → 各 _vendor/<dep>/_build/<mt>/
@@ -93,7 +93,7 @@ chandler repl                              # 交互 shell(自动挂库路径)
 
 ```
 myapp/
-  manifest.ss  manifest.lock
+  chandler-manifest.ss  manifest.lock
   _vendor/<name>/                    ← git 依赖整仓 checkout(源码 live)
     <srcdir>/_build/<mt>/            ← chandler build 就地编译产物(留在原地)
   _vendor/chandler/                  ← 运行时门(deps 从 CHANDLER_HOME copy)
@@ -137,7 +137,7 @@ chandler run --script main.ss [args...]
 
 | 命令 | 作用 |
 |------|------|
-| `init [--lib\|--app] [--name=N]` | 生成骨架 `manifest.ss` + `chandler-tasks.ss`(默认 lib;`--app` 写 `(app …)` 使其可 pack) |
+| `init [--lib\|--app] [--name=N]` | 生成骨架 `chandler-manifest.ss` + `chandler-tasks.ss`(默认 lib;`--app` 写 `(app …)` 使其可 pack) |
 | `add <name> <url> [--tag/--rev/--branch/--path]` | 添加依赖 |
 | `remove <name>` | 移除依赖 |
 | `deps [--production] [--offline] [--force] [--update]` | 解析 → 写 lock → git 依赖 checkout 到 `_vendor/` + chandler 运行时门就位 |
@@ -201,7 +201,7 @@ chandler 0.1.4 (chez 10.4.1)                 # 跑在标准 Chez 上
 
 ## 安全模型(designs/08)
 
-- **清单只 `read` 不求值**:`manifest.ss`/`manifest.lock`/registry 一律纯数据,永不 `eval`/`load`。
+- **清单只 `read` 不求值**:`chandler-manifest.ss`/`manifest.lock`/registry 一律纯数据,永不 `eval`/`load`。
 - **git clone/checkout 零执行**:所有 git 调用带 `-c core.hooksPath=/dev/null`。
 - **native 构建 = RCE,须显式授权**:依赖的 native 构建(别人的代码)须 `--allow-build`,且授权**绑构建描述哈希**写入 `.chandler-approvals`——脚本掉包(描述变更)则授权失效重提示。
 - **rev 全长锁定 = 内容寻址**:物化只认 lock 里的确切 commit,篡改/重放由 git 对象哈希兜底。
@@ -221,6 +221,6 @@ bash tests/powershell-run.sh                        # Windows 启动器验收(�
 
 ### 语言约定
 
-- **用户可见输出一律英文**:CLI 帮助、运行期提示/警告/错误(`printf`/`fprintf`/`error` 的消息),以及**生成物**的头注释(`.chandler-build.ss`、pack 的 `bootstrap.ss`)——工具面向的用户不限中文。风格取 Unix 诊断惯例:小写、简短、不加句号,如 ``manifest.ss not found; run `chandler init` first``。
+- **用户可见输出一律英文**:CLI 帮助、运行期提示/警告/错误(`printf`/`fprintf`/`error` 的消息),以及**生成物**的头注释(`.chandler-build.ss`、pack 的 `bootstrap.ss`)——工具面向的用户不限中文。风格取 Unix 诊断惯例:小写、简短、不加句号,如 ``chandler-manifest.ss not found; run `chandler init` first``。
 - **源码注释(`;;` / `;;;`)与本仓文档保持中文**,便于设计推理的表达密度。
 - 单复数用 `(plural n "dependency" "dependencies")`(`(chandler util)`),避免 `1 dependencies`。

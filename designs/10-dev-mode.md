@@ -41,7 +41,7 @@ dev 模式是 Chandler 三种运行模式之一(00 §6)。它让 `_vendor/` 里�
   myapp.ss
   myapp/
   resources/<libpath>/
-  manifest.ss
+  chandler-manifest.ss
   manifest.lock
   _build/<mt>/                     ← obj
     myapp.so
@@ -58,7 +58,7 @@ dev 模式是 Chandler 三种运行模式之一(00 §6)。它让 `_vendor/` 里�
     <dep-name>.ss
     <dep-name>/
     resources/<libpath>/
-    manifest.ss                    ← 依赖自己的 manifest
+    chandler-manifest.ss                    ← 依赖自己的 manifest
     _build/<mt>/                   ← obj
       <dep-name>.so
       <dep-name>/*.so
@@ -104,7 +104,7 @@ dev 是 live checkout,只有一份,version 是隐含的(当前 HEAD/lock 的 rev
 **path 依赖**:`(path "../x")` 不进 `_vendor`,直挂其源目录(live):
 
 ```scheme
-;; manifest.ss
+;; chandler-manifest.ss
 (deps
   (x (path "../x")))
 ```

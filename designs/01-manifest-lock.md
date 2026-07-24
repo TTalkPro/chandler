@@ -1,16 +1,16 @@
-# 01 — manifest.ss 与 manifest.lock schema
+# 01 — chandler-manifest.ss 与 manifest.lock schema
 
 > 状态: 设计中
 
 ## 1. 一句话目标
 
-定义 manifest.ss（项目清单）和 manifest.lock（已锁依赖闭包快照）的完整数据 schema，作为 v2 数据层的纯数据规范。
+定义 chandler-manifest.ss（项目清单）和 manifest.lock（已锁依赖闭包快照）的完整数据 schema，作为 v2 数据层的纯数据规范。
 
 ## 2. 设计原则
 
 ### 2.1 纯数据原则
 
-manifest.ss / manifest.lock / registry.ss 一律是**纯数据**——只 `read` 不 `eval`，继承 design 08（安全模型）的纯数据原则。理由：
+chandler-manifest.ss / manifest.lock / registry.ss 一律是**纯数据**——只 `read` 不 `eval`，继承 design 08（安全模型）的纯数据原则。理由：
 
 - 消除代码注入攻击面
 - 确保跨运行时（Chez / Skiff）一致解析
@@ -29,7 +29,7 @@ manifest.ss / manifest.lock / registry.ss 一律是**纯数据**——只 `read`
 | 绝对路径禁止 | source url、install path 字段不得为绝对路径（除 prebuilt url） |
 | sha256 格式 | 十六进制小写，长度 64 字符 |
 
-## 3. manifest.ss schema
+## 3. chandler-manifest.ss schema
 
 ### 3.1 顶层结构
 
@@ -298,7 +298,7 @@ gate 在 resolve 阶段求值（由 version.ss 的 semver matcher 实现）—�
 ```scheme
 (lock
   (format <number>)                   ; 格式版本，当前为 2
-  (manifest-sha256 <hex>)            ; 对应 manifest.ss 的 sha256，用于新鲜度判定
+  (manifest-sha256 <hex>)            ; 对应 chandler-manifest.ss 的 sha256，用于新鲜度判定
   (chandler <version-string>)         ; 解析时使用的 chandler 版本
   (resolved
     <locked-dep> ...))               ; 已锁依赖列表
@@ -354,19 +354,19 @@ prebuilt 依赖的 lock 记录与 git 依赖的关键区别：
 
 ### 4.4 lock 新鲜度判定
 
-lock 文件包含 `manifest-sha256` 字段，值为对应 manifest.ss 的 sha256 哈希。
+lock 文件包含 `manifest-sha256` 字段，值为对应 chandler-manifest.ss 的 sha256 哈希。
 
 判定流程（继承 design 01 §install 判定）：
 
-1. 读取 manifest.ss，计算其 sha256
+1. 读取 chandler-manifest.ss，计算其 sha256
 2. 与 lock 中的 manifest-sha256 比较
 3. 不一致 → lock 陈旧，需要 re-resolve
 
-这确保了：当 manifest.ss 变化（如新增依赖、修改版本约束）时，lock 不会意外被复用。
+这确保了：当 chandler-manifest.ss 变化（如新增依赖、修改版本约束）时，lock 不会意外被复用。
 
 ## 5. 完整示例
 
-### 5.1 manifest.ss 示例
+### 5.1 chandler-manifest.ss 示例
 
 ```scheme
 (manifest
@@ -405,7 +405,7 @@ lock 文件包含 `manifest-sha256` 字段，值为对应 manifest.ss 的 sha256
 
 ### 5.2 manifest.lock 示例
 
-对应上述 manifest.ss 的 lock：
+对应上述 chandler-manifest.ss 的 lock：
 
 ```scheme
 (lock

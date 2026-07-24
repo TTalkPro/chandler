@@ -7,7 +7,7 @@
 | 文档 | 内容 | 优先级 |
 |------|------|-------|
 | [00-design-principles.md](00-design-principles.md) | **核心模型 + 5 不变量 + 术语表**(宪法) | 必读 |
-| [01-manifest-lock.md](01-manifest-lock.md) | `manifest.ss` / `manifest.lock` schema + 新 source kind(prebuilt) | 数据 |
+| [01-manifest-lock.md](01-manifest-lock.md) | `chandler-manifest.ss` / `manifest.lock` schema + 新 source kind(prebuilt) | 数据 |
 | [02-resolution.md](02-resolution.md) | 依赖解析:BFS 闭包 + 冲突裁决 + 多版本语义 | 数据 |
 | [03-central-repo.md](03-central-repo.md) | 中央仓库布局 + 混合 registry + 卸载/升级 | 数据 |
 | [04-install.md](04-install.md) | install 操作:从 git/prebuilt 到中央仓库 | 分发 |

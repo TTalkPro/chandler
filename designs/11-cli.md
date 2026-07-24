@@ -10,7 +10,7 @@
 
 | 命令 | 说明 | v2 变更 |
 |------|------|--------|
-| `init [--lib\|--app] [--name=N]` | 生成骨架 `manifest.ss` + `chandler-tasks.ss` | — |
+| `init [--lib\|--app] [--name=N]` | 生成骨架 `chandler-manifest.ss` + `chandler-tasks.ss` | — |
 | `add <name> <url> [--tag/--rev/--branch/--path]` | 添加 git 依赖 | — |
 | `add <name> --prebuilt <url> [--mt <mt>]` | 添加 prebuilt 依赖 | **v2 新增** |
 | `remove <name>` | 移除依赖 | — |
@@ -39,7 +39,7 @@
 chandler init [--lib|--app] [--name=N]
 ```
 
-生成骨架 `manifest.ss`:
+生成骨架 `chandler-manifest.ss`:
 - `--lib`(默认):生成 lib manifest,无 `(app ...)` 字段
 - `--app`:生成 app manifest,含 `(app (entry ...))`
 - `--name=N`:项目名,默认取目录名
@@ -137,7 +137,7 @@ chandler pack --lib <name>
 | 0 | EX_OK | 成功 |
 | 64 | EX_USAGE | 参数错误(非法旗标、缺少必需参数) |
 | 65 | EX_DATAERR | manifest/lock 数据错误(格式错、校验失败) |
-| 66 | EX_NOINPUT | 文件不存在(manifest.ss、lock 等) |
+| 66 | EX_NOINPUT | 文件不存在(chandler-manifest.ss、lock 等) |
 | 70 | EX_SOFTWARE | internal error / install broken |
 | 73 | EX_CANTCREAT | 冲突,无法创建(目录冲突、文件已存在且 --force 未指定) |
 | 77 | EX_NOPERM | 权限不足(如 prebuilt native 未授权 `--allow-prebuilt-native`) |
@@ -162,7 +162,7 @@ CLI 帮助、错误消息一律**英文**。风格取 Unix 诊断惯例:**小写
 
 示例:
 ```
-manifest.ss not found; run `chandler init` first
+chandler-manifest.ss not found; run `chandler init` first
 invalid CHANDLER_RUNTIME (want: skiff|chez)
 no Scheme runtime found (install skiff or Chez Scheme)
 ```

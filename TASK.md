@@ -41,9 +41,9 @@ Phase 2 前置:Phase 1 全部完成 + 中央仓库设计重新评估实际需求
 
 ### 数据 schema
 
-- [ ] **T1.1** 扩展 `manifest.ss` schema:加 `(source (prebuilt ...))` 字段定义(仅定义,实现留 v2.4)
+- [ ] **T1.1** 扩展 `chandler-manifest.ss` schema:加 `(source (prebuilt ...))` 字段定义(仅定义,实现留 v2.4)
   - 关联:[01-manifest-lock §2.2 prebuilt source kind BNF](designs/01-manifest-lock.md)
-  - 文件:`chandler/manifest.ss`(reader)、`chandler/cli/commands.ss`(add 命令)
+  - 文件:`chandler/chandler-manifest.ss`(reader)、`chandler/cli/commands.ss`(add 命令)
 - [ ] **T1.2** 扩展 `manifest.lock` schema:加 `provenance` 字段(记录 git rev 或 prebuilt url+sha256)
   - 关联:[01-manifest-lock §3 lock schema](designs/01-manifest-lock.md)
   - 文件:`chandler/lock.ss`(`locked-dep` record 加字段、`lock->datum`/`datum->lock`)

@@ -185,7 +185,7 @@ client 不解释 URL 语义,只按 lock 里的确切 URL 下载。
 
 ## 11. 完整示例:prebuilt 消费(myapp 用 http prebuilt)
 
-### myapp 的 manifest.ss
+### myapp 的 chandler-manifest.ss
 
 ```scheme
 (manifest

@@ -12,7 +12,7 @@
 
 | 文件 | 处理方式 |
 |------|---------|
-| `manifest.ss` | `read` → datum → 校验 |
+| `chandler-manifest.ss` | `read` → datum → 校验 |
 | `manifest.lock` | `read` → datum → 校验 |
 | `registry.ss` | `read` → datum → 校验 |
 | `source.ss` | `read` → datum → 校验 |

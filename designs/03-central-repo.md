@@ -159,7 +159,7 @@ lazy 重建确保：即使 index 被误删，下次 read 时自动恢复。
 
 `chandler install` 将项目的依赖安装到中央仓库：
 
-1. 读取项目的 `manifest.ss`
+1. 读取项目的 `chandler-manifest.ss`
 2. 执行 resolve（见 design 02），生成 `manifest.lock`
 3. 对每个依赖：
    - **git source**：git clone/checkout + 本地编译
