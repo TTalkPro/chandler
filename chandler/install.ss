@@ -23,7 +23,7 @@
           vendor-dir lib-dir project-lock-path project-manifest-path
           library-search-dirs native-load-paths
           chandler-runtime-sublibs chandler-dev-only-rel?
-          installed-chandler-version copy-chandler-runtime!
+          copy-chandler-runtime!
           project-libdir project-lib-pair project-obj-dir
           global-prefix global-libdir path-dep-source-dirs
           project-mode? resolved-libdirs)
@@ -37,6 +37,7 @@
           (chandler lock)
           (chandler resolve)
           (chandler version)
+          (chandler registry)
           (chandler fetch))
 
   (define (project-manifest-path root) (join-paths root "manifest.ss"))
@@ -179,34 +180,27 @@
            (or (string-contains? stem "/")
                (not (memq (string->symbol stem) chandler-runtime-sublibs))))))
 
-  ;; 装在前缀里的 chandler 版本:读它自己的清单快照 <prefix>/.chandler/chandler/
-  ;; manifest.ss(bootstrap.ss 装时写)。取不到 → #f,由调用方给出「去装」的话。
-  (define (installed-chandler-version prefix)
-    (let ([mpath (join-paths prefix ".chandler" "chandler" "manifest.ss")])
-      (and (file-exists? mpath)
-           (ignore-errors (manifest-version (read-manifest mpath))))))
-
+  ;; 运行时门(2026-07-24 改为自引用):deps copy 的就是**正在跑的这个 chandler**,
+  ;; 故版本 = 进程内常量 `chandler-version`(不再读前缀里的 .chandler/chandler/manifest.ss
+  ;; 快照),校验是纯进程内一句;而它的代码在 `CHANDLER_HOME`(= chandler-home)。
   (define (install-chandler-runtime! root range)
-    (let* ([prefix (global-prefix)]
-           [have (installed-chandler-version prefix)])
-      (unless have
+    (unless (version-match? range chandler-version)
+      (error 'deps
+             (format "manifest requires chandler ~s, but the running chandler is ~a~%  (upgrade chandler, or relax the range in manifest.ss)"
+                     range chandler-version)))
+    ;; <home>/src/chandler/<sub>.ss → _vendor/chandler/chandler/<sub>.ss
+    ;; _vendor/ 是「依赖源码原样」那一层,chandler 也照此摆,故 verify/清理/阅读
+    ;; 三处都不必为它开特例。umbrella chandler.ss 不来:那是 dev facade
+    ;; (export activate…),应用要的是 (chandler base) 与各 runtime 子库。
+    (let* ([home (chandler-home)]
+           [src  (join-paths home "src" "chandler")]
+           [dst  (join-paths (vendor-dir root (quote chandler)) "chandler")])
+      (unless (file-directory? src)
         (error 'deps
-               (format "manifest requires chandler ~s, but no chandler is installed at ~a~%  (install it: scheme --script bootstrap.ss  in the chandler repo)"
-                       range prefix)))
-      (unless (version-match? range have)
-        (error 'deps
-               (format "manifest requires chandler ~s, but ~a has ~a~%  (upgrade the installed chandler, or relax the range in manifest.ss)"
-                       range prefix have)))
-      ;; <prefix>/src/chandler/<sub>.ss → vendor/chandler/chandler/<sub>.ss
-      ;; vendor/ 是「依赖源码原样」那一层,chandler 也照此摆,故 verify/清理/阅读
-      ;; 三处都不必为它开特例。umbrella chandler.ss 不来:那是 dev facade
-      ;; (export activate…),应用要的是 (chandler base) 与各 runtime 子库。
-      (let ([src (join-paths prefix "src" "chandler")]
-            [dst (join-paths (vendor-dir root (quote chandler)) "chandler")])
-        (unless (file-directory? src)
-          (error 'deps (format "~a is missing chandler's sources (reinstall chandler)" prefix)))
-        (rm-rf (vendor-dir root (quote chandler)))
-        (copy-runtime-subset! src dst ".ss"))))
+               (format "cannot locate chandler's own libraries at ~a~%  (set CHANDLER_HOME, or reinstall chandler with bootstrap.ss)"
+                       home)))
+      (rm-rf (vendor-dir root (quote chandler)))
+      (copy-runtime-subset! src dst ".ss")))
 
   ;; 已编译对象 → _vendor/chandler/_build/<mt>/chandler/ —— 与别的依赖同一形状,
   ;; 于是 dep-pair 不必为 chandler 开特例。源码由 install-chandler-runtime! 摆进
@@ -289,14 +283,15 @@
   (define (list-deps root) (sync-status root))
 
   ;; ── 库搜索路径(src/mt 拆分:lib/ 一对 (src . obj) + path 依赖源目录)──
-  ;; 全局安装前缀(bake user target 落点):~/.local/share/chez;下含 src/ 与 <mt>/。
-  ;; CHANDLER_PREFIX 覆盖(装到非默认位置、以及测试用);默认对齐 bake 的 user target。
-  (define (global-prefix)
-    (or (getenv* "CHANDLER_PREFIX") (string-append (home-dir) "/.local/share/chez")))
-  ;; 全局库目录条目:一对 (~/.local/share/chez/src . ~/.local/share/chez/<mt>)。
+  ;; 正在跑的 chandler 的库前缀 = CHANDLER_HOME(见 (chandler registry) chandler-home)。
+  ;; 读侧用它:deps 从这里 copy chandler runtime 进 _vendor、run/build 的全局兜底挂它。
+  ;; (2026-07-24:原 global-prefix 读 CHANDLER_PREFIX,已统一到 CHANDLER_HOME;
+  ;;  "安装落点"是另一回事,走 --user/--system,见 registry。)
+  (define (global-prefix) (chandler-home))
+  ;; 全局库目录条目:一对 (<home>/src . <home>/<mt>)。
   (define global-libdir
     (case-lambda
-      [() (split-pair (global-prefix))]))
+      [() (split-pair (chandler-home))]))
 
   ;; path 依赖的源目录(相对 root 拼成路径),供 live 挂载
   (define (path-dep-source-dirs root)

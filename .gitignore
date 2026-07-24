@@ -11,8 +11,9 @@
 *.wpo
 
 # Chandler 生成物
-/vendor/
-/lib/
+/_vendor/
+# bootstrap.ss --dev 的本地前缀(dist/{bin,chez})
+/dist/
 chandler-setup.ss
 .chandler-run.ss
 .chandler-repl.ss

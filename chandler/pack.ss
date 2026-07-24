@@ -847,10 +847,11 @@
                    (format "entry library ~a has no compiled object at ~a~%  (pass --entry '(<lib>)', or run `bake build` if it is simply not built)"
                            entry e))))
         ;; chandler 的 runtime 子集:它不是 lock 里的依赖(是运行时门,designs/12 §5),
-        ;; 故从**全局前缀**取那一份编译好的进包 —— 包必须自包含,不能指望目标机装了
-        ;; chandler。取的与 deps 阶段铺进 lib/ 的是同一个子集、同一个判据。
+        ;; 故 copy-dep-trees! 不管它。**从 `_vendor/chandler` 取**(deps 已把编译好的
+        ;; 子集铺在那)—— 包必须自包含,不能指望目标机装了 chandler。deps 铺时已过
+        ;; dev-only 滤,这里原样搬。
         (when (and mf (manifest-chandler mf))
-          (copy-chandler-into-pack! objdir (manifest-chandler mf)))
+          (copy-chandler-into-pack! project objdir (manifest-chandler mf)))
         ;; 2) src/resources/<app>/(应用数据)+ src/resources/<dep>/(依赖库资源,M2)
         ;;    + .chandler/<app>/manifest.ss(清单快照)—— 三者都与全局安装前缀同构
         (copy-resources! project root name)
@@ -883,28 +884,25 @@
         (printf "packed ~a ~a -> ~a~%" name version root)
         0)))
 
-  ;; <prefix>/<mt>/chandler/<sub>.so → <pack>/<mt>/chandler/<sub>.so(只 runtime 子集;
-  ;; umbrella chandler.so 是 dev facade,不进)。前缀里没有或版本不合区间即当场停:
-  ;; 这类缺失到启动才暴露的话,报的是 `library (chandler runtime-paths) not found`。
-  (define (copy-chandler-into-pack! objdir range)
-    (let* ([prefix (global-prefix)]
-           [have (installed-chandler-version prefix)]
-           [from (join-paths prefix (current-machine-type) "chandler")])
-      (unless have
-        (error 'pack (format "manifest requires chandler ~s but none is installed at ~a" range prefix)))
-      (unless (version-match? range have)
-        (error 'pack (format "manifest requires chandler ~s, but ~a has ~a" range prefix have)))
+  ;; _vendor/chandler/_build/<mt>/chandler/<sub>.so → <pack>/<mt>/chandler/<sub>.so。
+  ;; **来源改 _vendor**(2026-07-24):deps 已把编译好的 runtime 子集(dev-only 已滤)
+  ;; 铺在那,pack 原样搬 —— 不再读全局前缀。版本门用进程内常量,不再读快照。
+  (define (copy-chandler-into-pack! project objdir range)
+    (unless (version-match? range chandler-version)
+      (error 'pack
+             (format "manifest requires chandler ~s, but the running chandler is ~a"
+                     range chandler-version)))
+    (let ([from (join-paths project "_vendor" "chandler" "_build"
+                            (current-machine-type) "chandler")])
       (unless (file-directory? from)
         (error 'pack
-               (format "~a has no compiled chandler objects (reinstall chandler so <prefix>/~a/chandler/ exists)"
-                       prefix (current-machine-type))))
+               (format "chandler runtime not vendored at ~a~%  (run `chandler deps` — the (chandler …) gate copies it there)"
+                       from)))
       (let ([n 0])
         (for-each
           (lambda (e)
             (let ([p (join-paths from e)])
-              (when (and (not (file-directory? p))
-                         (string-suffix? ".so" e)
-                         (not (chandler-dev-only-rel? (string-append "chandler/" e))))
+              (when (and (not (file-directory? p)) (string-suffix? ".so" e))
                 (let ([dst (join-paths objdir "chandler" e)])
                   (ensure-parent dst) (copy-file p dst) (set! n (+ n 1))))))
           (dir-entries from))

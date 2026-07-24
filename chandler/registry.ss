@@ -11,7 +11,7 @@
 ;;; 路径已含 src//<mt>/ 前缀,故冲突检测/卸载/doctor 逻辑不变,只是相对路径带了命名空间。
 
 (library (chandler registry)
-  (export default-user-libdir default-system-libdir
+  (export default-user-libdir default-system-libdir chandler-home
           install-global uninstall-global list-global doctor-global
           registry-dir registry-file installed-files)
   (import (chezscheme)
@@ -21,9 +21,33 @@
           (chandler sexp)
           (chandler hash))
 
-  ;; 库前缀(下含 src/ 与 <mt>/);与 bake install 的 user/global target 落点一致(不走 XDG,对齐 bake)。
-  (define (default-user-libdir) (string-append (home-dir) "/.local/share/chez"))
-  (define (default-system-libdir) "/usr/local/share/chez")
+  ;; ── 库前缀(下含 src/ 与 <mt>/)──
+  ;;
+  ;; **两个用户前缀,平台感知**(2026-07-24):
+  ;;   --user   POSIX ~/.local/share/chez        Windows %LOCALAPPDATA%\chez
+  ;;   --system POSIX /usr/local/share/chez      Windows %ProgramData%\chez
+  ;; 这是 install/uninstall/doctor 的**落点**(由 --user/--system 旗标选,默认 --user)。
+  (define (win?) (windows-mt? (current-machine-type)))
+
+  (define (default-user-libdir)
+    (if (win?)
+        (join-paths (or (getenv* "LOCALAPPDATA") (home-dir)) "chez")
+        (string-append (home-dir) "/.local/share/chez")))
+
+  (define (default-system-libdir)
+    (if (win?)
+        (join-paths (or (getenv* "ProgramData") "C:/ProgramData") "chez")
+        "/usr/local/share/chez"))
+
+  ;; ── CHANDLER_HOME:正在跑的 chandler 自己的库前缀(src/mt 布局)──
+  ;;
+  ;; 由启动器设(装好的 = 装的前缀;bootstrap --dev = <repo>/dist/chez)。**读侧**用它:
+  ;; deps 从这里 copy chandler runtime 子集进 _vendor、run/build 的全局兜底挂它。
+  ;; 未设 → 默认 --user 前缀(即"我大概装在用户位置")。
+  ;; 与"安装落点"(--user/--system 旗标)是**两回事**:常见情形重合,--system 装 / dev
+  ;; 前缀时不重合。故这里不看旗标,只认 CHANDLER_HOME 或 --user 默认。
+  (define (chandler-home)
+    (or (getenv* "CHANDLER_HOME") (default-user-libdir)))
 
   (define (registry-dir libdir) (join-paths libdir ".chandler/registry"))
   (define (registry-file libdir name) (join-paths (registry-dir libdir) (string-append name ".ss")))

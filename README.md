@@ -30,7 +30,7 @@
 ```sh
 git clone <this-repo> chandler && cd chandler
 scheme --script bootstrap.sh               # chandler 铺库 → ~/.local/share/chez/{src,<mt>};启动器 → ~/.local/bin/chandler
-skiff --script bootstrap.sh --global        # 装到 /usr/local(需 root)
+skiff --script bootstrap.sh --system        # 装到 /usr/local(需 root)
 
 export PATH="$HOME/.local/bin:$PATH"        # 若尚未在 PATH 上(脚本会提示这行)
 chandler --version                          # → chandler 0.1.4 (skiff 0.1.2) (chez 10.4.1)
@@ -41,14 +41,14 @@ chandler --version                          # → chandler 0.1.4 (skiff 0.1.2) (
 ```powershell
 git clone <this-repo> chandler; cd chandler
 scheme --script bootstrap.sh                 # 启动器 → %USERPROFILE%\.local\bin\chandler.ps1
-scheme --script bootstrap.sh --global        # 系统级(需管理员)
+scheme --script bootstrap.sh --system        # 系统级(需管理员)
 
 $env:PATH = "$HOME\.local\bin;$env:PATH"
 chandler --version
 ```
 
 > `bootstrap.ss` 是自包含安装器(纯 `(chezscheme)`,零 chandler 依赖):铺源码 + 编译产物 + 写运行时发现启动器。
-> 用法:`scheme --script bootstrap.ss [--global] [--force] [--uninstall]`。用户通过调用方式选择运行时(`scheme` vs `skiff`)。
+> 用法:`scheme --script bootstrap.ss [--user|--system|--dev] [--force] [--uninstall]`。`--user`(默认)装 `~/.local`;`--system` 装 `/usr/local`;`--dev` 装进仓库 `./dist/`(开发用)。用户通过调用方式选择运行时(`scheme` vs `skiff`)。
 >
 > 若 PowerShell 报「running scripts is disabled」,是执行策略为 Restricted,二选一:
 > `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`(一次性),或
@@ -157,9 +157,9 @@ chandler run --script main.ss [args...]
 | `run <script.ss> [args…]` | 激活环境后跑脚本 |
 | `exec -- <cmd…>` | 设 `CHEZSCHEMELIBDIRS` 后跑命令 |
 | `repl [--runtime skiff\|chez]` | 交互 shell,自动挂库路径:**项目有 lock+依赖 → 项目 `lib/`(最高优先)+ 全局兜底;否则 → 全局** |
-| `install --global[=dir]` | 装当前项目库到全局 libdir(注册表事务) |
-| `uninstall --global --name=<n>` | 据文件清单干净卸载 |
-| `list --global` / `doctor --global` | 列出/体检全局已装包 |
+| `install [--user\|--system]` | 装当前项目库 + 依赖到全局前缀(`--user` 默认 `~/.local/share/chez`;`--system` = `/usr/local/share/chez`。注册表事务) |
+| `uninstall --name=<n>` | 据文件清单干净卸载 |
+| `list --global` / `doctor` | 列出/体检全局已装包 |
 | `pack [--runtime r] [--out dir]` | 组装自包含分发包 |
 
 全局旗标:`-C <dir>` `--offline` `--production` `--force` `--keep-extra` `--verbose`。
@@ -170,7 +170,8 @@ chandler run --script main.ss [args...]
 
 | 变量 | 作用 |
 |------|------|
-| `CHANDLER_RUNTIME=skiff\|chez` | 选**哪一种**;非法值报错(退出码 64),不静默忽略 |
+| `CHANDLER_HOME=<dir>` | chandler 装在哪(前缀,src/mt);deps 从这里 copy chandler runtime、全局兜底挂它。启动器自动设,一般不用管 |
+| `CHANDLER_RUNTIME=skiff\|chez` | 选**哪一种**运行时,默认 skiff;非法值报错(退出码 64),不静默忽略 |
 | `CHANDLER_SKIFF=<exe>` | skiff 的可执行文件(名或路径) |
 | `CHANDLER_SCHEME=<exe>` | Chez 的可执行文件(名或路径) |
 | `CHANDLER_BAKE=<exe>` | bake 的可执行文件(build 委托它编译;install 不需要) |
@@ -178,7 +179,7 @@ chandler run --script main.ss [args...]
 **优先级**(`run` / `exec` / `repl`、**启动器**、**安装脚本**共用一套):
 
 ```
---runtime 旗标  >  CHANDLER_RUNTIME  >  manifest 声明(仅 (skiff …) → skiff)  >  默认
+--runtime 旗标  >  CHANDLER_RUNTIME  >  manifest(明确 chez-only→chez / skiff-only→skiff)  >  默认:跟随 chandler 当前所在(启动器 skiff 优先,故默认 skiff)
 ```
 
 ```sh

@@ -538,6 +538,23 @@ $APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
 - `install --global` 的落点走 `default-user-libdir`(读 `HOME`),而 chandler 运行时门走 `global-prefix`(读 `CHANDLER_PREFIX`)—— 两个「全局前缀」概念不统一,`CHANDLER_PREFIX` 对 `install --global` 无效(验证时误装进真实 `~/.local/share/chez`,已清)。
 - `uninstall --global` 只按注册表删**项目自己**的文件,merge 进去的依赖(`b`)留下 —— 全局 install 记账不含 merged deps。
 
+**CHANDLER_HOME 统一重构(2026-07-24,4 步全落地)**:把「三个前缀来源 + CHANDLER_PREFIX/CHANDLER_SRC」塌成两个变量。
+
+- **`CHANDLER_HOME`**(替代 `CHANDLER_PREFIX`):正在跑的 chandler 的库前缀(src/mt)。启动器 bake 进(installed=装的前缀、`--dev`=`dist/chez`)。**读侧**用它:deps 从这里 copy chandler runtime 进 `_vendor`、run/build 全局兜底挂它。定义收敛到 `(chandler registry)` 的 `chandler-home`,`install.ss` 的 `global-prefix`/`global-libdir` 委托它。
+- **`--user`(默认)/`--system`**(替代 `--prefix`/`--global`):install/uninstall/doctor 的**落点**,平台感知(`--user` POSIX `~/.local/share/chez` / Windows `%LOCALAPPDATA%\chez`;`--system` `/usr/local/share/chez` / `%ProgramData%\chez`)。bootstrap 同步(`--user`/`--system`/`--dev`,`--global` 留弃用别名)。
+- **deps 自引用**:运行时门版本校验改用进程内 `chandler-version` 常量(不读 `.chandler/chandler/manifest.ss` 快照);chandler runtime 从 `CHANDLER_HOME` copy 进 `_vendor/chandler`。**pack 从 `_vendor/chandler` 取**(deps 已铺,dev-only 已滤),不再读全局前缀。
+- **`CHANDLER_SRC` 删**(死变量,无人读);`CHANDLER_RUNTIME` 默认 **skiff**(`interp-kind` 兜底 = `current-runtime`,而启动器 skiff 优先、无 skiff 回退 chez,故"当前所在"天然就是"能 skiff 就 skiff,否则 chez";`bin/chandler` 也加读 `CHANDLER_RUNTIME`)。
+
+**验证过程揪出一条关键不变量(非代码 bug,是使用约束)**:进程内编译时,**做构建的 chandler 必须从 `CHANDLER_HOME` 加载**——否则它已加载的 `(chandler runtime-paths)` 实例与 `CHANDLER_HOME` 磁盘对象 UID 不符,app 链到前者,打出的包一启动就报 `different compilation instance`。installed 启动器与 `dist/bin/chandler` 天然满足(CHANDLER_HOME = 它加载 chandler 的地方);`./bin/chandler`(平铺仓库)**不满足**,故只用于跑 CLI / 开发 chandler 自身,构建依赖 chandler 的 app 要用装好的 chandler 或 `dist/bin/chandler`(已在 `bin/chandler` 头注写明)。
+
+**验证**:三运行时 **360/360**。端到端(`dist/bin/chandler`,即"运行 chandler = CHANDLER_HOME"的正确流,PATH 无 bake):`bootstrap --dev` 造 `dist/chez` → 一个声明 `(chandler …)` 门 + 用 `resource-path` 的 app:`deps`(自引用从 `CHANDLER_HOME` copy chandler 进 `_vendor/chandler`)→ `build` → 只挂对象侧加载成功 → `pack`(chandler 来自 `_vendor`)→ `env -i` clean-env 起进程读出资源、整包搬走仍读到、`verify-pack` 17 ok/0 bad/0 extra。skiff-demo 全链路同样跑通:clean-env 服务 `/` `/hello` 均 200、`verify-pack` 131 ok/0 bad/0 extra。
+
+**`bootstrap.ss --dev`(2026-07-24)**:新增 `--dev` 旗标,在**仓库自己目录下**产一个本地前缀 `<repo>/dist/{bin,chez}` —— 结构与真安装(`~/.local/share/chez` + `~/.local/bin`)**逐层同构**,只是路径本地、更扁平。`dist/chez` 是从**工作副本** build 出来的真 src/mt 前缀(`src/chandler` + `<mt>/chandler` + `.chandler`),`dist/bin/chandler` 是真启动器(`CHANDLER_PREFIX` 绝对化指向 `dist/chez`)。
+
+**意义**(这是 `CHANDLER_HOME` 统一重构的地基):它让 **dev 也产出一个 src/mt 前缀**,于是 deps/pack/运行时门在 dev 与安装态**一套代码通吃** —— 消灭了「dev 是平铺布局、装好的是 src/mt」这个一直卡着的特例;且 dev 下 `dist/chez` 从工作副本编出,改了 rebuild 即生效(不是 copy 到装好的旧版)。开发 chandler 自身:`chandler bake && scheme --script bootstrap.ss --dev`,再 `dist/bin/chandler <cmd>` 测。`--dev`/`--global` 互斥(64);`--uninstall --dev` 整个端掉 `dist/`(零残留);`/dist/` 入 `.gitignore`。实测:改坏仓库源码后 `dist/bin/chandler` 不受影响,证明它从 `dist/chez` 加载而非平铺仓库。
+
+**CLI 旗标清理:删掉三处没用的 `--global`(2026-07-24)**:`--global` 对 `install`/`uninstall`/`doctor` 全是摆设 —— 这三个命令**本就是全局操作**,没有「本地 vs 全局」可选。① `install` 裸 `--global` 从不被读,唯一有用的目录覆盖 `--global=DIR` 改名为语义正确的 **`--prefix=DIR`**(该旗标早已在 args.ss 声明却无人用);② `uninstall` 原**强制** `--global`(不传报 "only --global is supported"),纯属找茬,去掉;③ `doctor` 代码里根本没读 `--global`,帮助却写着,删掉。`--global` 现在只留给它真正有意义的 `deps`(`deps --global` 从「本地 vendor」转「全局安装」)与 `deps --list --global`。落点覆盖统一走 `--prefix=DIR` / `--system`(`target-libdir`)。help + README 同步。三运行时 360/360。
+
 **文件约定改名(2026-07-24)**:项目构建描述文件 `recipe.ss`(bake 的烘焙术语)→ **`chandler-tasks.ss`**,与数据文件 `manifest.ss` 配对。默认名收敛成 `(chandler recipe)` 导出的常量 `default-tasks-file`(先前硬编码 3 处);`chandler bake` 的 `--recipe` 长旗标 → `--file`(旧名保留作向后兼容别名),`-f` 不变;错误/帮助措辞 `recipe file` → `tasks file`。仓库根自己的 `recipe.ss` 一并改名 + 头注重写。库名 `(chandler recipe)` 与函数 `load-recipe` 保留作内部概念名(改动纯内部,无用户可见收益)。skiff-demo 无此文件(已删 recipe.ss),不受影响。三运行时 360/360;`chandler bake -T/build` 实测读新名正常,旧名报 `tasks file not found`。
 
 **C3 实现期决定(2026-07-24,规格由用户逐条拍板 —— design 14 不存在)**:

@@ -1,12 +1,21 @@
 #!/bin/sh
 # chandler — 开发期入口 wrapper(运行时发现:skiff 优先,其次 Chez scheme)。
 # 定位仓库根(bin/..),加进库搜索路径,跑 CLI 程序。
-# 安装后由 `chandler install-self` 生成的启动器接管(见 chandler/cli/selfinstall.ss)。
+#
+# **仅用于:开发 chandler 自身 / 快速从源码跑 CLI。** 它从**平铺的仓库**加载 chandler
+# (非 src/mt 前缀),故与 CHANDLER_HOME(装好的前缀)不是同一份对象。构建**依赖
+# chandler 的 app**(用 (chandler runtime-paths) 等)时**别用它** —— 进程内编译会把 app
+# 链到本进程已加载的 chandler 实例,与 CHANDLER_HOME 的磁盘对象 UID 不符,打出的包一
+# 启动就报「different compilation instance」。那种情形用**装好的 chandler**,或
+# `chandler bake && scheme --script bootstrap.ss --dev` 后的 `dist/bin/chandler`
+# (它从 dist/chez 加载,与 CHANDLER_HOME 一致)。
 set -eu
 
+# 从**平铺的仓库源码**跑 CLI(dev-from-source,免 build)。这是开发便利,不是安装。
+# 不设 CHANDLER_HOME —— 它指"装好的 src/mt 前缀",而这里是平铺仓库,两码事;
+# 经此跑的 deps 会用装好的 chandler(默认 ~/.local)。想让工作副本喂进下游 _vendor,
+# 走真前缀:`chandler bake && scheme --script bootstrap.ss --dev`,再用 dist/bin/chandler。
 here=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-libroot=${CHANDLER_HOME:-$here}
-export CHANDLER_SRC="$here"
 
 # 能否运行 R6RS 程序?(跳过只会打印 demo 的早期 skiff stub;Chez 各名已知可用)
 _prog_ok() {
@@ -14,15 +23,27 @@ _prog_ok() {
     | "$1" -q --program /dev/stdin 2>/dev/null | grep -q CHANDLER_RT_OK
 }
 
-for rt in "${CHANDLER_SCHEME:-}" skiff scheme chez chez-scheme chezscheme; do
+# 运行时选择,与生成的启动器同一套(designs/06):CHANDLER_RUNTIME 选"哪一种"
+# (默认 skiff 优先、无 skiff 回退 chez),CHANDLER_SKIFF/CHANDLER_SCHEME 选"哪个 exe"。
+# 显式(skiff|chez)照单执行找不到即 127;默认时对非 Chez 候选做能力探测。
+case "${CHANDLER_RUNTIME:-}" in
+  skiff) cands="${CHANDLER_SKIFF:-skiff}"; forced=1 ;;
+  chez)  cands="${CHANDLER_SCHEME:-scheme chez chez-scheme chezscheme}"; forced=1 ;;
+  "")    cands="${CHANDLER_SKIFF:-skiff} ${CHANDLER_SCHEME:-} scheme chez chez-scheme chezscheme"; forced=0 ;;
+  *) echo "chandler: invalid CHANDLER_RUNTIME=$CHANDLER_RUNTIME (want: skiff | chez)" 1>&2; exit 64 ;;
+esac
+
+for rt in $cands; do
   [ -n "$rt" ] || continue
   command -v "$rt" >/dev/null 2>&1 || continue
-  case "$rt" in
-    scheme|chez|chez-scheme|chezscheme) : ;;      # Chez 变体:直接用
-    *) _prog_ok "$rt" || continue ;;              # 其它(skiff 等):须通过能力探测
-  esac
-  exec "$rt" -q --libdirs "$libroot" \
-    --program "$libroot/chandler/cli/main.sps" "$@"
+  if [ "$forced" -eq 0 ]; then
+    case "$rt" in
+      scheme|chez|chez-scheme|chezscheme) : ;;    # Chez 变体:直接用
+      *) _prog_ok "$rt" || continue ;;            # 其它(skiff 等):须通过能力探测
+    esac
+  fi
+  exec "$rt" -q --libdirs "$here" \
+    --program "$here/chandler/cli/main.sps" "$@"
 done
 
 echo "chandler: 未找到可运行程序的 Scheme 运行时(需 skiff 或 Chez Scheme)。" 1>&2

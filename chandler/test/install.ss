@@ -37,11 +37,11 @@
 
   ;; Chez 的 putenv 不能删变量,清理时以空值恢复
   (define (with-chandler-prefix prefix thunk)
-    (let ([old (getenv "CHANDLER_PREFIX")])
+    (let ([old (getenv "CHANDLER_HOME")])
       (dynamic-wind
-        (lambda () (putenv "CHANDLER_PREFIX" prefix))
+        (lambda () (putenv "CHANDLER_HOME" prefix))
         thunk
-        (lambda () (putenv "CHANDLER_PREFIX" (or old ""))))))
+        (lambda () (putenv "CHANDLER_HOME" (or old ""))))))
 
 
   (define-suite suite
@@ -209,13 +209,13 @@
       (let* ([root (mktmp)]
              [prefix (mktmp)]
              [pobj (join-paths prefix (current-machine-type))]
-             [old (getenv "CHANDLER_PREFIX")])
+             [old (getenv "CHANDLER_HOME")])
         (write-text (join-paths root "_build" (current-machine-type) "b" "native" "b.so") "SO")
         (write-text (join-paths pobj "g" "native" "g.so") "SO")
         (write-text (join-paths pobj "h" "native-loader.so") "LOADER")
         (write-text (join-paths pobj "h" "native" "h.so") "SO")
         (dynamic-wind
-          (lambda () (putenv "CHANDLER_PREFIX" prefix))
+          (lambda () (putenv "CHANDLER_HOME" prefix))
           (lambda ()
             (let ([paths (native-load-paths root)])
               (assert-equal 2 (length paths))
@@ -223,7 +223,7 @@
               (assert-true  (find (lambda (p) (substr? p "/g/native/g.so")) paths))
               (assert-false (find (lambda (p) (substr? p "/h/native/h.so")) paths))))
           (lambda ()
-            (putenv "CHANDLER_PREFIX" (or old ""))
+            (putenv "CHANDLER_HOME" (or old ""))
             (rm-rf root) (rm-rf prefix)))))
 
     (lock-reused-when-fresh

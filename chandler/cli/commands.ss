@@ -239,11 +239,11 @@
                     (files-under src-dir))))))
           resources))))
 
+  ;; uninstall 只操作全局前缀(无本地卸载一说),故不再强制 --global —— 直接卸载。
   (define (cmd-uninstall-global root flags)
-    (unless (flag? flags 'global) (error 'uninstall "only --global is supported"))
     (let ([libdir (target-libdir flags)]
           [name (flag flags 'name)])
-      (unless name (error 'uninstall "usage: chandler uninstall --global --name=<name>"))
+      (unless name (error 'uninstall "usage: chandler uninstall --name=<name> [--prefix=DIR|--system]"))
       (uninstall-global name libdir (list (cons 'keep-modified (flag? flags 'keep-modified))))
       (printf "uninstalled ~a~%" name)
       0))
@@ -258,11 +258,13 @@
             (fprintf (current-error-port) "doctor: ~a issue(s) found~%" (length issues))
             65))))
 
+  ;; install/uninstall/doctor 的**安装落点**:`--user`(默认)/ `--system`。
+  ;;   --user   → ~/.local/share/chez(POSIX)/ %LOCALAPPDATA%\chez(Windows)
+  ;;   --system → /usr/local/share/chez(POSIX)/ %ProgramData%\chez(Windows)
+  ;; 就这两个,别的都没有 —— 装别处改不了旗标,那不是设计目标(2026-07-24)。
+  ;; 注意:这是"装到哪",与 CHANDLER_HOME("我从哪跑")是两回事,常见情形重合。
   (define (target-libdir flags)
-    (cond
-      [(flag? flags 'system) (default-system-libdir)]
-      [(and (string? (flag flags 'global))) (flag flags 'global)]  ; --global=dir
-      [else (default-user-libdir)]))
+    (if (flag? flags 'system) (default-system-libdir) (default-user-libdir)))
 
   ;; ISO-ish 时间戳(installed-at,纯记录)
   (define (now-iso)
@@ -464,14 +466,8 @@
                         (list (cons 'env (env-with-dotenv root flags (app-root-env root))))))))
 
   ;; 运行时:--runtime > CHANDLER_RUNTIME > manifest 声明 skiff-only > 跟随 chandler 当前所在
-  (define (repl-interp root flags)
-    ;; 同 choose-interp 的优先级,末位再兜一层「跟随 chandler 当前所在运行时」
-    (cond
-      [(eq? 'skiff (interp-kind root flags)) (skiff-exe)]
-      [(flag flags 'runtime)                 (chez-exe)]   ; 显式 --runtime chez
-      [(preferred-runtime)                   (chez-exe)]   ; 显式 CHANDLER_RUNTIME=chez
-      [(eq? 'skiff (current-runtime))        (skiff-exe)]
-      [else                                  (chez-exe)]))
+  ;; repl 与 run/exec 同一套(interp-kind 已把"跟随当前运行时"的兜底内置进默认分支)。
+  (define (repl-interp root flags) (choose-interp root flags))
 
   ;; native 预载 preamble(仅项目有 native 时):加载各 .so 后落入 REPL
   (define (make-repl-preamble root natives)
@@ -495,18 +491,29 @@
   (define (skiff-exe) (or (getenv* "CHANDLER_SKIFF") "skiff"))
   (define (chez-exe)  (or (getenv* "CHANDLER_SCHEME") "scheme"))
 
+  ;; 选运行时**种类**(designs/06 §3)。优先级(run/exec/repl/启动器一致):
+  ;;   --runtime > CHANDLER_RUNTIME > manifest(明确 chez-only→chez / skiff-only→skiff)
+  ;;   > 默认:跟随 chandler 当前所在运行时
+  ;;
+  ;; **默认 skiff 就落在最后一条**:chandler 的启动器已 skiff 优先、无 skiff 才回退
+  ;; chez,故"当前所在"天然就是"能用 skiff 就 skiff、否则 chez"——不用再单独探测
+  ;; 可用性,也就不会"默认成一个没装的 skiff 然后 127"。**显式**(--runtime /
+  ;; CHANDLER_RUNTIME / skiff-only manifest)则照单执行,找不到即 127,不回退。
   (define (interp-kind root flags)
     (let ([rt (flag flags 'runtime)])
       (cond
         [(equal? rt "skiff") 'skiff]
         [(equal? rt "chez") 'chez]
         [(preferred-runtime)]                          ; CHANDLER_RUNTIME=skiff|chez
-        [else                                          ; 依 manifest:仅 skiff → skiff
+        [else
          (let ([mpath (join-paths root "manifest.ss")])
            (if (file-exists? mpath)
                (let ([mf (read-manifest mpath)])
-                 (if (and (manifest-skiff mf) (not (manifest-chez mf))) 'skiff 'chez))
-               'chez))])))
+                 (cond
+                   [(and (manifest-chez mf) (not (manifest-skiff mf))) 'chez]   ; 明确 chez-only
+                   [(and (manifest-skiff mf) (not (manifest-chez mf))) 'skiff]  ; 明确 skiff-only
+                   [else (current-runtime)]))           ; 双跑 / 未声明 → 跟随当前(默认 skiff)
+               (current-runtime)))])))                  ; 无 manifest → 跟随当前
 
   ;; 生成 preamble 临时脚本:先 load 各 native,再 load 目标脚本
   (define (make-preamble root natives script-abs)
