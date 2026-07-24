@@ -7,6 +7,7 @@
           (chandler util)
           (chandler runtime-detector)
           (chandler cli args)
+          (chandler cli bake)
           (chandler cli commands))
 
   (define chandler-cli-version chandler-version)
@@ -18,9 +19,14 @@
         (with-exception-handler
           (lambda (e) (return (report-error e)))
           (lambda ()
-            (let-values ([(sub pos flags rest) (parse-args argv)])
-              (let ([root (or (flag flags 'C) (current-directory))])
-                (dispatch sub pos flags rest root))))))))
+            ;; `chandler bake …` 自带一套 argv 语法(短旗标带值:-f path / -j N),
+            ;; 与 chandler 的解析器不兼容(它把未知短旗标当布尔,-j 4 会拆成
+            ;; 「布尔 -j」+「位置参数 4」)。故在解析**之前**原样转交子 CLI。
+            (if (and (pair? argv) (string=? (car argv) "bake"))
+                (bake-main (cdr argv))
+                (let-values ([(sub pos flags rest) (parse-args argv)])
+                  (let ([root (or (flag flags 'C) (current-directory))])
+                    (dispatch sub pos flags rest root)))))))))
 
   (define (dispatch sub pos flags rest root)
     (cond
@@ -81,7 +87,7 @@
     (printf " (chez ~a)~%" (chez-version-string)))
 
   (define (list-tasks)
-    (printf "commands: init add remove install update build pack verify verify-pack list tree run exec repl version~%"))
+    (printf "commands: init add remove install update build bake pack verify verify-pack list tree run exec repl version~%"))
 
   (define (usage)
     (printf "chandler -- git-first library manager for Chez Scheme (Skiff ecosystem)~%~%")
@@ -94,6 +100,8 @@
     (printf "                               (--update forces re-resolve; --list/--tree show deps)~%")
     (printf "  install [--global]           install lib + deps to ~~/.local/share/chez (global)~%")
     (printf "  build [--allow-build[=a,b]]  compile deps + project to lib/<mt>/~%")
+    (printf "  bake [-f R] [-T|-P|-n|-c]    run tasks from a recipe.ss (task runner;~%")
+    (printf "                               `chandler bake --help` for its own options)~%")
     (printf "  run --script <s.ss> [args]   run a script with the dependency environment~%")
     (printf "  env                          output export CHEZSCHEMELIBDIRS=... (eval it)~%")
     (printf "  repl [--runtime skiff|chez]  interactive shell with library paths mounted~%")
@@ -106,5 +114,4 @@
     (printf "  CHANDLER_RUNTIME=skiff|chez  pick WHICH runtime (run/exec/repl and the~%")
     (printf "                               launcher); --runtime overrides it~%")
     (printf "  CHANDLER_SKIFF=<exe>         which skiff executable (name or path)~%")
-    (printf "  CHANDLER_SCHEME=<exe>        which Chez executable (name or path)~%")
-    (printf "  CHANDLER_BAKE=<exe>          which bake executable (build delegates to it)~%")))
+    (printf "  CHANDLER_SCHEME=<exe>        which Chez executable (name or path)~%")))

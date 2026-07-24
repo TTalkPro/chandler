@@ -362,7 +362,7 @@ $APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
 | B5 | `native`(427) → `(chandler native-build)`;注册 `current-native-prescan`;native(script/make/cmake)端到端(miniregex 已于 B2 完成) | ✅ 已完成 | `chandler/native-build.ss`(新) |
 | B6a | **`chandler build` 改进程内编译**(不再 spawn bake);`chandler deps/build/run` 在无 bake 的环境全通 | ✅ 已完成 | `chandler/build.ss`、`chandler/cli/commands.ss` |
 | B6b | **`recipe.ss` 变可选**:没有它就从 manifest 推导构建((name)/(srcdir)/(native …)) | ✅ 已完成 | `chandler/build.ss` |
-| B6c | bake CLI 表面合入(`cli` 235 + `init` 113:`-T/-P/-j/-n/-c/-f/--trace`、`bake init` 脚手架);保留 `chandler bake` 别名 | 🔲 待实现 | `chandler/cli/{args,commands,main}.ss` |
+| B6c | bake CLI 表面合入:`chandler bake [-f/-T/-A/-P/-j/-n/-c/-q/-t]`(自带 argv 语法);`bake init` **不搬** | ✅ 已完成 | `chandler/cli/bake.ss`(新)、`chandler/cli/main.ss` |
 | B7 | 删除 bake 仓;统一一套 bootstrap + 启动器;skiff-demo 端到端 | 🔲 待实现 | 删 `/home/david/workspace/bake`;`bootstrap.ss` |
 
 **执行约定(2026-07-24)**:阶段 B **只从 bake 仓读取搬运,不改 bake 仓** —— 能力吸收完即 B7 删仓,给作废物打补丁是纯浪费。故 A2 记的「bake 侧保守删改」到此为止,不再有 bake 侧改动。
@@ -417,6 +417,17 @@ $APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
 - **chandler 编译自己**:仓库副本 + 无 bake 的 PATH → `chandler build` 出 17 个 `.so`,再用这批产物作对象根跑全套测试 **317/317**。
 
 **顺带发现(非本阶段引入,未修)**:branch 依赖在**没有 lock** 时仍可能命中陈旧的 git 镜像缓存 —— 上游 `main` 已经有新提交,`chandler deps` 却物化出旧内容,清掉 `~/.cache/chandler` 后才对。`resolve-branch` 的「尽量走缓存零网络」对 tag/rev 成立,对 branch 不成立(分支会移动)。
+
+**B6c 实现期决定(2026-07-24)**:
+
+1. **`chandler bake` 自带一套 argv 语法**,在 `parse-args` **之前**由 `main` 原样转交 —— bake 的短旗标带值(`-f path` / `-j N`),而 chandler 的解析器把未知短旗标一律当布尔,`-j 4` 会被拆成「布尔 `-j`」+「位置参数 `4`」。子 CLI 自己解析自己的语法,有回归用例钉住。
+2. **选项不再是一堆全局 `set!`**(bake 那份是 20 个 `*opts-*` 全局变量),改成解析成 alist 传递;运行期状态仍走 task-engine 的 parameter。
+3. **去掉三项**(都已无对应物):`--bootstrap`(bake 把自己 17 个模块编成 `bake-all.so`,§18f 整段未搬)、`-B`(bake 自己就只打一句 "ignored in this version")、`--name/--lib/--force`(是 `bake init` 的选项)。
+4. **`bake init`(113 行)不搬** —— 脚手架归 `chandler init`,且 `recipe.ss` 自 B6b 起是可选的,再来一套 init 只会制造 §2 说的那种「同一件事各说一遍」的重复。
+5. **`-T` 恒列默认任务**(bake 那份只列有描述的)—— `library-task` 注册的 `'build` 没有描述,于是 bake 的 `-T` 偏偏漏掉最该看见的那一个。
+6. `CHANDLER_BAKE` 从帮助里删除(B6a 起无人消费)。
+
+**验证**:三运行时 **333/333 全绿**(新增 cli-bake 15 用例)。CLI 实跑(**PATH 无 bake**):`chandler bake --help/-T/-P/-n/-c` 正常;`chandler bake -j 4` 在仓库副本上跑出波前 level 0–7、17 个 `.so`,再跑一次零重编,`-c` 清掉 18 项。退出码:未知选项 64、缺 recipe 2、未知任务 1、正常 0。
 
 **B5 实现期决定(2026-07-24)**:
 
