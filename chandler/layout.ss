@@ -16,7 +16,7 @@
   (export current-machine-type machine-type-string so-ext
           windows-mt?
           join-paths path-join
-          path-sep split-pair entry->arg libdirs->arg
+          path-sep split-pair version-root entry->arg libdirs->arg
           resources-dirname prefix-resource-dir src-resource-dir
           native-so? lib-native-dir lib-native-path native-so-name
           library-name->path srcdir-join
@@ -70,6 +70,19 @@
   (define (split-pair prefix)
     (cons (join-paths prefix "src")
           (join-paths prefix (current-machine-type))))
+
+  ;; ── 版本化前缀(v2 Unified Layout,designs/00 §4)──
+  ;;
+  ;; 中央仓库/install 的每个 versioned package 在 `<prefix>/<name>/<version>/` 下。
+  ;; version-root 给出此 versioned package 的根目录。
+  ;;
+  ;;   (version-root "<prefix>" 'foo "1.2.0") → "<prefix>/foo/1.2.0"
+  ;;
+  ;; 对它调 split-pair 得到 install 的 (src . obj) 对:
+  ;;   (split-pair (version-root "<prefix>" 'foo "1.2.0"))
+  ;;     → (cons "<prefix>/foo/1.2.0/src" "<prefix>/foo/1.2.0/<mt>")
+  (define (version-root prefix name version)
+    (join-paths prefix (symbol->string name) version))
 
   ;; ── 资源落点(C4/C5,2026-07-24):<prefix>/src/resources/<namespace>/… ──
   ;;

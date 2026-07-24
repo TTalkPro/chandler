@@ -140,7 +140,8 @@
       (filter-nonpath-names (rentry-deps e))    ; deps 字段:子依赖名(仅名)
       (rentry-natives e)
        (rentry-scope e)
-       (rentry-resources e)))
+       (rentry-resources e)
+       #f))   ; v2 provenance:resolve 阶段还未填(v2.4 prebuilt 实现时填)
 
   (define (filter-nonpath-names deps)
     (map dep-name deps))                    ; lock deps 存名;path 子依赖名也留(图完整)
@@ -184,6 +185,11 @@
                           (map native-name (manifest-native mf)) #t
                           (manifest-resources mf)))
                (values #f "." '() '() #t)))]
+        [(prebuilt)
+         ;; v2 stub:prebuilt source 暂不真正 fetch(留给 v2.4 实现)。
+         ;; 返回空闭包 + 默认值,让 resolve 把它记进 chosen 但不 git clone。
+         ;; 多版本语义(designs/02 §多版本):每 app 的 lock 独立 resolve,跨 app 不冲突。
+         (values #f "." '() '() #f #f)]
         [else (error 'git-provider "unknown source kind" sk)])))
 
   (define (resolve-rev url pk pv)

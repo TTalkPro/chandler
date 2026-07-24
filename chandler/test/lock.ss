@@ -12,13 +12,15 @@
     (make-locked-dep name 'git (string-append "https://x/" (symbol->string name))
                      'tag "v1.0.0" "abcdef0123456789" "." deps natives
                      (if (null? scope) 'runtime (car scope))
-                     #f))                     ; resources:测试套件按需显式提供
+                     #f        ; resources:测试套件按需显式提供
+                     #f))      ; v2 provenance
 
   (define (ldr name deps natives resources . scope)
     (make-locked-dep name 'git (string-append "https://x/" (symbol->string name))
                      'tag "v1.0.0" "abcdef0123456789" "." deps natives
                      (if (null? scope) 'runtime (car scope))
-                     resources))
+                     resources
+                     #f))      ; v2 provenance
 
   (define sample
     (make-lock 1 "deadbeef" "0.1.0"

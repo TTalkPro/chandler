@@ -167,13 +167,17 @@
         (make-dep name sk sl pk pv (extract-srcdir fs)))))
 
   (define (extract-source forms who)
-    (let ([git  (find-tagged forms 'git)]
-          [path (find-tagged forms 'path)])
+    (let ([git       (find-tagged forms 'git)]
+          [path      (find-tagged forms 'path)]
+          [prebuilt  (find-tagged forms 'prebuilt)])
       (cond
         [(and git path) (error 'parse-dep "git and path sources are mutually exclusive" who)]
-        [git  (values 'git (cadr git))]
-        [path (values 'path (cadr path))]
-        [else (error 'parse-dep "dependency has no (git ...) or (path ...) source" who)])))
+        [(and git prebuilt) (error 'parse-dep "git and prebuilt sources are mutually exclusive" who)]
+        [(and path prebuilt) (error 'parse-dep "path and prebuilt sources are mutually exclusive" who)]
+        [git       (values 'git (cadr git))]
+        [path      (values 'path (cadr path))]
+        [prebuilt  (values 'prebuilt (cdr prebuilt))]  ; 整个 (mt ...) 列表
+        [else (error 'parse-dep "dependency has no (git ...) / (path ...) / (prebuilt ...) source" who)])))
 
   (define (extract-pin forms who)
     (let ([pins (filter (lambda (f) (memq (and (pair? f) (car f))

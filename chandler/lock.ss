@@ -26,7 +26,8 @@
   ;; M1/M2 才会从 manifest resources 字段填入,目前 resolve 路径传 #f。
   (define-record-type locked-dep
     (fields name source-kind source-loc pin-kind pin-val rev srcdir
-            deps natives scope resources))
+            deps natives scope resources
+            provenance))   ; v2:记录来源详情(git rev 字符串 | prebuilt 列表 | #f)
 
   (define-record-type lock
     (fields format manifest-sha256 chandler deps))   ; deps = (locked-dep ...)
@@ -58,7 +59,9 @@
                (list `(resources ,@(map (lambda (p)
                                           `(,(car p) ,(cdr p)))
                                         rs)))
-               '()))))
+               '()))
+       ,@(let ([pv (locked-dep-provenance d)])      ; v2:provenance
+           (if pv (list `(provenance ,pv)) '()))))
 
   (define (datum->lock datum)
     (let ([body (expect-tag datum 'lock 'datum->lock)])
@@ -82,7 +85,8 @@
         (field-ref* b 'deps)
         (field-ref* b 'natives)
         (if (equal? '(dev) (field-ref* b 'scope)) 'dev 'runtime)
-        (parse-locked-resources (field-ref* b 'resources)))))
+        (parse-locked-resources (field-ref* b 'resources))
+        (field-ref b 'provenance))))   ; v2:#f 若缺省(向后兼容老 lock)
 
   ;; lock 里的 resources 已标准化(designs/11 §6.3):((libref-list "path") ...)
   ;; 字段缺省 → #f(向后兼容老 lock 文件)
