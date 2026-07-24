@@ -416,8 +416,33 @@
   ;;   而 chandler 挂的 lib/src::lib/<mt> 对,obj 侧恰是 native 落点,故**天然命中**。
   ;;   ⇒ 有 loader 的库**无需预加载**(且自加载是惰性的:不碰 FFI 就不 dlopen);
   ;;      这里只为「非 bake 构建、无生成 loader」的第三方库保留统一加载兜底。
+  ;;   **2026-07-24(C2)**:扫的范围从「只有项目自己的 lib/<mt>」推广到
+  ;;   **所有挂载条目的 obj 侧** —— 与资源定位(C1)同一条原则:进程对着哪些前缀跑,
+  ;;   `(library-directories)` / `resolved-libdirs` 就是权威答案,兜底不该只认其中一个。
+  ;;   原先全局前缀里手放的、无 loader 的第三方 native 一律漏掉。
+  ;;   代价是每次起进程多走几棵 obj 树;但 self-loading? 会滤掉带 loader 的库,而
+  ;;   chandler/bake 装的东西**都**带 loader,故实际命中极少、纯属兜底。
+  ;;   项目自己的 obj 目录**无条件**在扫描集里:resolved-libdirs 在非 project-mode
+  ;;   (没有 lock)时只返回全局前缀,而一个刚 build 完、还没 deps 过的树照样可能有
+  ;;   lib/<mt>/…/native/。取并集,严格是旧行为的超集,不会漏。
   (define (native-load-paths root)
-    (native-sos-under (project-obj-dir root)))
+    (let loop ([dirs (dedupe-strings
+                       (cons (project-obj-dir root)
+                             (map entry-obj-side (resolved-libdirs root))))]
+               [acc '()])
+      (if (null? dirs)
+          (reverse acc)
+          (loop (cdr dirs) (append (reverse (native-sos-under (car dirs))) acc)))))
+
+  ;; 库目录条目 → obj 侧(pair 取 cdr;字符串条目源=对象)
+  (define (entry-obj-side e) (if (pair? e) (cdr e) e))
+
+  (define (dedupe-strings xs)
+    (let loop ([xs xs] [seen '()] [out '()])
+      (cond
+        [(null? xs) (reverse out)]
+        [(member (car xs) seen) (loop (cdr xs) seen out)]
+        [else (loop (cdr xs) (cons (car xs) seen) (cons (car xs) out))])))
 
   ;; 扫 obj 树:凡父目录名为 "native" 且扩展名匹配者即 native 动态库
   ;; (与该库的编译 Scheme .so 区分:后者不在 native/ 子目录里);再滤掉自加载的。

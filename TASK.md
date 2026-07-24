@@ -446,7 +446,7 @@ $APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
 |---|------|--------|------|------|
 | C0 | `resolved-libdirs` 改 per-dep pairs;`vendor/`→`_vendor/` 改名;删 `install-dep-sources!`(不再拷源码进 lib/) | P0 | 🔲 待实现 | `chandler/install.ss` |
 | C1 | 统一 `resource-path`:扫 `(library-directories)` 的 **src/obj 两侧** + prefix-fallback;删旧四 API;**资源定位不再依赖 `APP_ROOT`** | P1 | ✅ 已完成 | `chandler/runtime-paths.ss`、`chandler/pack.ss` |
-| C2 | `native-load-paths` 改扫所有 pair obj 侧(不再只扫 `lib/<mt>`) | P2 | 🔲 待实现 | `chandler/install.ss` |
+| C2 | `native-load-paths` 改扫所有挂载条目的 obj 侧(不再只扫 `lib/<mt>`) | P2 | ✅ 已完成 | `chandler/install.ss` |
 | C3 | `.env` 读取模块(`chandler/env.ss`);`run`/`repl`/`env`/`install` 消费 `.env` | P3 | 🔲 待实现 | `chandler/env.ss`(新)、`chandler/cli/commands.ss` |
 | C4 | install 落点:resources → `src/resources/<namespace>/`(替代 `share/<namespace>/resources/`) | P5 | ✅ 已完成 | `chandler/layout.ss`、`chandler/install.ss`、`chandler/runtime-paths.ss`、`chandler/cli/commands.ss` |
 | C5 | pack 输出 resources 在 `src/resources/<ns>/`(「pack 来源改 `_vendor/`」那半依赖未采纳的 C0,未做) | P6 | ✅ 已完成 | `chandler/pack.ss` |
@@ -488,6 +488,17 @@ $APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
 
 **回归用例有两处细节决定它有没有牙**(都踩过,写进注释了):① 两次构建必须在**独立进程**里 —— 同进程里上游库从第一次构建起就驻留着,Chez 不会再读源码,分歧根本不发生;② 收尾必须用**只给对象根**的子进程加载 —— 挂成对时 Chez 会从源码重编出一套自洽的实例,同样验不出来。实测:去掉修复后该用例失败(退出码 255),加回即过。
 
+**C2 实现期决定(2026-07-24)**:
+
+与 C1 同一条原则:**进程对着哪些前缀跑,`resolved-libdirs` 就是权威答案**,兜底不该只认其中一个。原先只扫项目自己的 `lib/<mt>`,全局前缀里手放的、无 loader 的第三方 native 一律漏掉。
+
+- 扫描集 = 项目 obj 目录 ∪ 所有挂载条目的 obj 侧(去重)。项目 obj 目录**无条件**在内 —— `resolved-libdirs` 在非 project-mode(没有 lock)时只返回全局前缀,而一个刚 build 完、还没 deps 过的树照样可能有 `lib/<mt>/…/native/`。取并集,严格是旧行为的超集。(这条是被既有用例 `native-fallback-skips-self-loading` 逼出来的:它造的正是「有 lib/ 但没有 lock」的树。)
+- `self-loading?` 的过滤不变:带生成 loader 的库照旧跳过(自加载是惰性的),不论它在哪个前缀里。chandler/bake 装的东西**都**带 loader,故新增的扫描实际命中极少、纯属兜底;代价是每次起进程多走几棵 obj 树。
+
+**验证**:三运行时 **337/337**(新增 1 用例:全局前缀里无 loader 的 native 被拾起、带 loader 的仍跳过)。
+
+**D3(`chandler init` 模板)—— 核对后确认无需改动**:`cmd-init` 从来只写 `manifest.ss` + `.gitignore` + 库骨架,**本就不生成 `recipe.ss`**;B6b 让 recipe 变可选之后,这正是想要的形态。`.gitignore` 里的 `.chandler-build.ss` / `.chandler-install.ss` 是已作废的生成物,**保留**(老项目已有这两行,删掉只会变噪声;新项目多两行无害),已在原处注明。
+
 **依赖序**:
 - C0–C3 可**先于阶段 B** 落地(不依赖 bake 吸收)——过渡期 bake 子进程仍跑,但 libdirs 已是 per-dep 对、resources 已统一、`.env` 已生效。
 - C4–C5 依赖阶段 B4(compile 吸收完成)——install/pack 从 `_vendor/` + `_build/` 取需要进程内编译。
@@ -505,7 +516,7 @@ $APP_ROOT/<mt>/<libpath>/native/…      native(bake 生成的 loader 自己拼)
 |---|------|------|------|
 | D1 | 两套 bootstrap 合一(chandler `bootstrap.ss` 统一安装编译引擎 + 包管理) | 🔲 待实现 | `bootstrap.ss` |
 | D2 | 两套启动器合一(不再有独立 bake 启动器) | 🔲 待实现 | `bootstrap.ss` |
-| D3 | `chandler init` 模板:recipe.ss 注明「chandler 直接消费,不需 bake」 | 🔲 待实现 | `chandler/cli/commands.ss` |
+| D3 | `chandler init` 模板:核对后**无需改动**(init 本就不生成 recipe.ss;B6b 后 recipe 可选正是想要的形态) | ✅ 已完成(核对) | `chandler/cli/commands.ss` |
 
 **发布节奏**:A 已完成(消灭漂移);B 逐模块吸收(B1–B5 串行,B6–B7 一次合仓);C0–C3 可先于 B 落地(per-dep pairs + 统一 resource-path + .env,过渡期 bake 子进程仍跑);C4–C6 依赖 B4(进程内编译);D 是 B7 延伸。
 

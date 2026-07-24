@@ -497,6 +497,11 @@
   ;; recipe/preamble,以及 `chandler build` 经 bake 产出的 _build/。
   ;; 注:`.chandler-approvals`(native 构建授权记录)**不**入此列——它是信任决定,
   ;; 提交与否属项目策略(提交=团队共享授权;不提交=各人各自授权),由用户自决。
+  ;; `.chandler-build.ss` / `.chandler-install.ss` 是**已作废**的生成物:B6a 之后
+  ;; build 直接在进程内排单编译,不再往依赖树里写临时 recipe 交给 bake 子进程。
+  ;; 仍留在列表里 —— 老项目的 .gitignore 已经有这两行,删掉只会让它们变成噪声;
+  ;; 新项目多两行无害。`.chandler-run.ss` / `.chandler-repl.ss` 仍在用(run/repl 的
+  ;; native preamble)。
   (define gitignore-entries '("/vendor/" "/lib/" "/_build/"
                               ".chandler-run.ss" ".chandler-repl.ss"
                               ".chandler-install.ss" ".chandler-build.ss"))
