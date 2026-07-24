@@ -168,7 +168,7 @@
       (case sk
         [(git)
           (let* ([rev (resolve-rev sl pk pv)]
-                 [content (show-file sl rev "manifest.ss")])
+                 [content (show-file sl rev "chandler-manifest.ss")])
             (if content
                 (let ([mf (parse-manifest (read-datum-string content))])
                   (values rev (manifest-srcdir mf) (manifest-deps mf)
@@ -177,7 +177,7 @@
                 (values rev "." '() '() #f #f)))]     ; 裸库默认
         [(path)
          (let* ([dir (join-paths root-dir sl)]
-                [mpath (join-paths dir "manifest.ss")])
+                [mpath (join-paths dir "chandler-manifest.ss")])
            (if (file-exists? mpath)
                (let ([mf (read-manifest mpath)])
                   (values #f (manifest-srcdir mf) (manifest-deps mf)

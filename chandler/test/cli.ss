@@ -62,7 +62,7 @@
     (init-default-is-lib
       (let ([app (mktmp)])
         (assert-equal 0 (main (list "-C" app "init" "--name=foo")))
-        (let ([mf (read-manifest (string-append app "/manifest.ss"))])
+        (let ([mf (read-manifest (string-append app "/chandler-manifest.ss"))])
           (assert-false (manifest-app mf))           ; 默认无 (app ...)
           ;; N4:init 模板写 chandler **运行时门**(版本区间),不是依赖 ——
           ;; 它没有来源可 fetch,实体取自全局前缀(designs/12 §5)
@@ -74,7 +74,7 @@
     (init-app-writes-app-declaration
       (let ([app (mktmp)])
         (assert-equal 0 (main (list "-C" app "init" "--app" "--name=foo")))
-        (let ([mf (read-manifest (string-append app "/manifest.ss"))])
+        (let ([mf (read-manifest (string-append app "/chandler-manifest.ss"))])
           (assert-true (manifest-app mf))
           (assert-equal '(foo) (app-entry (manifest-app mf)))
           (assert-equal 'main (app-main (manifest-app mf))))))
@@ -84,7 +84,7 @@
       (let ([app (mktmp)])
         (assert-equal 0 (main (list "-C" app "init" "--app" "--name=foo"
                                     "--entry=(bar baz)" "--main=start")))
-        (let ([mf (read-manifest (string-append app "/manifest.ss"))])
+        (let ([mf (read-manifest (string-append app "/chandler-manifest.ss"))])
           (assert-equal '(bar baz) (app-entry (manifest-app mf)))
           (assert-equal 'start (app-main (manifest-app mf))))))
 
@@ -127,7 +127,7 @@
                [app (mktmp)])
           (assert-equal 0 (main (list "-C" app "init" "--name=app")))
           ;; 测试环境无法 git clone chandler → 覆写为无 chandler dep 的纯净 manifest
-          (let ([mp (string-append app "/manifest.ss")])
+          (let ([mp (string-append app "/chandler-manifest.ss")])
             (delete-file mp)
             (call-with-output-file mp
               (lambda (p) (display "(manifest (format 1) (name \"app\") (version \"0.1.0\") (chez \">=10.0\") (srcdir \".\") (deps))" p))))
@@ -147,7 +147,7 @@
           ;; 仅 init(有 manifest,无 lock)→ 非项目 → 全局模式
           (main (list "-C" app "init" "--name=app"))
           ;; 测试环境无法 git clone chandler → 覆写为无 chandler dep 的纯净 manifest
-          (let ([mp (string-append app "/manifest.ss")])
+          (let ([mp (string-append app "/chandler-manifest.ss")])
             (delete-file mp)
             (call-with-output-file mp
               (lambda (p) (display "(manifest (format 1) (name \"app\") (version \"0.1.0\") (chez \">=10.0\") (srcdir \".\") (deps))" p))))
@@ -184,7 +184,7 @@
     ;; ── N5: chandler dep warning / --strict(designs/12 §5)──
     (install-strict-rejects-without-chandler-dep
       (let ([app (mktmp)])
-        (let ([mp (string-append app "/manifest.ss")])
+        (let ([mp (string-append app "/chandler-manifest.ss")])
           (when (file-exists? mp) (delete-file mp))
           (call-with-output-file mp
             (lambda (p) (display "(manifest (format 1) (name \"test\") (version \"0.1.0\") (chez \">=10.0\") (srcdir \".\") (deps))" p))))
@@ -192,7 +192,7 @@
 
     (install-non-strict-warns-but-not-rejected
       (let ([app (mktmp)])
-        (let ([mp (string-append app "/manifest.ss")])
+        (let ([mp (string-append app "/chandler-manifest.ss")])
           (when (file-exists? mp) (delete-file mp))
           (call-with-output-file mp
             (lambda (p) (display "(manifest (format 1) (name \"test\") (version \"0.1.0\") (chez \">=10.0\") (srcdir \".\") (deps))" p))))
@@ -200,7 +200,7 @@
 
     (install-self-bootstrap-skips-check
       (let ([app (mktmp)])
-        (let ([mp (string-append app "/manifest.ss")])
+        (let ([mp (string-append app "/chandler-manifest.ss")])
           (when (file-exists? mp) (delete-file mp))
           (call-with-output-file mp
             (lambda (p) (display "(manifest (format 1) (name \"chandler\") (version \"0.1.0\") (chez \">=10.0\") (srcdir \".\") (deps))" p))))

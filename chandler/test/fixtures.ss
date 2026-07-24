@@ -64,7 +64,7 @@
       [(name deps)
        (let ([dir (mktmp)])
          (git-init! dir)
-         (write-file (string-append dir "/manifest.ss") (manifest-text name deps))
+         (write-file (string-append dir "/chandler-manifest.ss") (manifest-text name deps))
          (write-file (string-append dir "/" name ".ss") (lib-umbrella-text name))
          (git-commit! dir "c1")
          dir)]))
@@ -77,7 +77,7 @@
   (define (make-native-lib name soname)
     (let ([dir (mktmp)])
       (git-init! dir)
-      (write-file (string-append dir "/manifest.ss")
+      (write-file (string-append dir "/chandler-manifest.ss")
         (format "(manifest (format 1) (name ~s) (version \"0.1.0\") (srcdir \".\") (native (~a (path \"native/~a\") (build (script \"build.sh\")))))"
                 name soname soname))
       (write-file (string-append dir "/" name ".ss") (lib-umbrella-text name))
@@ -94,7 +94,7 @@
       [(deps) (make-app deps "")]
       [(deps extra)
        (let ([dir (mktmp)])
-         (write-file (string-append dir "/manifest.ss")
+         (write-file (string-append dir "/chandler-manifest.ss")
                      (let ([base (manifest-text "app" deps)])
                        (if (string=? extra "")
                            base

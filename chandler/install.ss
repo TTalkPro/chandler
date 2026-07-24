@@ -9,7 +9,7 @@
 ;;;                                        `chandler build` 后填充
 ;;;     lib/src/resources/<libpath>/    ← 资源(依赖声明的 + 本项目自己的 resources/;
 ;;;                                        C4:并入 src/ 层,原 lib/share/ 取消)
-;;;     lib/.chandler/<name>/manifest.ss ← 清单快照(应用名由此可辨,见 runtime-paths)
+;;;     lib/.chandler/<name>/chandler-manifest.ss ← 清单快照(应用名由此可辨,见 runtime-paths)
 ;;;   故库搜索挂**一对** (lib/src . lib/<mt>);消费方一条 pair 同时解析源码与对象。
 ;;;   path 依赖不进 vendor/lib,activate/run 时直挂其源目录(live)。
 ;;;
@@ -40,7 +40,7 @@
           (chandler registry)
           (chandler fetch))
 
-  (define (project-manifest-path root) (join-paths root "manifest.ss"))
+  (define (project-manifest-path root) (join-paths root "chandler-manifest.ss"))
   (define (project-lock-path root) (join-paths root "manifest.lock"))
   (define (vendor-dir root name) (join-paths (join-paths root "_vendor") (symbol->string name)))
   (define (lib-dir root name) (vendor-dir root name))   ; 兼容:依赖源码树现居 _vendor/
@@ -56,7 +56,7 @@
     (let* ([mpath (project-manifest-path root)]
            [lpath (project-lock-path root)])
       (unless (file-exists? mpath)
-        (error 'deps "manifest.ss not found; run `chandler init` first" root))
+        (error 'deps "chandler-manifest.ss not found; run `chandler init` first" root))
       ;; --update:删旧 lock 触发重解析
       (when (opt opts 'update #f)
         (when (file-exists? lpath) (delete-file lpath)))
@@ -184,12 +184,12 @@
                (not (memq (string->symbol stem) chandler-runtime-sublibs))))))
 
   ;; 运行时门(2026-07-24 改为自引用):deps copy 的就是**正在跑的这个 chandler**,
-  ;; 故版本 = 进程内常量 `chandler-version`(不再读前缀里的 .chandler/chandler/manifest.ss
+  ;; 故版本 = 进程内常量 `chandler-version`(不再读前缀里的 .chandler/chandler/chandler-manifest.ss
   ;; 快照),校验是纯进程内一句;而它的代码在 `CHANDLER_HOME`(= chandler-home)。
   (define (install-chandler-runtime! root range)
     (unless (version-match? range chandler-version)
       (error 'deps
-             (format "manifest requires chandler ~s, but the running chandler is ~a~%  (upgrade chandler, or relax the range in manifest.ss)"
+             (format "manifest requires chandler ~s, but the running chandler is ~a~%  (upgrade chandler, or relax the range in chandler-manifest.ss)"
                      range chandler-version)))
     ;; <home>/src/chandler/<sub>.ss → _vendor/chandler/chandler/<sub>.ss
     ;; _vendor/ 是「依赖源码原样」那一层,chandler 也照此摆,故 verify/清理/阅读

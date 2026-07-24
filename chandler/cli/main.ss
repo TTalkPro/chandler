@@ -93,7 +93,7 @@
     (printf "chandler -- git-first library manager for Chez Scheme (Skiff ecosystem)~%~%")
     (printf "Usage: chandler <command> [args] [flags]~%~%")
     (printf "Commands:~%")
-    (printf "  init [--lib|--app] [--name=N]  scaffold a manifest.ss (lib by default)~%")
+    (printf "  init [--lib|--app] [--name=N]  scaffold a chandler-manifest.ss (lib by default)~%")
     (printf "  add <name> <url> [--tag T]   add a dependency (--tag/--rev/--branch/--path)~%")
     (printf "  remove <name>                remove a dependency~%")
     (printf "  deps [--update]              resolve + vendor + install source to lib/src/~%")

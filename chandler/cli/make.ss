@@ -132,7 +132,7 @@
     (printf "  -t, --trace         trace task invocation~%")
     (printf "  -h, --help          this message~%~%")
     (printf "Most projects do not need a chandler-tasks.ss at all: `chandler build` derives~%")
-    (printf "the build from manifest.ss. Write one only for custom tasks (test, release).~%"))
+    (printf "the build from chandler-manifest.ss. Write one only for custom tasks (test, release).~%"))
 
   ;; ── §16 dispatch ──
   (define (make-main argv)

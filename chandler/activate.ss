@@ -57,7 +57,7 @@
 
   ;; 运行时版本门(manifest 有 chez/skiff 声明时)
   (define (gate-runtime! root)
-    (let ([mpath (join-paths root "manifest.ss")])
+    (let ([mpath (join-paths root "chandler-manifest.ss")])
       (when (file-exists? mpath)
         (let ([mf (read-manifest mpath)])
           (verify-runtime! (list (cons 'chez (manifest-chez mf))

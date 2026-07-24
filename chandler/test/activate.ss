@@ -82,7 +82,7 @@
       (parameterize ([cache-root (mktmp)])
         (let* ([b (make-lib-repo "b")]
                [app (mktmp)])
-          (write-file (string-append app "/manifest.ss")
+          (write-file (string-append app "/chandler-manifest.ss")
             (format "(manifest (format 1) (name \"app\") (version \"0.1.0\") (chez \">=99.0\") (deps (b (git ~s) (branch \"main\"))))" b))
           (install app '())
           (write-file (string-append app "/main.ss")

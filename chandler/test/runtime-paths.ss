@@ -191,7 +191,7 @@
     (app-name-from-sole-chandler-entry
       (with-temp-dirs 1
         (lambda (root)
-          (let ([m (join-paths root ".chandler" "myapp" "manifest.ss")])
+          (let ([m (join-paths root ".chandler" "myapp" "chandler-manifest.ss")])
             (ensure-parent m)
             (write-file m "(manifest (format 1))")
             (with-app-root root
@@ -205,7 +205,7 @@
         (lambda (root)
           (for-each
             (lambda (app)
-              (let ([m (join-paths root ".chandler" app "manifest.ss")])
+              (let ([m (join-paths root ".chandler" app "chandler-manifest.ss")])
                 (ensure-parent m)
                 (write-file m "(manifest (format 1))")))
             '("a" "b"))

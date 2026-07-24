@@ -205,7 +205,7 @@
   (define (gate-prebuilt-roots root)
     (let* ([vdir (vendor-dir root 'chandler)]
            [obj  (join-paths vdir "_build" (current-machine-type))]
-           [mpath (join-paths root "manifest.ss")])
+           [mpath (join-paths root "chandler-manifest.ss")])
       (if (and (file-directory? obj)
                (file-exists? mpath)
                (manifest-chandler (read-manifest mpath)))
@@ -311,7 +311,7 @@
                        (lambda () (load-recipe default-tasks-file))
                        (lambda () (select-targets '()))
                        verbose? "project recipe")
-          (let ([mpath (join-paths root "manifest.ss")])
+          (let ([mpath (join-paths root "chandler-manifest.ss")])
             (when (file-exists? mpath)
               (let* ([mf (read-manifest mpath)]
                      [name (manifest-name mf)]
@@ -348,7 +348,7 @@
       (if (string=? sd ".") rels (map (lambda (r) (join-paths sd r)) rels))))
 
   (define (project-native-spec root)
-    (let ([mpath (join-paths root "manifest.ss")])
+    (let ([mpath (join-paths root "chandler-manifest.ss")])
       (if (file-exists? mpath)
           (let ([datum (read-datum-file mpath)])
             (or (assq 'native (cdr datum)) '(native)))
@@ -400,9 +400,9 @@
   (define (native-item-backend item)
     (let ([c (assq 'build (cdr item))]) (if c (cadr c) 'make)))
 
-  ;; ── native 构建描述:读依赖 lib/<name>/manifest.ss 的 native 项 ──
+  ;; ── native 构建描述:读依赖 lib/<name>/chandler-manifest.ss 的 native 项 ──
   (define (dep-native-spec root name)
-    (let ([mpath (join-paths (lib-dir root (string->symbol name)) "manifest.ss")])
+    (let ([mpath (join-paths (lib-dir root (string->symbol name)) "chandler-manifest.ss")])
       (if (file-exists? mpath)
           (let ([mf (read-manifest mpath)])
             ;; 用原始 native sexpr(而非 record)哈希更稳:重读 datum 取 native 字段

@@ -122,25 +122,25 @@
           (assert-false (file-exists? (join-paths d "resources")))
           (assert-false (file-exists? (join-paths d "src" "resources"))))))
 
-    ;; ── .chandler/<app>/manifest.ss:清单快照,与全局 install 落点同构;
+    ;; ── .chandler/<app>/chandler-manifest.ss:清单快照,与全局 install 落点同构;
     ;; 也是 app-resource-path 认出应用名的依据(包里恒只有一个条目)──
     (pack-writes-app-manifest-snapshot
       (let* ([app (make-app '())])
         (fake-build! app "myapp")
         (pack-until-runtime app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . petite)))
         (let* ([d (pack-out app "myapp" "1.0")]
-               [m (join-paths d ".chandler" "myapp" "manifest.ss")])
+               [m (join-paths d ".chandler" "myapp" "chandler-manifest.ss")])
           (assert-true (file-exists? m))
           (assert-true (has? (read-file m) "(manifest")))))
 
-    ;; 源项目没有 manifest.ss(--name/--entry 临时打包)→ 合成一份最小清单,
+    ;; 源项目没有 chandler-manifest.ss(--name/--entry 临时打包)→ 合成一份最小清单,
     ;; 应用名照样可解析
     (pack-app-manifest-synthesized-without-source-manifest
       (let ([app (make-app '())])
         (fake-build! app "myapp")
-        (delete-file (join-paths app "manifest.ss"))
+        (delete-file (join-paths app "chandler-manifest.ss"))
         (pack-until-runtime app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . petite)))
-        (let ([m (join-paths (pack-out app "myapp" "1.0") ".chandler" "myapp" "manifest.ss")])
+        (let ([m (join-paths (pack-out app "myapp" "1.0") ".chandler" "myapp" "chandler-manifest.ss")])
           (assert-true (file-exists? m))
           (assert-true (has? (read-file m) "(name \"myapp\")")))))
 

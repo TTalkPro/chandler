@@ -62,7 +62,7 @@
   ;; --lib / --app 互斥;都不传 = 默认 lib(无 (app …))
   (define (cmd-init root flags)
     (let* ([name (or (flag flags 'name) (basename root))]
-           [mpath (join-paths root "manifest.ss")]
+           [mpath (join-paths root "chandler-manifest.ss")]
            [lib?  (flag? flags 'lib)]
            [app?  (flag? flags 'app)]
            [entry (or (parse-entry (flag flags 'entry))
@@ -71,13 +71,13 @@
       (when (and lib? app?)
         (error 'init "--lib and --app are mutually exclusive"))
       (when (and (file-exists? mpath) (not (flag? flags 'force)))
-        (error 'init "manifest.ss already exists; use --force to overwrite" mpath))
+        (error 'init "chandler-manifest.ss already exists; use --force to overwrite" mpath))
       (write-canonical-file mpath
         (if app?
             (skeleton-app-manifest-datum name entry main)
             (skeleton-manifest-datum name)))
       (printf "wrote ~a~%" mpath)
-      ;; 与 manifest.ss(数据)配对的 chandler-tasks.ss(程序):跑自定义任务。
+      ;; 与 chandler-manifest.ss(数据)配对的 chandler-tasks.ss(程序):跑自定义任务。
       ;; 编译入口 = app 的 entry 或 lib 的 (name)。
       (write-tasks-file! root name (or entry (list (string->symbol name))) (flag? flags 'force))
       (ensure-gitignore-lib root)
@@ -110,9 +110,9 @@
             "#!chezscheme\n"
             ";;; " default-tasks-file " --- " name " 的构建/任务描述(chandler make 消费)\n"
             ";;;\n"
-            ";;; **可选**:chandler build 会从 manifest.ss 推导编译,不需要本文件。\n"
+            ";;; **可选**:chandler build 会从 chandler-manifest.ss 推导编译,不需要本文件。\n"
             ";;; 留它是为了写自定义任务(如 test)。task/file/rule/default-task 是 DSL,\n"
-            ";;; 加载即求值——它是程序,与数据文件 manifest.ss 配对。\n"
+            ";;; 加载即求值——它是程序,与数据文件 chandler-manifest.ss 配对。\n"
             "\n"
             "(define-lib-roots \".\")\n"
             "\n"
@@ -155,7 +155,7 @@
   ;; 声明形式是 (chandler ">=X"),**不是** (deps (chandler …)) —— 它没有来源可 fetch,
   ;; 实体来自全局前缀(designs/12 §5)。自举例外:项目名 = "chandler"。
   (define (check-chandler-dep root flags)
-    (let ([mpath (join-paths root "manifest.ss")])
+    (let ([mpath (join-paths root "chandler-manifest.ss")])
       (if (not (file-exists? mpath))
           #t
           (let ([mf (read-manifest mpath)])
@@ -164,19 +164,19 @@
               [(manifest-chandler mf) #t]
               [(flag? flags 'strict)
                (fprintf (current-error-port)
-                 "chandler: project does not declare a chandler runtime gate; add (chandler \">=~a\") to manifest.ss\n"
+                 "chandler: project does not declare a chandler runtime gate; add (chandler \">=~a\") to chandler-manifest.ss\n"
                  chandler-version)
                #f]
               [else
                (fprintf (current-error-port)
-                 "warning: project does not declare a chandler runtime gate; add (chandler \">=~a\") to manifest.ss\n"
+                 "warning: project does not declare a chandler runtime gate; add (chandler \">=~a\") to chandler-manifest.ss\n"
                  chandler-version)
                #t])))))
 
   ;; --global:装当前项目库树到全局 libdir(注册表事务,designs/05)
   (define (cmd-install-global root flags)
     (let* ([libdir (target-libdir flags)]
-           [mpath (join-paths root "manifest.ss")]
+           [mpath (join-paths root "chandler-manifest.ss")]
            [mf (and (file-exists? mpath) (read-manifest mpath))]
            [name (or (and mf (manifest-name mf)) (basename root))]
            [version (or (and mf (manifest-version mf)) "0.0.0")]
@@ -211,7 +211,7 @@
 
   ;; manifest 是否声明了 (chandler …) 运行时门
   (define (project-has-chandler-gate? root)
-    (let ([mpath (join-paths root "manifest.ss")])
+    (let ([mpath (join-paths root "chandler-manifest.ss")])
       (and (file-exists? mpath)
            (manifest-chandler (read-manifest mpath))
            #t)))
@@ -299,9 +299,9 @@
   ;; ── install:安装 lib + 依赖 + resources + manifest 到全局前缀 ──
   (define (cmd-install root flags)
     (let* ([libdir (target-libdir flags)]
-           [mpath (join-paths root "manifest.ss")]
+           [mpath (join-paths root "chandler-manifest.ss")]
            [mf (and (file-exists? mpath) (read-manifest mpath))])
-      (unless mf (error 'install "manifest.ss not found; run `chandler init` first"))
+      (unless mf (error 'install "chandler-manifest.ss not found; run `chandler init` first"))
       (let ([name (or (manifest-name mf) (basename root))]
             [version (or (manifest-version mf) "0.0.0")])
         ;; 前置:deps + build 必须已完成
@@ -316,10 +316,10 @@
         (merge-lib-to-global! root libdir)
         ;; 3. 安装项目自身 resources(manifest 声明的)
         (install-project-resources! root mf libdir)
-        ;; 4. 安装 manifest 到 .chandler/<name>/manifest.ss
+        ;; 4. 安装 manifest 到 .chandler/<name>/chandler-manifest.ss
         (let ([manifest-dir (join-paths libdir ".chandler" name)])
           (ensure-dir manifest-dir)
-          (copy-file mpath (join-paths manifest-dir "manifest.ss")))
+          (copy-file mpath (join-paths manifest-dir "chandler-manifest.ss")))
         ;; 5. P3:app 生成命令行入口(runner + launcher),用本机运行时
         (let ([app (manifest-app mf)])
           (when app
@@ -509,7 +509,7 @@
     (let ([name (and (pair? positionals) (car positionals))]
           [url  (and (pair? positionals) (pair? (cdr positionals)) (cadr positionals))])
       (unless name (error 'add "usage: chandler add <name> <git-url> [--tag/--rev/--branch]"))
-      (let* ([mpath (join-paths root "manifest.ss")]
+      (let* ([mpath (join-paths root "chandler-manifest.ss")]
              [datum (read-datum-file mpath)]
              [dep (build-dep-sexpr (string->symbol name) url flags)]
              [datum* (add-dep datum dep)])
@@ -549,7 +549,7 @@
   (define (cmd-remove root flags positionals)
     (let ([name (and (pair? positionals) (string->symbol (car positionals)))])
       (unless name (error 'remove "usage: chandler remove <name>"))
-      (let* ([mpath (join-paths root "manifest.ss")]
+      (let* ([mpath (join-paths root "chandler-manifest.ss")]
              [datum (read-datum-file mpath)]
              [datum* (cons 'manifest (remove-dep (cdr datum) name))])
         (write-canonical-file mpath datum*)
@@ -660,7 +660,7 @@
         [(equal? rt "chez") 'chez]
         [(preferred-runtime)]                          ; CHANDLER_RUNTIME=skiff|chez
         [else
-         (let ([mpath (join-paths root "manifest.ss")])
+         (let ([mpath (join-paths root "chandler-manifest.ss")])
            (if (file-exists? mpath)
                (let ([mf (read-manifest mpath)])
                  (cond

@@ -31,7 +31,7 @@
     current-native-prescan
     ;; recipe 面辅助(designs/02 §辅助函数)
     path-ext file->string file->lines run run/code run/capture shq
-    ;; 项目构建描述文件的默认名(用户可见约定;与数据文件 manifest.ss 配对)
+    ;; 项目构建描述文件的默认名(用户可见约定;与数据文件 chandler-manifest.ss 配对)
     default-tasks-file)
   (import (chezscheme)
           (chandler base)
@@ -40,7 +40,7 @@
 
   ;; 项目构建描述文件默认名(2026-07-24:原 bake 的 `recipe.ss` → chandler 命名)。
   ;; 它是**程序**(task/file/rule/default-task,加载即求值),与**数据**文件
-  ;; manifest.ss 配对;是可选的(B6b:无它则 `chandler build` 从 manifest 推导)。
+  ;; chandler-manifest.ss 配对;是可选的(B6b:无它则 `chandler build` 从 manifest 推导)。
   (define default-tasks-file "chandler-tasks.ss")
 
   ;; ====================================================================

@@ -20,7 +20,7 @@
     (let* ([prefix (mktmp)]
            [src (join-paths prefix "src" "chandler")]
            [obj (join-paths prefix (current-machine-type) "chandler")])
-      (write-text (join-paths prefix ".chandler" "chandler" "manifest.ss")
+      (write-text (join-paths prefix ".chandler" "chandler" "chandler-manifest.ss")
                   (string-append "(manifest (format 1) (name \"chandler\") (version \""
                                  version "\") (chez \">=10.0\") (srcdir \".\") (deps))"))
       (for-each (lambda (n)
@@ -116,7 +116,7 @@
           (assert-true (file-exists? (join-paths (vendor-dir app 'b) "b.ss"))))))
 
     ;; ── chandler 运行时门(designs/12 §5):不是依赖,实体取自全局前缀 ──
-    ;; 造一个假前缀:.chandler/chandler/manifest.ss(版本)+ src/chandler/*.ss +
+    ;; 造一个假前缀:.chandler/chandler/chandler-manifest.ss(版本)+ src/chandler/*.ss +
     ;; <mt>/chandler/*.so,其中混入 dev-only 的库,验证只有 runtime 子集被铺过来。
     (chandler-gate-copies-runtime-subset-from-prefix
       (parameterize ([cache-root (mktmp)])

@@ -126,8 +126,8 @@
                  [app (make-app (list (cons 'n n)))])
             (install app '())
             (build app (list (cons 'allow-build #t)))
-            ;; 改依赖 lib/n/manifest.ss 的 native 描述 → 哈希变
-            (write-file (string-append (lib-dir app 'n) "/manifest.ss")
+            ;; 改依赖 lib/n/chandler-manifest.ss 的 native 描述 → 哈希变
+            (write-file (string-append (lib-dir app 'n) "/chandler-manifest.ss")
               "(manifest (format 1) (name \"n\") (version \"0.1.0\") (srcdir \".\") (native (libn (path \"native/libn\") (build (script \"evil.sh\")))))")
             ;; 未重新授权 → 报错
             (assert-raises (lambda () (build app '()))))))))
@@ -138,7 +138,7 @@
     (build-project-without-recipe
       (when-compiler (lambda ()
         (let ([app (mktmp)])
-          (write-file (join-paths app "manifest.ss")
+          (write-file (join-paths app "chandler-manifest.ss")
                       "(manifest (format 1) (name \"myapp\") (version \"0.1.0\") (srcdir \".\"))")
           (write-file (join-paths app "myapp.ss")
                       "(library (myapp) (export ok) (import (chezscheme)) (define ok #t))")
@@ -154,7 +154,7 @@
     (build-project-with-recipe-runs-default-task-only
       (when-compiler (lambda ()
         (let ([app (mktmp)])
-          (write-file (join-paths app "manifest.ss")
+          (write-file (join-paths app "chandler-manifest.ss")
                       "(manifest (format 1) (name \"myapp\") (version \"0.1.0\") (srcdir \".\"))")
           (write-file (join-paths app "myapp.ss")
                       "(library (myapp) (export ok) (import (chezscheme)) (define ok #t))")
@@ -175,7 +175,7 @@
     (build-project-app-entry-differs-from-name
       (when-compiler (lambda ()
         (let ([app (mktmp)])
-          (write-file (join-paths app "manifest.ss")
+          (write-file (join-paths app "chandler-manifest.ss")
                       "(manifest (format 1) (name \"toolpkg\") (version \"0.1.0\") (srcdir \".\")\n  (app (entry (mytool)) (main go)))")
           (write-file (join-paths app "mytool.ss")
                       "(library (mytool) (export go) (import (chezscheme) (mytool core)) (define (go) core-ok))")
@@ -187,7 +187,7 @@
             (assert-true (file-exists? (join-paths bdir "mytool.so")))
             (assert-true (file-exists? (join-paths bdir "mytool/core.so"))))))))
 
-    ;; 没有 manifest.ss 也没有 chandler-tasks.ss → 什么都不做,不报错
+    ;; 没有 chandler-manifest.ss 也没有 chandler-tasks.ss → 什么都不做,不报错
     (build-project-noop-without-manifest
       (let ([app (mktmp)])
         (build-project app #f)
