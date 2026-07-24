@@ -148,7 +148,7 @@ chandler run <script.ss> [args...]
 
 ```sh
 export CHEZSCHEMELIBDIRS="src::obj:src::obj:..."
-# APP_ROOT 在 dev 模式不设(只 pack 模式设)
+# v2 不再有 APP_ROOT(完全靠 library-directories)
 # .env 覆盖(若有)
 ```
 
@@ -162,20 +162,36 @@ dev 模式下**只走 primary 路径**(`scan-library-directories`),扫各 `(src 
 
 **N+1 fallback 在 dev 模式不可用**:fallback 走 `(library-object-filename)` + N+1 parents,然后拼 `src/resources/<libpath>/`(09-runtime-paths §fallback)。但 dev 模式的 src 直接是目录根(无 `src/` 子目录),fallback 会 miss。这是**可接受的**——primary 路径扫描 library-directories 列表(已包含所有 unit 的 src 端),覆盖率 100%,fallback 只在 primary 失败时兜底,dev 下不会到那一步。
 
-## 11. native 加载
+## 11. native 加载(完全靠 library-directories,v2 去除 APP_ROOT)
 
 | 单元 | native 位置 |
 |------|------------|
 | dep | `_vendor/<name>/_build/<mt>/<lib>/native/<soname>` |
 | app | `<project>/_build/<mt>/<lib>/native/<soname>` |
 
-**自加载优先**(bake 生成的 `native-loader.so`):loader candidate 1 走 `APP_ROOT/<mt>/<libpath>/native/`,dev 下 APP_ROOT 是 `<project>/lib`(由 `chandler run` 设),只覆盖 app 自己的 native,**dep 的 native 走 candidate 2**(扫 `(library-directories)` obj 侧,即各 `_build/<mt>/`)命中。
+**自加载 loader**(bake 生成的 `native-loader.so`):loader 读 `(library-directories)` 扫 obj 侧找 `<lib>/native/<soname>`——**跟 install/pack 模式完全同构**,无需 APP_ROOT 锚点(详见 09-runtime-paths §5.2)。
 
 有 `native-loader.so` 的库(自加载)跳过预加载扫描。
 
-## 12. APP_ROOT 的角色
+**chandler 兜底扫描**:`native-load-paths` 扫 `(library-directories)` 的 obj 侧(各 `_build/<mt>/`),只服务**无 loader 的第三方库**。
 
-dev 由 `chandler run` 设为 `<project>/lib`(沿用现状,兼容旧 native-loader),**只用于** native-loader candidate 1。资源定位不读 APP_ROOT(09-runtime-paths 已移除 APP_ROOT 依赖,走 library-directories 扫描)。
+## 12. APP_ROOT 已去除(v2 决策)
+
+**v2 不再有 APP_ROOT 环境变量。** dev/install/pack 三种模式都完全靠 `(library-directories)` 定位文件路径:
+
+- 资源定位:`scan-library-directories` 扫 src/obj 两侧的 `resources/`
+- native 加载:loader 扫 obj 侧
+- import 解析:Chez 原生
+
+**v1 的 APP_ROOT 用途与 v2 替代**:
+
+| v1 用途 | v2 替代 |
+|---------|--------|
+| native-loader candidate 1 | loader 扫 `(library-directories)` obj 侧 |
+| 资源定位 fallback | primary 走 library-directories,fallback 用 library-object-filename |
+| `app-root` / `app-name` API | 删除 |
+
+`chandler run` **不再设 APP_ROOT**。详见 [09-runtime-paths §4](09-runtime-paths.md)。
 
 ## 13. `chandler build`
 

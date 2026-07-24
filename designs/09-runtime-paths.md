@@ -12,14 +12,15 @@
 
 ```scheme
 (library (chandler runtime-paths)
-  (export app-root app-name
-          resource-path find-resource-path
+  (export resource-path find-resource-path
           define-resource-path-resolver)
   (import (chezscheme)
           (chandler util)
           (chandler layout)
           (chandler fs))
 ```
+
+> **v2 去除 `app-root` / `app-name` API**:不再需要(无 APP_ROOT)。资源定位完全走 `(library-directories)` 扫描。
 
 ### 2.2 函数签名
 
@@ -139,13 +140,19 @@ v2 layout 的 `<mt>` 嵌套在 `<name>/<version>/` 下,parent-dir 链是:
 
 恰好定位到 `<name>/<version>/`,然后拼 `src/resources/<libpath>/<segs>`。
 
-## 4. 资源定位不读 APP_ROOT
+## 4. APP_ROOT 完全去除(v2 决策)
 
-00 §8 明确:**资源与库住在同一个前缀里,而 `(library-directories)` 本身就是「我在对着哪些前缀跑」的权威答案**。
+**v2 不再有 APP_ROOT 环境变量。** 所有运行时文件路径定位**统一到 `(library-directories)`** 这单一面:
 
-`APP_ROOT` 历史遗留:
-- v1 用单一前缀模型,APP_ROOT 作为定位锚点
-- v2 改用 `library-directories` 列表,每个条目自包含 src/obj/native,资源扫描自然覆盖所有前缀
+| v1 机制 | v2 替代 |
+|---------|--------|
+| `APP_ROOT` 单一前缀锚点 | `(library-directories)` 列表(每对 pair 自包含 src/obj/native/resources) |
+| native-loader candidate 1: `$APP_ROOT/<mt>/<libpath>/native/` | native-loader 读 `(library-directories)` 扫 obj 侧(见 §5.2) |
+| `app-root` / `app-name` API | 删除;资源定位走 `scan-library-directories`,不读 env |
+
+**为什么能统一**:`(library-directories)` 是 Chez 原生的库搜索面,它已经列出了"当前进程对着哪些前缀跑"。资源、native、import 解析都基于这个列表,不需要第二个锚点。`(chandler setup)` 在 import 时重写这个列表后,后续所有定位自动跟着走。
+
+**唯一例外**:runtime 可执行文件位置(skiff/scheme 二进制),由 launcher 的 `exec` 逻辑处理,不属于库路径范畴。
 
 ## 5. native 加载(I4 不变量保留)
 
@@ -155,20 +162,36 @@ v2 layout 的 `<mt>` 嵌套在 `<name>/<version>/` 下,parent-dir 链是:
 <name>/<version>/<mt>/<libpath>/native/<soname>
 ```
 
-### 5.2 自加载 loader
+### 5.2 自加载 loader(完全靠 library-directories)
 
-bake 生成的 `native-loader.so` 按候选序自加载:
+bake 生成的 `native-loader.so` 在 library invoke 期执行——**此时 `(chandler setup)` 已重写 `library-directories` 为应用真实库列表**(因为 setup 在触发 native-loader 的 import 链之前执行)。loader 直接读 `(library-directories)` 扫 obj 侧:
 
 ```scheme
-;;; native-loader.so 的候选路径生成逻辑
-(candidates-for '<lib>)
-  = list(
-      (join-paths (app-root) "<mt>" "<libpath>" "native" "<soname>")
-      ;; 候选 2:扫 library-directories 的 obj 侧
-    )
+;;; bake 生成的 native-loader.so(完全靠 library-directories,无 APP_ROOT)
+(import (chezscheme))
+(define (find-native libref soname)
+  ;; libref = '(http)  soname = "llhttp.so"
+  (let loop ([dirs (library-directories)])
+    (if (null? dirs) #f
+        (let ([p (apply path-build (cdar dirs) (append libref (list "native" soname)))])
+          (if (file-exists? p) p (loop (cdr dirs)))))))
+;; 找到后 load-shared-object
+(load-shared-object (find-native '(http) "llhttp.so"))
 ```
 
-因 `library-directories` 挂载了 per-dep 的 obj 侧,候选 2 恰好命中。
+**为什么不需要 candidate 1**(v1 的 `$APP_ROOT/...`):
+- v1 用单一 prefix,APP_ROOT 是定位锚点
+- v2 的 `(library-directories)` 列表已包含所有 unit 的 obj 侧(install 的 `<name>/<version>/<mt>/`、dev 的 `_vendor/<name>/_build/<mt>/` 等)
+- loader 遍历列表即覆盖全部,不需要额外锚点
+
+**执行时序保证**:
+```
+1. launcher exec runtime with --libdirs = chandler-runtime(bootstrap)
+2. runtime 加载 run.sps
+3. run.sps (import (chandler setup)) → setup 重写 library-directories 为应用列表
+4. run.sps (import (myapp main)) → myapp import http → http 的 native-loader 执行
+5. native-loader 读 (library-directories) → 此时已是应用列表 → 扫 obj 侧命中
+```
 
 ### 5.3 chandler 兜底扫描
 

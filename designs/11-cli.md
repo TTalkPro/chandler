@@ -127,7 +127,8 @@ chandler pack --lib <name>
 | `CHANDLER_SKIFF=<exe>` | skiff 可执行文件路径 |
 | `CHANDLER_SCHEME=<exe>` | Chez 可执行文件路径 |
 | `CHEZSCHEMELIBDIRS` | 库搜索路径(run/repl/exec 自动设) |
-| `APP_ROOT` | pack 模式启动器设;dev 模式不设 |
+
+> **v2 去除 `APP_ROOT`**:完全靠 `(library-directories)` 定位文件路径(资源、native、import)。见 [09-runtime-paths §4](09-runtime-paths.md)。
 
 ## 5. 退出码(sysexits 风格)
 
