@@ -459,8 +459,7 @@
     ;; %load-natives / import 之前(designs/10 §3:失败进程零副作用)
     (bootstrap-verifies-before-any-state-change
       (let ([bs (packed-bootstrap)])
-        (assert-true (< (index-of bs "(exit 65)") (index-of bs "(library-directories")))
-        (assert-true (< (index-of bs "(exit 70)") (index-of bs "(library-directories")))
+        ;; v2: library-directories 由 launcher --libdirs 设,不在 bootstrap.ss 里
         (assert-true (< (index-of bs "(exit 78)") (index-of bs "(%load-natives %root-native)")))
         (assert-true (< (index-of bs "(exit 78)") (index-of bs "(import "))))))
 
