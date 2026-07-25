@@ -29,7 +29,11 @@
 
 (library (chandler pack)
   (export pack verify-pack pack-dir-name
-          skiff-exe-path skiff-boot-dir chez-exe-path chez-csv-dir)
+          skiff-exe-path skiff-boot-dir chez-exe-path chez-csv-dir
+          run-sps-content
+          stderr-diag-src runtime-detect-src version-match-src
+          manifest-read-src verify-format-src full-target-check-src
+          native-walk-src)
   (import (chezscheme)
           (chandler util)
           (chandler fs)
@@ -194,6 +198,9 @@
                (files-under src))
              (> n 0)))))
 
+  (define (datum->str d)
+    (let ([op (open-output-string)]) (write d op) (get-output-string op)))
+
   ;; .chandler/chandler-manifest.ss —— 应用清单快照,v2 nested layout 落在
   ;; <root>/<name>/<version>/.chandler/chandler-manifest.ss,与 install 字节级统一。
   ;; 两个用途:① 部署态可回答「这包是什么、什么版本、入口是谁」而不必解析 pack.manifest;
@@ -317,19 +324,21 @@
   ;; skiff pack 不再走 `skiff --app`)。SKIFF_BOOT_DIR 是必须的:skiff 按 exe 相对找
   ;; boot(<exedir>/../lib/skiff/boot),bin/<mt> + boot/<mt> 对不上它;而 boot 必须在
   ;; 进程有堆之前注册,远早于 --script 被解析,env 是唯一可用的交接方式。
-  (define (launcher-sh-skiff libdirs-arg)
-    (let ([mt (current-machine-type)])
+  (define (launcher-sh-skiff name version)
+    (let ([mt (current-machine-type)]
+          [runner (string-append name "/" version "/.chandler/run.sps")])
       (string-append
         (sh-head)
         "export SKIFF_BOOT_DIR=\"$HERE/boot/" mt "\"\n"
-        "exec \"$HERE/bin/" mt "/skiff\" --libdirs \"" libdirs-arg "\" --script \"$HERE/bootstrap.ss\" \"$@\"\n")))
+        "exec \"$HERE/bin/" mt "/skiff\" -q --program \"$HERE/" runner "\" \"$@\"\n")))
 
-  (define (launcher-ps1-skiff libdirs-arg)
-    (let ([mt (current-machine-type)])
+  (define (launcher-ps1-skiff name version)
+    (let ([mt (current-machine-type)]
+          [runner (string-append name "/" version "/.chandler/run.sps")])
       (string-append
         (ps1-head)
         "$env:SKIFF_BOOT_DIR = \"$Here/boot/" mt "\"\n"
-        "& \"$Here/bin/" mt "/skiff.exe\" --libdirs \"" libdirs-arg "\" --script \"$Here/bootstrap.ss\" @PackArgs\n"
+        "& \"$Here/bin/" mt "/skiff.exe\" -q --program \"$Here/" runner "\" @PackArgs\n"
         "exit $LASTEXITCODE\n")))
 
   ;; stock Chez:绝对 -b 链(bake designs/22 机制 C —— 最稳,exe 名任意,相对 -b 不可用)。
@@ -340,20 +349,22 @@
       (string-append "-b \"" p "petite.boot\""
                      (if (eq? runtime 'scheme) (string-append " -b \"" p "scheme.boot\"") ""))))
 
-  (define (launcher-sh-stock runtime libdirs-arg)
-    (string-append
-      (sh-head)
-      "exec \"$HERE/bin/" (current-machine-type) "/scheme\" "
-      (boots-flags runtime "$HERE")
-      " --libdirs \"" libdirs-arg "\" --script \"$HERE/bootstrap.ss\" \"$@\"\n"))
+  (define (launcher-sh-stock runtime name version)
+    (let ([runner (string-append name "/" version "/.chandler/run.sps")])
+      (string-append
+        (sh-head)
+        "exec \"$HERE/bin/" (current-machine-type) "/scheme\" "
+        (boots-flags runtime "$HERE")
+        " -q --program \"$HERE/" runner "\" \"$@\"\n")))
 
-  (define (launcher-ps1-stock runtime libdirs-arg)
-    (string-append
-      (ps1-head)
-      "& \"$Here/bin/" (current-machine-type) "/scheme.exe\" "
-      (boots-flags runtime "$Here")
-      " --libdirs \"" libdirs-arg "\" --script \"$Here/bootstrap.ss\" @PackArgs\n"
-      "exit $LASTEXITCODE\n"))
+  (define (launcher-ps1-stock runtime name version)
+    (let ([runner (string-append name "/" version "/.chandler/run.sps")])
+      (string-append
+        (ps1-head)
+        "& \"$Here/bin/" (current-machine-type) "/scheme.exe\" "
+        (boots-flags runtime "$Here")
+        " -q --program \"$Here/" runner "\" @PackArgs\n"
+        "exit $LASTEXITCODE\n")))
 
   ;; 按 machine-type 选 sh / .ps1。ta6nt 包只能在 Windows 上产,故 .ps1 这条在 Linux
   ;; 上不被 `chandler pack` 走到;生成器本身另由 PowerShell 验收渲染后实跑。
@@ -374,17 +385,8 @@
   ;;   (exit N)(sysexits:65/70/78)+ 单行 s-expr 诊断,不走 Chez error。
   ;; ═══════════════════════════════════════════════════════════════════
 
-  ;; 包根从**自身路径**推导 —— bootstrap 由 `--script` 跑,(car (command-line)) 就是
-  ;; 它自己,dirname 即包根,故 bootstrap 自身无需任何 env。
-  (define bootstrap-root-src
-    (string-append
-      "(define %root\n"
-      "  (let* ((self (car (command-line)))\n"
-      "         (d (let loop ((i (- (string-length self) 1)))\n"
-      "              (cond ((< i 0) \".\")\n"
-      "                    ((char=? #\\/ (string-ref self i)) (substring self 0 i))\n"
-      "                    (else (loop (- i 1)))))))\n"
-      "    (if (string=? d \"\") \".\" d)))\n"))
+  ;; 包根 = 4× 从自身路径向上 —— run.sps 恒在 <name>/<version>/.chandler/run.sps,
+  ;; install 模式同构,故 root 推导两边一样。
 
   ;; stderr 诊断:人类可读行 + 单行 s-expr(orchestrator 用 read 收,故 s-expr
   ;; 恒单行、无换行;designs/10 §5)。
@@ -603,34 +605,56 @@
       "                (%load-natives p)))))\n"
       "      (directory-list dir))))\n"))
 
-  ;; 校验全部落在任何状态变更之前(library-directories / %load-natives / import):
-  ;; 失败进程必须是「零副作用 + 明确退出码」的,不留半截加载的堆。
-  ;; ver 形参仅为签名兼容保留:target 三元组现在由 bootstrap 自己从 pack.manifest
-  ;; 读,不再在生成期内联(同一份 bootstrap 服务 stock 与 skiff 两种 runtime)。
-  (define (bootstrap-source entry main-proc ver mt libdirs-pairs)
-    (let ([libdirs-strings (map (lambda (p) (string-append (car p) "::" (cdr p)))
-                                libdirs-pairs)])
+  ;; run-sps-content:生成统一 run.sps,install/pack 模式共用。
+  ;; install 模式:scan-libdirs 发现库 + import entry + call main。
+  ;; pack 模式:在 install 基础上追加 pack.manifest 校验 + native 加载。
+  (define (run-sps-content entry main . mode)
+    (let ([entry-str (string-join (map symbol->string entry) " ")]
+          [main-str (symbol->string main)]
+          [pack? (and (pair? mode) (eq? (car mode) 'pack))])
       (string-append
-        ";; generated by chandler pack -- do not edit\n"
-        bootstrap-root-src
-        stderr-diag-src
-        runtime-detect-src
-        version-match-src
-        manifest-read-src
-        verify-format-src
-        full-target-check-src
-        "(define %root-native (string-append %root))\n"
-        "(compile-imported-libraries #f)\n"
-        ;; library-directories 由 launcher 的 --libdirs 设(编译时生效),
-        ;; bootstrap.ss 不覆盖(launcher 已设正确的 src::obj 格式)。
-        native-walk-src
-        "(%load-natives %root-native)\n"
-        "(import " (datum->str entry) ")\n"
-        "(" (symbol->string main-proc) " (cdr (command-line)))\n"
-        "(exit 0)\n")))
-
-  (define (datum->str d)
-    (let ([op (open-output-string)]) (write d op) (get-output-string op)))
+        "(import (chezscheme))\n"
+        ";; runner generated by chandler -- do not edit\n"
+        ;; ── 根推导(install/pack 同构:4× path-parent) ──
+        "(define %runner (car (command-line)))\n"
+        "(define %dot-chandler (path-parent %runner))\n"
+        "(define %version-dir (path-parent %dot-chandler))\n"
+        "(define %name-dir (path-parent %version-dir))\n"
+        "(define %root (path-parent %name-dir))\n"
+        "(define %mt (symbol->string (machine-type)))\n"
+        ;; ── scan-libdirs(共享) ──
+        "(define (scan-libdirs prefix)\n"
+        "  (let ([result '()])\n"
+        "    (when (file-directory? prefix)\n"
+        "      (for-each\n"
+        "        (lambda (name-str)\n"
+        "          (let ([name-dir (path-build prefix name-str)])\n"
+        "            (when (file-directory? name-dir)\n"
+        "              (for-each\n"
+        "                (lambda (ver-str)\n"
+        "                  (let* ([vroot (path-build name-dir ver-str)]\n"
+        "                         [src (path-build vroot \"src\")]\n"
+        "                         [obj (path-build vroot %mt)])\n"
+        "                    (when (file-directory? src)\n"
+        "                      (set! result (cons (cons src obj) result)))))\n"
+        "                (directory-list name-dir)))))\n"
+        "        (directory-list prefix)))\n"
+        "    result))\n"
+        "(library-directories (scan-libdirs %root))\n"
+        ;; ── pack 额外段:校验 + native ──
+        (if pack? stderr-diag-src "")
+        (if pack? runtime-detect-src "")
+        (if pack? version-match-src "")
+        (if pack? manifest-read-src "")
+        (if pack? verify-format-src "")
+        (if pack? full-target-check-src "")
+        (if pack? "(compile-imported-libraries #f)\n" "")
+        (if pack? native-walk-src "")
+        (if pack? "(%load-natives %root)\n" "")
+        ;; ── 入口(共享) ──
+        "(let ([args (cdr (command-line))]\n"
+        "      [env (environment '(" entry-str "))])\n"
+        "  (eval (list '" main-str " args) env))\n")))
 
   ;; ═══════════════════════════════════════════════════════════════════
   ;; §7 pack.manifest
@@ -827,30 +851,13 @@
         (copy-resources! project root name version)
         (copy-share! project root locked)
         (write-app-manifest! project root name version entry mainp)
-        ;; v2 nested layout: compute libdirs for bootstrap.ss
-        ;; App + Chandler + each dep has its own (src . obj) pair
-        (let* ([app-vr (version-root root name version)]
-               [chandler-vr (version-root root 'chandler chandler-version)]
-               [libdirs-pairs
-                (append
-                  (list (cons (join-paths app-vr "src") (join-paths app-vr mt)))
-                  (if (and mf (manifest-chandler mf))
-                      (list (cons (join-paths chandler-vr "src") (join-paths chandler-vr mt)))
-                      '())
-                   (map
-                      (lambda (d)
-                        (let* ([dn (locked-dep-name d)]
-                               [dv (locked-dep-pin-val d)]
-                               [vr (version-root root (symbol->string dn) dv)])
-                          (cons (join-paths vr "src") (join-paths vr mt))))
-                      locked))]
-               [libdirs-arg (libdirs->arg libdirs-pairs)])
-        ;; bootstrap 在 runtime 定位之前落盘:内容只依赖 entry/mt(target 三元组由它
-        ;; 自己从 pack.manifest 读),与捆哪份运行时无关;stock 与 skiff 包同一份
-        ;; (designs/10 §3:不再分叉;skiff 启动器在 L2 才换 --script,文件先备好)。
+        ;; 3) v2 nested: run.sps + 启动器(无 --libdirs,由 run.sps 自己 scan-libdirs)
         (unless lib?
-          (write-text (join-paths root "bootstrap.ss") (bootstrap-source entry mainp #f mt libdirs-pairs))
-          ;; 3) 运行时 + boot + 启动器 + 清单
+          (let* ([runner-dir (join-paths (version-root root name version) ".chandler")])
+            (ensure-dir runner-dir)
+            (write-text (join-paths runner-dir "run.sps")
+              (run-sps-content entry mainp 'pack)))
+          ;; 4) 运行时 + boot + 启动器 + 清单
           (if (eq? rt 'skiff)
             (let* ([exe (skiff-exe-path)]
                    [bd  (skiff-boot-dir exe)]
@@ -858,7 +865,7 @@
               (copy-exe! exe (join-paths (pack-bin-dir root) (exe-name "skiff")))
               (for-each (lambda (b) (copy-file (join-paths bd b) (join-paths (pack-boot-dir root) b)))
                         '("petite.boot" "scheme.boot" "skiff.boot"))
-              (write-launcher! root name (launcher-sh-skiff libdirs-arg) (launcher-ps1-skiff libdirs-arg))
+              (write-launcher! root name (launcher-sh-skiff name version) (launcher-ps1-skiff name version))
               (write-pack-manifest! root name version rt entry mainp
                                     (probe-chez-version exe) mt sv))
             (let* ([exe (chez-exe-path)]
@@ -868,11 +875,11 @@
               (copy-file (join-paths csv "petite.boot") (join-paths (pack-boot-dir root) "petite.boot"))
               (when (eq? rt 'scheme)
                 (copy-file (join-paths csv "scheme.boot") (join-paths (pack-boot-dir root) "scheme.boot")))
-              (write-launcher! root name (launcher-sh-stock rt libdirs-arg) (launcher-ps1-stock rt libdirs-arg))
+              (write-launcher! root name (launcher-sh-stock rt name version) (launcher-ps1-stock rt name version))
               (write-pack-manifest! root name version rt entry mainp ver mt #f)))
             ) ;; close unless lib?
           (printf "packed ~a ~a -> ~a~%" name version root)
-        0))))
+        0)))
 
   ;; _vendor/chandler/_build/<mt>/chandler/<sub>.so → <pack>/chandler/<version>/<mt>/chandler/<sub>.so。
   ;; v2 nested:layout:chandler runtime 独立在 <root>/chandler/<version>/,与 app/deps 的

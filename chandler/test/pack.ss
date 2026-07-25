@@ -351,43 +351,43 @@
           (assert-equal 0 rc))))
 
 
-    ;; ── bootstrap.ss(designs/10 L0):runtime-aware verifier ──
-    ;; bootstrap 在 runtime 定位之前落盘(内容只依赖 entry/mt),故 pack-until-runtime
+    ;; ── run.sps(designs/10 L0):统一 runner(install/pack 共用)──
+    ;; run.sps 在 runtime 定位之前落盘(内容只依赖 entry/mt),故 pack-until-runtime
     ;; 这批「不捆真运行时」的用例同样能拿到产物;钉的是生成物的契约:runtime 探测、
     ;; format/target 校验、sysexits 退出码、单行 s-expr 诊断、校验先于状态变更。
 
-    (bootstrap-written-before-runtime-bundling
+    (runner-written-before-runtime-bundling
       (let* ([app (make-app '())]
              [_ (fake-build! app "myapp")])
         (pack-until-runtime app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . petite)))
-        (assert-true (file-exists? (join-paths (pack-out app "myapp" "1.0") "bootstrap.ss")))))
+        (assert-true (file-exists? (join-paths (app-vroot app "myapp" "1.0") ".chandler" "run.sps")))))
 
-    ;; skiff 包也生成同一份 bootstrap(designs/10 §3:不再分叉;启动器 L2 才换)
-    (bootstrap-also-written-for-skiff-packs
+    ;; skiff 包也生成同一份 run.sps(不再分叉;启动器直接 --program)
+    (runner-also-written-for-skiff-packs
       (let* ([app (make-app '())]
              [_ (fake-build! app "myapp")])
         (pack-until-runtime app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . skiff)))
-        (assert-true (file-exists? (join-paths (pack-out app "myapp" "1.0") "bootstrap.ss")))))
+        (assert-true (file-exists? (join-paths (app-vroot app "myapp" "1.0") ".chandler" "run.sps")))))
 
     ;; runtime 探测:(top-level-bound? 'skiff-version) + 字符串/过程双绑定容忍
-    (bootstrap-detects-runtime-via-skiff-version-binding
-      (let ([bs (packed-bootstrap)])
+    (runner-detects-runtime-via-skiff-version-binding
+      (let ([bs (packed-runner)])
         (assert-true (has? bs "(top-level-bound? 'skiff-version)"))
         (assert-true (has? bs "(top-level-value 'skiff-version)"))
         (assert-true (has? bs "(procedure? v)"))
         (assert-true (has? bs "'skiff 'chez"))))
 
     ;; (format N) 超出 pack-format-supported(=1)→ 70 EX_SOFTWARE
-    (bootstrap-checks-format-version-exit-70
-      (let ([bs (packed-bootstrap)])
+    (runner-checks-format-version-exit-70
+      (let ([bs (packed-runner)])
         (assert-true (has? bs "pack-format-supported"))
         (assert-true (has? bs "format-too-new"))
         (assert-true (has? bs "(exit 70)"))))
 
     ;; 完整 target 校验:machine-type / chez-version / skiff-version / skiff-compat
     ;; 四个分支都在,不符即 78 EX_CONFIG + target-mismatch s-expr
-    (bootstrap-full-target-check-exit-78
-      (let ([bs (packed-bootstrap)])
+    (runner-full-target-check-exit-78
+      (let ([bs (packed-runner)])
         (assert-true (has? bs "machine-type"))
         (assert-true (has? bs "chez-version"))
         (assert-true (has? bs "skiff-version"))
@@ -396,35 +396,35 @@
         (assert-true (has? bs "(exit 78)"))))
 
     ;; 内联版区间匹配(部署态无 chandler 可 import):%version-match? 必须自含
-    (bootstrap-inlines-version-match
-      (let ([bs (packed-bootstrap)])
+    (runner-inlines-version-match
+      (let ([bs (packed-runner)])
         (assert-true (has? bs "(define (%version-match?"))
         (assert-true (has? bs "(define (%match-one"))
         (assert-true (has? bs "(define (%version-compare"))))
 
     ;; manifest 不可读 / 缺 (target …) → 65 EX_DATAERR
-    (bootstrap-manifest-invalid-exit-65
-      (let ([bs (packed-bootstrap)])
+    (runner-manifest-invalid-exit-65
+      (let ([bs (packed-runner)])
         (assert-true (has? bs "pack.manifest"))
         (assert-true (has? bs "(chandler-pack-error (manifest-invalid))"))
         (assert-true (has? bs "target-missing"))
         (assert-true (has? bs "(exit 65)"))))
 
     ;; (skiff-compat \">=0.0.0\") 全开通配:stock runtime 也合法(designs/10 §4 第 8 行)
-    (bootstrap-skiff-compat-wildcard-passes-stock
-      (let ([bs (packed-bootstrap)])
+    (runner-skiff-compat-wildcard-passes-stock
+      (let ([bs (packed-runner)])
         (assert-true (has? bs "\">=0.0.0\""))
         (assert-true (has? bs "(not (string=? %want-compat \">=0.0.0\"))"))))
 
     ;; 声明要 skiff(exact 或 compat 非全开)+ runtime 是 stock Chez → 一律 78
-    (bootstrap-skiff-required-on-stock-exit-78
-      (let ([bs (packed-bootstrap)])
+    (runner-skiff-required-on-stock-exit-78
+      (let ([bs (packed-runner)])
         (assert-true (has? bs "pack requires skiff, current runtime is stock Chez"))))
 
     ;; SKIFF_ALLOW_VERSION_SKEW=1 只放宽 skiff 维:WARNING + 通过,
     ;; machine-type / chez-version 的 %mismatch! 路径不带 skew 分支
-    (bootstrap-skew-escape-only-relaxes-skiff-version
-      (let ([bs (packed-bootstrap)])
+    (runner-skew-escape-only-relaxes-skiff-version
+      (let ([bs (packed-runner)])
         (assert-true (has? bs "SKIFF_ALLOW_VERSION_SKEW"))
         (assert-true (has? bs "WARNING: skiff-version skew allowed"))
         (assert-true (has? bs "(define %skew-ok? (equal? (getenv \"SKIFF_ALLOW_VERSION_SKEW\") \"1\"))"))
@@ -434,20 +434,20 @@
                         (index-of bs "%mismatch! 'chez-version")))))
 
     ;; 结构化诊断:单行 s-expr 走 %err-sexp,chandler-pack-error 前缀统一
-    (bootstrap-structured-sexp-diagnostics
-      (let ([bs (packed-bootstrap)])
+    (runner-structured-sexp-diagnostics
+      (let ([bs (packed-runner)])
         (assert-true (has? bs "(define (%err-sexp s)"))
         (assert-true (has? bs "chandler-pack-error"))
         (assert-true (has? bs "(list 'expected"))))
 
     ;; target/format/manifest 失败绝不走 Chez error(会进 debugger / 留栈帧)
-    (bootstrap-no-chez-error-for-verify-failures
-      (let ([bs (packed-bootstrap)])
+    (runner-no-chez-error-for-verify-failures
+      (let ([bs (packed-runner)])
         (assert-false (has? bs "(error 'chandler-pack"))))
 
     ;; 生成物必须是平衡的 s-expr 序列:子串断言查不出括号错位,交给 reader 兜底
-    (bootstrap-source-is-well-formed-sexps
-      (let* ([bs (packed-bootstrap)]
+    (runner-source-is-well-formed-sexps
+      (let* ([bs (packed-runner)]
              [ip (open-input-string bs)])
         (let loop ([n 0])
           (let ([d (read ip)])
@@ -455,20 +455,19 @@
                 (assert-true (> n 10))        ; 真有东西,不是空串假阳性
                 (loop (+ n 1)))))))
 
-    ;; 校验先于一切状态变更:65/70/78 出口都在 library-directories /
-    ;; %load-natives / import 之前(designs/10 §3:失败进程零副作用)
-    (bootstrap-verifies-before-any-state-change
-      (let ([bs (packed-bootstrap)])
-        ;; v2: library-directories 由 launcher --libdirs 设,不在 bootstrap.ss 里
-        (assert-true (< (index-of bs "(exit 78)") (index-of bs "(%load-natives %root-native)")))
-        (assert-true (< (index-of bs "(exit 78)") (index-of bs "(import "))))))
+    ;; 校验先于一切状态变更:65/70/78 出口都在 %load-natives / eval-entry 之前
+    ;; (scan-libdirs 设在校验前,但那只是目录列表,不加载代码)
+    (runner-verifies-before-any-state-change
+      (let ([bs (packed-runner)])
+        (assert-true (< (index-of bs "(exit 78)") (index-of bs "(%load-natives %root)")))
+        (assert-true (< (index-of bs "(exit 78)") (index-of bs "(eval (list '")))))
 
-  ;; 造一个 petite 包到 runtime 步为止,读回生成的 bootstrap.ss
-  (define (packed-bootstrap)
+  ;; 造一个 petite 包到 runtime 步为止,读回生成的 run.sps
+  (define (packed-runner)
     (let* ([app (make-app '())]
            [_ (fake-build! app "myapp")])
       (pack-until-runtime app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . petite)))
-      (read-file (join-paths (pack-out app "myapp" "1.0") "bootstrap.ss"))))
+      (read-file (join-paths (app-vroot app "myapp" "1.0") ".chandler" "run.sps"))))
 
   (define (index-of hay needle)
     (let ([n (string-length hay)] [m (string-length needle)])
