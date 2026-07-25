@@ -1,36 +1,44 @@
 #!/usr/bin/env scheme-script
-;;; bootstrap.ss — chandler installer (replaces install.sh / install.ps1)
+;;; bootstrap.ss — chandler 自举安装器(三段式)
 ;;;
-;;; Self-contained: pure (chezscheme), zero chandler imports.
-;;; Works even when chandler's libraries are broken (that's the point).
+;;; 自包含红线:纯 (chezscheme),零 chandler import —— chandler 库坏了也能装。
+;;; 所有安装/编译/launcher 逻辑一律 spawn chandler 自己的 CLI 完成(直接复用
+;;; cmd-deps / cmd-build / cmd-install / cmd-uninstall-global),本脚本只做编排。
 ;;;
-;;; Usage:
-;;;   scheme --script bootstrap.ss              # install to ~/.local
-;;;   skiff  --script bootstrap.ss              # install (skiff runtime)
-;;;   scheme --script bootstrap.ss --system     # install to /usr/local (needs root)
-;;;   scheme --script bootstrap.ss --dev        # install into ./dist/ (dev prefix, from working copy)
-;;;   scheme --script bootstrap.ss --force      # reinstall over existing
-;;;   scheme --script bootstrap.ss --uninstall  # remove (match --system/--dev if installed that way)
+;;; 三段式(_bootstrap 与正常 --user 安装完全同构,仅前缀不同):
+;;;   stage 1  源码直载 CLI:deps → build → install --prefix=<repo>/_bootstrap
+;;;            产出 _bootstrap/{chandler/<ver>/{src,<mt>},.registry,bin/chandler}
+;;;   stage 2  用 _bootstrap 的 chandler 重新 build 本仓库(自托管验证)
+;;;   stage 3  用 _bootstrap 的 chandler install 到最终前缀 + shim 冒烟
 ;;;
-;;; The user chooses the runtime by invocation. No runtime discovery here —
-;;; that lives in the GENERATED launcher (which this script writes).
+;;; stage 2/3 直载 _bootstrap 的 main.sps(不走 shim),保住退出码可检测;
+;;; shim 链路单独冒烟验证。
+;;;
+;;; 用法:
+;;;   scheme --script bootstrap.ss                # 装到 ~/.local(默认 --user)
+;;;   skiff  --script bootstrap.ss                # 用 skiff 跑安装(默认跟随调用运行时)
+;;;   scheme --script bootstrap.ss --system       # 装到 /usr/local(需 root)
+;;;   scheme --script bootstrap.ss --prefix=DIR   # 装到 DIR(启动器 → DIR/bin)
+;;;   scheme --script bootstrap.ss --bootstrap-only   # 只跑 stage 1(产出 _bootstrap/)
+;;;   scheme --script bootstrap.ss --force        # 覆盖重装
+;;;   scheme --script bootstrap.ss --uninstall    # 卸载(按同一 target;需仓库源码在)
+;;;
+;;; 环境变量(与 chandler 全局约定一致):
+;;;   CHANDLER_RUNTIME=skiff|chez   选运行时;缺省跟随调用 bootstrap 的解释器
+;;;   CHANDLER_SKIFF / CHANDLER_SCHEME   对应运行时的可执行文件(名或路径)
+;;;
+;;; 注意:编译是硬需求 —— petite 没有编译器,stage 1 的 build 会明确报错。
 
 (import (chezscheme))
 
 ;; ════════════════════════════════════════════════════════════════════
-;; §1  Path helpers (minimal — no (chandler fs) dependency)
+;; §1 最小工具(仅编排所需;fs/安装逻辑全在 chandler 库里,不重造)
 ;; ════════════════════════════════════════════════════════════════════
 
 (define (dirname path)
   (let loop ([i (- (string-length path) 1)])
     (cond [(< i 0) "."]
           [(char=? #\/ (string-ref path i)) (substring path 0 i)]
-          [else (loop (- i 1))])))
-
-(define (basename path)
-  (let loop ([i (- (string-length path) 1)])
-    (cond [(< i 0) path]
-          [(char=? #\/ (string-ref path i)) (substring path (+ i 1) (string-length path))]
           [else (loop (- i 1))])))
 
 (define (join-paths . parts)
@@ -41,79 +49,10 @@
              ""
              parts))
 
-(define (strip-prefix s pre)
-  (let ([n (string-length pre)])
-    (if (and (>= (string-length s) n) (string=? pre (substring s 0 n)))
-        (substring s n (string-length s))
-        s)))
-
-(define (string-suffix? suf s)
-  (let ([ls (string-length s)] [lf (string-length suf)])
-    (and (>= ls lf) (string=? suf (substring s (- ls lf) ls)))))
-
-(define (string-join lst sep)
-  (if (null? lst) ""
-      (fold-left (lambda (acc s) (string-append acc sep s)) (car lst) (cdr lst))))
-
-(define (string-split s ch)
-  (let loop ([i 0] [start 0] [acc '()])
-    (cond [(= i (string-length s)) (reverse (if (> i start) (cons (substring s start i) acc) acc))]
-          [(char=? (string-ref s i) ch) (loop (+ i 1) (+ i 1) (cons (substring s start i) acc))]
-          [else (loop (+ i 1) start acc)])))
-
-(define (string-contains? s sub)
-  (let ([ls (string-length s)] [lsub (string-length sub)])
-    (and (> lsub 0)
-         (let loop ([i 0])
-           (cond [(> (+ i lsub) ls) #f]
-                 [(string=? sub (substring s i (+ i lsub))) #t]
-                 [else (loop (+ i 1))])))))
-
-;; ════════════════════════════════════════════════════════════════════
-;; §2  File system helpers (minimal — no (chandler fs) dependency)
-;; ════════════════════════════════════════════════════════════════════
-
 (define (ensure-dir path)
   (unless (file-exists? path)
     (ensure-dir (dirname path))
     (mkdir path)))
-
-(define (ensure-parent path) (ensure-dir (dirname path)))
-
-(define (copy-file src dst)
-  (ensure-parent dst)
-  (when (file-exists? dst) (delete-file dst))
-  (let ([in (open-file-input-port src)])
-    (let ([out (open-file-output-port dst)])
-      (let ([buf (make-bytevector 65536)])
-        (let loop ()
-          (let ([n (get-bytevector-n! in buf 0 (bytevector-length buf))])
-            (unless (eof-object? n)
-              (put-bytevector out buf 0 n)
-              (loop)))))
-      (close-port out))
-    (close-port in)))
-
-(define (write-text path content)
-  (ensure-parent path)
-  (call-with-output-file path
-    (lambda (p) (put-string p content))
-    'replace))
-
-(define (files-under dir)
-  (if (not (file-directory? dir))
-      '()
-      (let loop ([queue (list dir)] [acc '()])
-        (if (null? queue)
-            (reverse acc)
-            (let* ([d (car queue)] [rest (cdr queue)])
-              (let inner ([entries (directory-list d)] [q rest] [a acc])
-                (if (null? entries)
-                    (loop q a)
-                    (let* ([e (car entries)] [p (join-paths d e)])
-                      (if (file-directory? p)
-                          (inner (cdr entries) (cons p q) a)
-                          (inner (cdr entries) q (cons p a)))))))))))
 
 (define (rm-rf path)
   (when (file-exists? path)
@@ -126,386 +65,281 @@
           (delete-directory path))
         (delete-file path))))
 
-(define (delete-if-exists p) (when (file-exists? p) (delete-file p)))
-
-(define (sweep-empty-parents path)
-  (let ([parent (dirname path)])
-    (when (and (file-directory? parent)
-               (not (string=? parent "/"))
-               (null? (directory-list parent)))
-      (delete-directory parent)
-      (sweep-empty-parents parent))))
+(define (string-contains? s sub)
+  (let ([ls (string-length s)] [lsub (string-length sub)])
+    (and (> lsub 0)
+         (let loop ([i 0])
+           (cond [(> (+ i lsub) ls) #f]
+                 [(string=? sub (substring s i (+ i lsub))) #t]
+                 [else (loop (+ i 1))])))))
 
 (define (mt-string) (symbol->string (machine-type)))
+(define (win?) (let ([m (mt-string)])
+                 (and (>= (string-length m) 2)
+                      (string=? (substring m (- (string-length m) 2) (string-length m)) "nt"))))
 
-(define (so-ext)
-  (let ([m (mt-string)])
-    (cond [(string-suffix? "nt" m) "dll"]
-          [(string-suffix? "osx" m) "dylib"]
-          [else "so"])))
+;; shell 引号(路径不含双引号的假设,与旧版一致)
+(define (q s) (string-append "\"" s "\""))
 
-(define (win?) (string-suffix? "nt" (mt-string)))
+(define (die code fmt . args)
+  (fprintf (current-error-port) (apply format (string-append "bootstrap: " fmt "~%") args))
+  (exit code))
+
+(define (path-absolute? p)
+  (or (and (> (string-length p) 0) (char=? #\/ (string-ref p 0)))
+      ;; Windows:X:\ 或 X:/
+      (and (> (string-length p) 2) (char=? (string-ref p 1) #\:))))
+
+(define (absolutize p)
+  (if (path-absolute? p) p (join-paths (current-directory) p)))
 
 ;; ════════════════════════════════════════════════════════════════════
-;; §3  Args + prefix resolution
+;; §2 参数解析
+;;   target = (user) | (system) | (prefix . DIR);缺省 (user)
+;; ════════════════════════════════════════════════════════════════════
+
+(define (parse-bootstrap-args argv)
+  (let loop ([xs argv] [target #f] [force? #f] [uninstall? #f] [help? #f] [boot-only? #f])
+    (define (set-target t xs)
+      (if target
+          (die 64 "--user / --system / --prefix are mutually exclusive")
+          (loop xs t force? uninstall? help? boot-only?)))
+    (if (null? xs)
+        (list (or target '(user)) force? uninstall? help? boot-only?)
+        (let ([a (car xs)])
+          (cond
+            [(string=? a "--help")           (loop (cdr xs) target force? uninstall? #t boot-only?)]
+            [(string=? a "--force")          (loop (cdr xs) target #t uninstall? help? boot-only?)]
+            [(string=? a "--uninstall")      (loop (cdr xs) target force? #t help? boot-only?)]
+            [(string=? a "--bootstrap-only") (loop (cdr xs) target force? uninstall? help? #t)]
+            [(string=? a "--user")           (set-target '(user) (cdr xs))]
+            [(string=? a "--system")         (set-target '(system) (cdr xs))]
+            [(and (> (string-length a) 9)
+                  (string=? (substring a 0 9) "--prefix="))
+             (let ([dir (substring a 9 (string-length a))])
+               (when (string=? dir "") (die 64 "--prefix=DIR needs a non-empty directory"))
+               (set-target (cons 'prefix (absolutize dir)) (cdr xs)))]
+            [else (die 64 "unknown option: ~a (try --help)" a)])))))
+
+;; ════════════════════════════════════════════════════════════════════
+;; §3 路径计算(仓库 / _bootstrap / 最终前缀)
 ;; ════════════════════════════════════════════════════════════════════
 
 (define here (dirname (car (command-line))))
-(define args (cdr (command-line)))
-(define help? (and (member "--help" args) #t))
-(define system? (and (or (member "--system" args) (member "--global" args)) #t))  ; --global:弃用别名
-(define dev? (and (member "--dev" args) #t))
-(define force? (and (member "--force" args) #t))
-(define uninstall? (and (member "--uninstall" args) #t))
+(define here-abs (absolutize here))
+(define mt (mt-string))
+(define bdir (join-paths here-abs "_build" mt))
+(define home (or (getenv "HOME") (getenv "USERPROFILE") "."))
 
-(when (and dev? system?)
-  (fprintf (current-error-port) "bootstrap: --dev and --system are mutually exclusive~%")
-  (exit 64))
+;; _bootstrap = stage 1 的本地产出前缀,布局与 --user 安装同构:
+;;   _bootstrap/chandler/<ver>/{src,<mt>}/.chandler/   库 + 对象 + manifest/lock/run.sps
+;;   _bootstrap/.registry/chandler.ss                  中心注册表(kind app, active)
+;;   _bootstrap/bin/chandler                           稳定 shim 启动器
+(define boot-prefix (join-paths here-abs "_bootstrap"))
+(define boot-bindir (join-paths boot-prefix "bin"))
 
-(define home (or (getenv "HOME") "."))
-
-;; --dev 落点在**仓库自己目录下**的 dist/,布局与真安装同构(只是路径更本地):
-;;   <repo>/dist/chez/{src,<mt>,.chandler}   ← 库前缀(= ~/.local/share/chez 那份的角色)
-;;   <repo>/dist/bin/chandler                ← 启动器(= ~/.local/bin/chandler 的角色)
-;; 好处:dev 也产出一个真正的 src/mt 前缀,deps/pack/门校验与安装态**一套代码通吃**,
-;; 不必为「仓库平铺布局」开特例;且 dist/ 从工作副本 build,改了 rebuild 即生效。
-;; 启动器 exec 后 cwd 会变,故前缀必须**绝对化**(here 常是相对的)。
-(define (path-absolute? p)
-  (and (> (string-length p) 0) (char=? #\/ (string-ref p 0))))
-(define here-abs
-  (cond [(path-absolute? here) here]
-        [(string=? here ".") (current-directory)]
-        [else (join-paths (current-directory) here)]))
-(define dev-root (join-paths here-abs "dist"))
-
-(define prefix
-  (cond [dev?    (join-paths dev-root "chez")]
-        [system? "/usr/local/chez"]
-        [else    (string-append home "/.local/share/chez")]))
 (define chandler-ver
-  ;; 从 chandler-manifest.ss 读 version
-  (let ([mpath (join-paths here "chandler-manifest.ss")])
+  ;; 唯一事实源:chandler-manifest.ss 的 (version "...")
+  (let ([mpath (join-paths here-abs "chandler-manifest.ss")])
     (if (file-exists? mpath)
         (let* ([datum (call-with-input-file mpath read)]
                [ver-field (assoc 'version (cdr datum))])
           (if ver-field (cadr ver-field) "0.0.0"))
         "0.0.0")))
-;; v2 nested layout: chandler 自己装在 <prefix>/chandler/<version>/
-(define chandler-vroot (join-paths prefix "chandler" chandler-ver))
-(define bindir
-  (cond [dev?    (join-paths dev-root "bin")]
-        [system? "/usr/local/bin"]
-        [else    (string-append home "/.local/bin")]))
-(define launcher-path
-  (string-append bindir "/" (if (win?) "chandler.ps1" "chandler")))
+
+(define boot-vroot (join-paths boot-prefix "chandler" chandler-ver))
+
+;; 与 (chandler registry) default-*-libdir/bindir 保持一致(此处无法 import,镜像之)
+(define (target-libdir target)
+  (case (car target)
+    [(user)   (if (win?)
+                  (join-paths (or (getenv "LOCALAPPDATA") home) "chez")
+                  (string-append home "/.local/share/chez"))]
+    [(system) (if (win?)
+                  (join-paths (or (getenv "ProgramData") "C:/ProgramData") "chez")
+                  "/usr/local/chez")]
+    [(prefix) (cdr target)]))
+
+(define (target-bindir target)
+  (case (car target)
+    [(user)   (if (win?)
+                  (join-paths (target-libdir target) "bin")
+                  (string-append home "/.local/bin"))]
+    [(system) (if (win?)
+                  (join-paths (target-libdir target) "bin")
+                  "/usr/local/bin")]
+    [(prefix) (join-paths (cdr target) "bin")]))
+
+(define (target-flag target)
+  (case (car target)
+    [(user)   "--user"]
+    [(system) "--system"]
+    [(prefix) (string-append "--prefix=" (q (cdr target)))]))
 
 ;; ════════════════════════════════════════════════════════════════════
-;; §4  Source install: chandler.ss + chandler/** → <prefix>/src/
+;; §4 运行时选择(跟随调用 bootstrap 的解释器;env 显式覆盖)
 ;; ════════════════════════════════════════════════════════════════════
 
-(define lib-extensions '(".chezscheme.sls" ".sls" ".ss" ".sc"))
+(define (running-skiff?)
+  ;; skiff 自 0.1.1 起内置 (skiff-version) 自证
+  (top-level-bound? (string->symbol "skiff-version")))
 
-(define (find-umbrella srcdir name)
-  (let loop ([exts lib-extensions])
-    (if (null? exts) #f
-        (let ([p (join-paths srcdir (string-append name (car exts)))])
-          (if (file-exists? p) p (loop (cdr exts)))))))
-
-(define (install-sources!)
-  (let ([src-dir (join-paths prefix "src")]
-        [from-prefix (string-append here "/")])
-    (ensure-dir src-dir)
-    ;; umbrella
-    (let ([umb (find-umbrella here "chandler")])
-      (when umb
-        (let ([dst (join-paths src-dir (basename umb))])
-          (copy-file umb dst)
-          (printf "install ~a~%" dst))))
-    ;; subtree
-    (let ([subtree (join-paths here "chandler")])
-      (when (file-directory? subtree)
-        (for-each
-          (lambda (abs)
-            (let* ([rel (strip-prefix abs from-prefix)]
-                   [dst (join-paths src-dir rel)])
-              (copy-file abs dst)))
-          (files-under subtree))))))
+(define interp
+  (let ([rt (getenv "CHANDLER_RUNTIME")])
+    (cond
+      [rt (cond [(string=? rt "skiff") (or (getenv "CHANDLER_SKIFF") "skiff")]
+                [(string=? rt "chez")  (or (getenv "CHANDLER_SCHEME") "scheme")]
+                [else (die 64 "invalid CHANDLER_RUNTIME=~a (want: skiff|chez)" rt)])]
+      [(running-skiff?) (or (getenv "CHANDLER_SKIFF") "skiff")]
+      [else (or (getenv "CHANDLER_SCHEME") "scheme")])))
 
 ;; ════════════════════════════════════════════════════════════════════
-;; §4b  Manifest snapshot: manifest.ss → <prefix>/.chandler/chandler/
-;;
-;; Every library prefix records what it holds under .chandler/<name>/ (the same
-;; shape a pack and a project's own lib/ use). For chandler this is load-bearing,
-;; not decorative: a project declares `(chandler ">=X")` as a RUNTIME GATE — no
-;; URL, nothing to fetch — and `chandler deps` answers "is the installed one new
-;; enough?" by reading the version out of this snapshot.
+;; §5 spawn 原语(唯一的外部调用点)
 ;; ════════════════════════════════════════════════════════════════════
 
-(define (install-manifest!)
-  (let ([src (join-paths here "manifest.ss")]
-        [dst (join-paths prefix ".chandler/chandler/manifest.ss")])
-    (when (file-exists? src)
-      (copy-file src dst)
-      (printf "install ~a~%" dst))))
+;; --libdirs 的源::对象对分隔符:POSIX "::",Windows ";;"
+(define pair-sep (if (win?) ";;" "::"))
+(define (pair src obj) (string-append src pair-sep obj))
 
-(define (uninstall-manifest!)
-  (let ([d (join-paths prefix ".chandler/chandler")])
-    (when (file-directory? d) (rm-rf d))))
+(define src-main-sps (join-paths here-abs "chandler" "cli" "main.sps"))
 
-;; ════════════════════════════════════════════════════════════════════
-;; §5  Compiled objects: _build/<mt>/** → <prefix>/<mt>/
-;; ════════════════════════════════════════════════════════════════════
+;; 源码直载 CLI:chandler 未安装时也能跑(库从源码即时编译加载)
+(define (source-cli-cmd libdirs args)
+  (string-append (q interp) " -q --libdirs " (q libdirs)
+                 " --program " (q src-main-sps)
+                 " -C " (q here-abs) " " args))
 
-(define (deliverable? rel)
-  (and (not (string=? (basename rel) ".bake-manifest"))
-       (not (string-suffix? ".wpo" rel))))
+;; _bootstrap 直载 CLI:用 stage 1 装好的编译对象跑,与最终安装态同一布局。
+;; CHANDLER_HOME 指向 _bootstrap,让自举实例的运行时门/全局兜底都落在自己身上。
+(define (boot-cli-cmd args)
+  (let ([main-sps (join-paths boot-vroot "src" "chandler" "cli" "main.sps")]
+        [libdirs (pair (join-paths boot-vroot "src") (join-paths boot-vroot mt))]
+        [env (if (win?)
+                 (string-append "set \"CHANDLER_HOME=" boot-prefix "\" && ")
+                 (string-append "CHANDLER_HOME=" (q boot-prefix) " "))])
+    (string-append env (q interp) " -q --libdirs " (q libdirs)
+                   " --program " (q main-sps)
+                   " -C " (q here-abs) " " args)))
 
-(define (install-objects!)
-  (let* ([mt (mt-string)]
-         [bdir (join-paths here "_build" mt)]
-         [obj-dir (join-paths prefix mt)])
-    (when (file-directory? bdir)
-      (ensure-dir obj-dir)
-      (let* ([bprefix (string-append bdir "/")]
-             [nx (string-append "." (so-ext))])
-        (for-each
-          (lambda (abs)
-            (let ([rel (strip-prefix abs bprefix)])
-              (when (and (deliverable? rel)
-                         (or (string-suffix? ".so" rel) (string-suffix? nx rel)))
-                (let ([dst (join-paths obj-dir rel)])
-                  (copy-file abs dst)
-                  (printf "install ~a~%" dst)))))
-          (files-under bdir))))))
+(define (run-or-die cmd what)
+  (printf "bootstrap: ~a...~%" what)
+  (let ([rc (system cmd)])
+    (unless (and (fixnum? rc) (= rc 0))
+      (die 70 "~a failed (exit ~a)" what rc))))
 
 ;; ════════════════════════════════════════════════════════════════════
-;; §6  Uninstall by namespace (no manifest needed)
+;; §6 三个阶段 + 冒烟
 ;; ════════════════════════════════════════════════════════════════════
 
-(define (uninstall-libraries!)
-  (let* ([mt (mt-string)]
-         [src-dir (join-paths prefix "src")]
-         [obj-dir (join-paths prefix mt)])
-    ;; src/chandler.{ext} + src/chandler/
-    (let ([umb (find-umbrella src-dir "chandler")])
-      (when (and umb (file-exists? umb))
-        (delete-file umb) (sweep-empty-parents umb)))
-    (let ([d (join-paths src-dir "chandler")])
-      (when (file-directory? d) (rm-rf d)))
-    ;; <mt>/chandler.so + <mt>/chandler/
-    (delete-if-exists (join-paths obj-dir "chandler.so"))
-    (let ([d (join-paths obj-dir "chandler")])
-      (when (file-directory? d) (rm-rf d)))))
+;; stage 1:源码直载 CLI,产出与 --user 安装同构的 _bootstrap/
+(define (stage1-build-bootstrap! force?)
+  (printf "bootstrap: stage 1/3: build a usable chandler into ~a~%" boot-prefix)
+  (rm-rf boot-prefix)   ; 幂等:每次重产,force 语义由 rm-rf 兜住
+  (run-or-die (source-cli-cmd here-abs "deps")
+              "stage1: chandler deps")
+  (run-or-die (source-cli-cmd here-abs "build")
+              "stage1: chandler build")
+  (run-or-die (source-cli-cmd (pair here-abs bdir)
+                              (string-append "install --prefix=" (q boot-prefix)
+                                             (if force? " --force" "")))
+              "stage1: chandler install (bootstrap prefix)")
+  (unless (file-exists? (join-paths boot-vroot "src" "chandler" "cli" "main.sps"))
+    (die 70 "stage1 produced no usable chandler at ~a" boot-vroot)))
+
+;; stage 2:用 _bootstrap 的 chandler 重新 build 本仓库(自托管验证)
+(define (stage2-self-build!)
+  (printf "bootstrap: stage 2/3: self-host build (using _bootstrap chandler)~%")
+  (run-or-die (boot-cli-cmd "build") "stage2: self-host build"))
+
+;; stage 3:用 _bootstrap 的 chandler 装到最终前缀(--user/--system/--prefix)
+(define (stage3-install-final! target force?)
+  (printf "bootstrap: stage 3/3: install to ~a~%" (target-libdir target))
+  (run-or-die (boot-cli-cmd (string-append "install " (target-flag target)
+                                           (if force? " --force" "")))
+              "stage3: chandler install")
+  (smoke! (target-bindir target)))
+
+;; shim 链路冒烟:启动器 → .registry active → run.sps → 运行时发现
+(define (smoke! bindir)
+  (if (win?)
+      (printf "bootstrap: smoke test skipped on Windows (run: ~a\\chandler.ps1 --version)~%" bindir)
+      (run-or-die (q (join-paths bindir "chandler")) "smoke: chandler --version")))
 
 ;; ════════════════════════════════════════════════════════════════════
-;; §7  Launcher templates (runtime discovery: skiff → Chez)
+;; §7 卸载(registry 驱动;源码直载 CLI,不依赖任何已装实例)
 ;; ════════════════════════════════════════════════════════════════════
 
-(define self-runtimes "skiff scheme chez chez-scheme chezscheme")
-(define self-probe-token "CHANDLER_RT_OK")
-(define chez-names '("scheme" "chez" "chez-scheme" "chezscheme"))
-
-(define self-probe-src
-  (string-append
-    "(import (chezscheme))(display \"" self-probe-token ":\")"
-    "(display (let ([s (string->symbol \"skiff-version\")])"
-    " (if (top-level-bound? s)"
-    " (let ([v (top-level-value s)]) (if (procedure? v) (v) v))"
-    " \"\")))"))
-
-(define (ps1-list names)
-  (string-join (map (lambda (r) (string-append "'" r "'")) names) ","))
-
-(define (launcher-sh)
-  (string-append
-    "#!/bin/sh\n"
-    "# chandler launcher — generated by bootstrap.ss; do not edit.\n"
-    "# Prefer skiff, fall back to Chez scheme. Non-Chez runtimes must pass a\n"
-    "# capability probe. CHANDLER_RUNTIME=skiff|chez forces one.\n"
-    "CHANDLER_HOME=\"" prefix "\"\n"
-    "CHANDLER_MT=\"" (mt-string) "\"\n"
-    "export CHANDLER_HOME CHANDLER_MT\n"
-    "_main=\"$CHANDLER_HOME/chandler/" chandler-ver "/src/chandler/cli/main.sps\"\n"
-    "if [ ! -f \"$_main\" ]; then\n"
-    "  echo \"chandler: install is broken — $_main is missing.\" 1>&2\n"
-    "  echo \"  Reinstall from source:  scheme --script bootstrap.ss\" 1>&2\n"
-    "  echo \"  Or remove this orphan launcher:  rm \\\"$0\\\"\" 1>&2\n"
-    "  exit 70\n"
-    "fi\n"
-    "_prog_ok() {\n"
-    "  printf '%s' '" self-probe-src "' \\\n"
-    "    | \"$1\" -q --program /dev/stdin 2>/dev/null | grep -q '" self-probe-token ":[0-9]'\n"
-    "}\n"
-    "case \"${CHANDLER_RUNTIME:-}\" in\n"
-    "  skiff) _cands=\"${CHANDLER_SKIFF:-skiff}\"; _forced=1 ;;\n"
-    "  chez)  if [ -n \"${CHANDLER_SCHEME:-}\" ]; then _cands=\"$CHANDLER_SCHEME\";\n"
-    "         else _cands=\"" (string-join chez-names " ") "\"; fi; _forced=1 ;;\n"
-    "  \"\")   _cands=\"" self-runtimes "\"; _forced=0 ;;\n"
-    "  *) echo \"chandler: invalid CHANDLER_RUNTIME=$CHANDLER_RUNTIME (want: skiff | chez)\" 1>&2; exit 64 ;;\n"
-    "esac\n"
-    "for rt in $_cands; do\n"
-    "  command -v \"$rt\" >/dev/null 2>&1 || continue\n"
-    "  if [ \"$_forced\" -eq 0 ]; then\n"
-    "    case \"$rt\" in\n"
-    "      " (string-join chez-names "|") ") : ;;\n"
-    "      *) _prog_ok \"$rt\" || continue ;;\n"
-    "    esac\n"
-    "  fi\n"
-    "  exec \"$rt\" -q --libdirs \"$CHANDLER_HOME/chandler/" chandler-ver "/src::$CHANDLER_HOME/chandler/" chandler-ver "/$CHANDLER_MT\" \\\n"
-    "    --program \"$_main\" \"$@\"\n"
-    "done\n"
-    "echo \"chandler: no program-capable Scheme runtime found (need skiff or Chez Scheme).\" 1>&2\n"
-    "exit 127\n"))
-
-(define (launcher-ps1)
-  (string-append
-    "#!/usr/bin/env pwsh\n"
-    "# chandler launcher — generated by bootstrap.ss; do not edit.\n"
-    "$PSNativeCommandUseErrorActionPreference = $false\n"
-    "$ErrorActionPreference = 'Continue'\n"
-    "$ChandlerArgs = $args\n"
-    "$Prefix = '" prefix "'\n"
-    "$Mt = '" (mt-string) "'\n"
-    "$env:CHANDLER_HOME = $Prefix\n"
-    "$env:CHANDLER_MT = $Mt\n"
-    "$Sep = [System.IO.Path]::PathSeparator\n"
-    "$LibDirs = \"$Prefix/chandler/" chandler-ver "/src$Sep$Sep$Prefix/chandler/" chandler-ver "/$Mt\"\n"
-    "$Program = \"$Prefix/src/chandler/cli/main.sps\"\n"
-    "if (-not (Test-Path -LiteralPath $Program)) {\n"
-    "  [Console]::Error.WriteLine(\"chandler: install is broken — $Program is missing.\")\n"
-    "  [Console]::Error.WriteLine(\"  Reinstall from source:  scheme --script bootstrap.ss\")\n"
-    "  exit 70\n"
-    "}\n"
-    "\n"
-    "function Test-ChandlerRuntime([string]$Exe, [string]$Probe) {\n"
-    "  if (-not $Probe) { return $true }\n"
-    "  $out = $null | & $Exe -q --program $Probe 2>$null\n"
-    "  if ($LASTEXITCODE -ne 0) { return $false }\n"
-    "  return (($out -join ' ') -match '" self-probe-token ":\\d')\n"
-    "}\n"
-    "\n"
-    "$Forced = $false\n"
-    "switch ($env:CHANDLER_RUNTIME) {\n"
-    "  'skiff' { $Cands = @($(if ($env:CHANDLER_SKIFF) { $env:CHANDLER_SKIFF } else { 'skiff' })); $Forced = $true }\n"
-    "  'chez'  { $Cands = $(if ($env:CHANDLER_SCHEME) { @($env:CHANDLER_SCHEME) } else { @(" (ps1-list chez-names) ") }); $Forced = $true }\n"
-    "  ''      { $Cands = @(" (ps1-list (string-split self-runtimes #\space)) ") }\n"
-    "  $null   { $Cands = @(" (ps1-list (string-split self-runtimes #\space)) ") }\n"
-    "  default {\n"
-    "    [Console]::Error.WriteLine(\"chandler: invalid CHANDLER_RUNTIME=$($env:CHANDLER_RUNTIME) (want: skiff | chez)\")\n"
-    "    exit 64\n"
-    "  }\n"
-    "}\n"
-    "\n"
-    "$probe = Join-Path ([System.IO.Path]::GetTempPath()) \"chandler-probe-$PID.ss\"\n"
-    "try { Set-Content -LiteralPath $probe -Value '" self-probe-src "' -Encoding ascii }\n"
-    "catch { $probe = $null }\n"
-    "try {\n"
-    "  foreach ($rt in $Cands) {\n"
-    "    $exe = $null\n"
-    "    $c = Get-Command $rt -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1\n"
-    "    if ($c) { $exe = $c.Source }\n"
-    "    elseif (Test-Path -LiteralPath $rt) { $exe = (Resolve-Path -LiteralPath $rt).Path }\n"
-    "    if (-not $exe) { continue }\n"
-    "    if (-not $Forced -and ($rt -notin @(" (ps1-list chez-names) "))) {\n"
-    "      if (-not (Test-ChandlerRuntime $exe $probe)) { continue }\n"
-    "    }\n"
-    "    & $exe -q --libdirs $LibDirs --program $Program @ChandlerArgs\n"
-    "    exit $LASTEXITCODE\n"
-    "  }\n"
-    "} finally {\n"
-    "  if ($probe -and (Test-Path -LiteralPath $probe)) {\n"
-    "    Remove-Item -LiteralPath $probe -Force -ErrorAction SilentlyContinue\n"
-    "  }\n"
-    "}\n"
-    "[Console]::Error.WriteLine(\"chandler: no program-capable Scheme runtime found (need skiff or Chez Scheme).\")\n"
-    "exit 127\n"))
+(define (do-uninstall! target)
+  (let ([libdir (target-libdir target)])
+    (if (not (file-exists? (join-paths libdir ".registry" "chandler.ss")))
+        (printf "bootstrap: chandler is not installed at ~a (nothing to do)~%" libdir)
+        (run-or-die (source-cli-cmd here-abs
+                                    (string-append "uninstall --name=chandler " (target-flag target)))
+                    "chandler uninstall"))
+    (when (file-directory? boot-prefix)
+      (rm-rf boot-prefix)
+      (printf "bootstrap: removed ~a~%" boot-prefix))
+    (printf "chandler uninstalled from ~a~%" libdir)))
 
 ;; ════════════════════════════════════════════════════════════════════
-;; §8  Install / Uninstall
+;; §8 帮助 / 入口
 ;; ════════════════════════════════════════════════════════════════════
 
-(define (do-install!)
-  ;; v2 两阶段:编译产物 → chandler install(nested layout)
-  (let* ([mt (mt-string)]
-         [bdir (join-paths here "_build" mt)]
-         [interp (or (getenv "CHANDLER_SCHEME") (getenv "CHANDLER_SKIFF") "scheme")]  ; 解释器可执行文件
-         [libdirs (string-append here-abs "::" bdir)]
-         [main-sps (join-paths here-abs "chandler" "cli" "main.sps")]
-         [install-flags (if system? "--system" "--user")])
-    ;; 检查编译产物
-    (unless (file-directory? bdir)
-      (fprintf (current-error-port)
-               "bootstrap: chandler not compiled at ~a~%  run `chandler make` first~%"
-               bdir)
-      (exit 70))
-    ;; Phase 1: 生成 lock
-    (printf "bootstrapping: chandler deps...~%")
-    (let ([rc (system (string-append
-                       "\"" interp "\" -q --libdirs \"" libdirs
-                       "\" --program \"" main-sps "\" deps"))])
-      (unless (= rc 0)
-        (fprintf (current-error-port) "bootstrap: chandler deps failed~%")
-        (exit rc)))
-    ;; Phase 2: 标准 install(按 v2 nested layout 装)
-    (printf "bootstrapping: chandler install ~a...~%" install-flags)
-    (let ([rc (system (string-append
-                       "\"" interp "\" -q --libdirs \"" libdirs
-                       "\" --program \"" main-sps "\" install " install-flags))])
-      (unless (= rc 0)
-        (fprintf (current-error-port) "bootstrap: chandler install failed~%")
-        (exit rc)))
-    ;; Phase 3: 生成启动器(指向 nested layout)
-    (write-text launcher-path (if (win?) (launcher-ps1) (launcher-sh)))
-    (unless (win?)
-      (let ([chmod-result (system (string-append "chmod +x " launcher-path))])
-        (void)))
-    (printf "install ~a~%" launcher-path)
-    (printf "chandler installed to ~a~%" prefix)
-    (let ([p (or (getenv "PATH") "")])
+(define (path-hint target)
+  (unless (win?)
+    (let ([bindir (target-bindir target)]
+          [p (or (getenv "PATH") "")])
       (unless (string-contains? p bindir)
-        (printf "  hint: add ~a to PATH: export PATH=\"~a:$PATH\"~%" bindir bindir)))
-    (exit 0)))
-
-(define (do-uninstall!)
-  (uninstall-libraries!)
-  (uninstall-manifest!)
-  (when (file-exists? launcher-path)
-    (delete-file launcher-path) (sweep-empty-parents launcher-path)
-    (printf "rm ~a~%" launcher-path))
-  ;; --dev 的 dist/ 整个是 chandler 的开发 scratch,按命名空间删完只剩空壳目录 ——
-  ;; 直接把 dist/ 端掉,别留 dist/chez、dist/bin 的空架子。
-  (when (and dev? (file-directory? dev-root))
-    (rm-rf dev-root)
-    (printf "rm ~a~%" dev-root))
-  (printf "chandler uninstalled from ~a~%" prefix)
-  (exit 0))
-
-;; ════════════════════════════════════════════════════════════════════
-;; §9  Help / Main
-;; ════════════════════════════════════════════════════════════════════
+        (printf "  hint: add ~a to PATH: export PATH=\"~a:$PATH\"~%" bindir bindir)))))
 
 (define (print-help)
-  (display "chandler bootstrap — self-contained installer (replaces install.sh/ps1)\n\n")
+  (display "chandler bootstrap — self-contained three-stage installer\n\n")
   (display "Usage: scheme --script bootstrap.ss [options]\n")
   (display "       skiff  --script bootstrap.ss [options]\n\n")
+  (display "Stages (a _bootstrap install mirrors a normal --user install exactly):\n")
+  (display "  1. source-loaded CLI: deps → build → install --prefix=<repo>/_bootstrap\n")
+  (display "  2. _bootstrap chandler rebuilds this repo (self-host check)\n")
+  (display "  3. _bootstrap chandler installs to the final prefix + launcher smoke test\n\n")
   (display "Options:\n")
-  (display "  (none)        Install chandler to ~/.local/share/chez + launcher to ~/.local/bin\n")
-  (display "  --user        Install to ~/.local/share/chez + ~/.local/bin (default)\n")
-  (display "  --system      Install to /usr/local/share/chez + /usr/local/bin (needs root)\n")
-  (display "  --dev         Install into ./dist/ under the repo (dist/chez + dist/bin);\n")
-  (display "                a real src/<mt> prefix built from the working copy — run\n")
-  (display "                dist/bin/chandler to test your changes without a real install\n")
-  (display "  --force       Reinstall over existing (uninstall first, then install)\n")
-  (display "  --uninstall   Remove chandler (match --system/--dev if installed that way)\n")
-  (display "  --help        Show this help and exit\n\n")
-  (display "The user chooses the runtime by invocation (scheme vs skiff).\n")
-  (display "The generated launcher does its own runtime discovery (skiff → Chez).\n\n")
-  (display "Files installed:\n")
-  (display "  <prefix>/src/chandler.ss + chandler/**   source\n")
-  (display "  <prefix>/<mt>/chandler.so + chandler/**   compiled objects (if _build/ exists)\n")
-  (display "  <bindir>/chandler[.ps1]                   runtime-discovery launcher\n"))
+  (display "  (none)            Install to ~/.local/share/chez + launcher to ~/.local/bin\n")
+  (display "  --user            Same as (none) (explicit)\n")
+  (display "  --system          Install to /usr/local/chez + /usr/local/bin (needs root)\n")
+  (display "  --prefix=DIR      Install to DIR + DIR/bin\n")
+  (display "  --bootstrap-only  Run stage 1 only (produce _bootstrap/, nothing installed)\n")
+  (display "  --force           Reinstall over existing\n")
+  (display "  --uninstall       Remove chandler from the target prefix (registry-driven;\n")
+  (display "                    needs this repo's sources to load the CLI)\n")
+  (display "  --help            Show this help and exit\n\n")
+  (display "Runtime selection (same variables as chandler itself):\n")
+  (display "  CHANDLER_RUNTIME=skiff|chez   force a runtime; default follows the\n")
+  (display "                                interpreter running this script\n")
+  (display "  CHANDLER_SKIFF / CHANDLER_SCHEME   executable for that runtime\n\n")
+  (display "Note: compilation is required — petite has no compiler; use scheme or skiff.\n")
+  (display "Files installed (v3 layout):\n")
+  (display "  <libdir>/chandler/<ver>/{src,<mt>}/   sources + compiled objects\n")
+  (display "  <libdir>/.registry/chandler.ss        central registry (kind app, active)\n")
+  (display "  <bindir>/chandler[.ps1]               stable-shim launcher\n"))
 
-(cond
-  [help? (print-help)]
-  [uninstall? (do-uninstall!)]
-  [else (do-install!)])
+(define (main)
+  (let ([parsed (parse-bootstrap-args (cdr (command-line)))])
+    (let ([target (car parsed)]
+          [force? (cadr parsed)]
+          [uninstall? (caddr parsed)]
+          [help? (cadddr parsed)]
+          [boot-only? (car (cddddr parsed))])
+      (cond
+        [help? (print-help) (exit 0)]
+        [uninstall? (do-uninstall! target) (exit 0)]
+        [else
+         (stage1-build-bootstrap! force?)
+         (if boot-only?
+             (printf "bootstrap: --bootstrap-only done; try: ~a --version~%"
+                     (join-paths boot-bindir "chandler"))
+             (begin
+               (stage2-self-build!)
+               (stage3-install-final! target force?)
+               (printf "chandler ~a installed to ~a~%" chandler-ver (target-libdir target))
+               (path-hint target)))
+         (exit 0)]))))
+
+(main)
