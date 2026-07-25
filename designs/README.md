@@ -13,7 +13,7 @@
 | [02-resolution.md](02-resolution.md) | 依赖解析:BFS 闭包 + 冲突裁决 + 多版本语义 | 数据 |
 | [03-central-repo.md](03-central-repo.md) | 中央仓库布局(部分待重写:中心 `.registry/` 取代 per-version registry) | 数据 |
 | [04-install.md](04-install.md) | install 操作(部分待重写:走 `.registry/` + shim launcher) | 分发 |
-| [05-pack.md](05-pack.md) | pack = install --prefix + envelope(部分待重写:删 resource copy) | 分发 |
+| [05-pack.md](05-pack.md) | pack = install --prefix + envelope(FHS 式:`share/chez/` 载荷 + `bin/`/`lib/chez/` envelope) | 分发 |
 | [08-launchers.md](08-launchers.md) | 启动器生成(部分待重写:稳定 shim,读 `.registry/`) | 运行时 |
 | [09-runtime-paths.md](09-runtime-paths.md) | 资源定位 API(method B:`<src>/<libpath>/resources/`) | 运行时 |
 | [10-dev-mode.md](10-dev-mode.md) | dev 模式:`_vendor/` + `chandler run` + live edit | 辅助 |
@@ -29,7 +29,7 @@
 - **资源 method B**(D13):`<src>/<libpath>/resources/`,与库源码同居;manifest 删 `(resources ...)` 字段。
 - **统一 runner `run.sps`**(D18 lock 驱动):读 `chandler-manifest.lock` 挂精确 dep 版本,多版本 lib 共存不冲突。
 - **稳定 shim launcher**(D17):运行时读 `.registry/<name>.ss` 找 active;`chandler switch` 瞬时生效,launcher 永不重写。
-- **pack = install --prefix + envelope**:app pack 多 `bin/<mt>/<runtime>` / `boot/<mt>/*.boot` / `chandler/<version>/`;lib pack 只有 payload。
+- **pack = install --prefix + envelope**:载荷与 install 同管线 → `<pack>/share/chez/`;app pack 多 `bin/<app>` 启动器 + `bin/<runtime>` + `lib/chez/*.boot`;lib pack 只有 payload。
 - **5 不变量**:Version 自包含 / Payload 字节级统一(I2 v3 真正成立)/ Registry 中心化 / Envelope 仅 app pack / Provenance 记录。
 
 ## v3 决策记录(D13-D19)

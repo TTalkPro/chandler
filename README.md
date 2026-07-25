@@ -158,7 +158,8 @@ chandler run --script main.ss [args...]
 | `list` | 列出全局已装包(active 版本标 `[active]`) |
 | `switch <name> <version>` | **切换 app 的 active version**(D19);`--latest` 选最高;`--list` 列所有 active |
 | `doctor` | 体检:missing-vroot / missing-active / stale-staging |
-| `pack [--runtime r] [--out dir]` | 组装自包含分发包(自带运行时) |
+| `pack [--runtime r] [--out dir] [--lib]` | 组装自包含分发包到 `dist/<name>-<ver>-<mt>/`(载荷与 install 同管线 → `share/chez/`;envelope 在 `bin/` + `lib/chez/`,自带运行时;`--lib` 只打载荷) |
+| `verify-pack [--target] <dir>` | 校验分发包(files sha256 完整性;`--target` 加目标三元组 mt/chez/skiff 比对) |
 
 全局旗标:`-C <dir>` `--offline` `--production` `--force` `--keep-extra` `--verbose`。
 
@@ -228,6 +229,6 @@ bash tests/powershell-run.sh                        # Windows 启动器验收(�
 
 ### 语言约定
 
-- **用户可见输出一律英文**:CLI 帮助、运行期提示/警告/错误(`printf`/`fprintf`/`error` 的消息),以及**生成物**的头注释(`.chandler-build.ss`、pack 的 `bootstrap.ss`)——工具面向的用户不限中文。风格取 Unix 诊断惯例:小写、简短、不加句号,如 ``chandler-manifest.ss not found; run `chandler init` first``。
+- **用户可见输出一律英文**:CLI 帮助、运行期提示/警告/错误(`printf`/`fprintf`/`error` 的消息),以及**生成物**的头注释(`.chandler-build.ss`、pack 的 `run.sps` 与启动器)——工具面向的用户不限中文。风格取 Unix 诊断惯例:小写、简短、不加句号,如 ``chandler-manifest.ss not found; run `chandler init` first``。
 - **源码注释(`;;` / `;;;`)与本仓文档保持中文**,便于设计推理的表达密度。
 - 单复数用 `(plural n "dependency" "dependencies")`(`(chandler util)`),避免 `1 dependencies`。
