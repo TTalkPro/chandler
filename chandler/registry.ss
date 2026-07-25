@@ -13,7 +13,7 @@
 (library (chandler registry)
   (export default-user-libdir default-system-libdir default-user-bindir default-system-bindir
           chandler-home
-          install-global uninstall-global list-global doctor-global
+          install-global uninstall-global list-global doctor-global list-registry-names
           registry-dir registry-file installed-files)
   (import (chezscheme)
           (chandler util)

@@ -30,7 +30,7 @@
 
   (define (dispatch sub pos flags rest root)
     (cond
-      [(flag? flags 'version) (print-version) 0]
+      [(eq? (flag flags 'version) #t) (print-version) 0]
       [(or (not sub) (flag? flags 'help) (equal? sub "help")) (usage) 0]
       [else
        (case (string->symbol sub)
@@ -46,8 +46,9 @@
          [(repl)    (cmd-repl root flags)]
          [(pack)    (cmd-pack root flags)]
          [(verify-pack) (cmd-verify-pack root flags pos)]
-         [(uninstall) (cmd-uninstall-global root flags)]
-         [(doctor)  (cmd-doctor root flags)]
+          [(uninstall) (cmd-uninstall-global root flags)]
+          [(list)    (cmd-list root flags)]
+          [(doctor)  (cmd-doctor root flags)]
          [(-T)      (list-tasks) 0]
          [else
           (fprintf (current-error-port)

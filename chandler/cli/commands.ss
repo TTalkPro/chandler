@@ -7,7 +7,7 @@
 (library (chandler cli commands)
   (export cmd-init cmd-deps cmd-install cmd-add cmd-remove cmd-run cmd-env cmd-repl
           cmd-build cmd-pack cmd-verify-pack
-          cmd-uninstall-global cmd-doctor
+          cmd-uninstall-global cmd-doctor cmd-list
           cmd-deps-list cmd-deps-tree
           ensure-gitignore-lib skeleton-manifest-datum)
   (import (chezscheme)
@@ -402,15 +402,18 @@
   ;; uninstall 只操作全局前缀(无本地卸载一说),故不再强制 --global —— 直接卸载。
   (define (cmd-uninstall-global root flags)
     (let ([libdir (target-libdir flags)]
-          [name (flag flags 'name)])
-      (unless name (error 'uninstall "usage: chandler uninstall --name=<name> [--prefix=DIR|--system]"))
-      (uninstall-global name libdir (list (cons 'keep-modified (flag? flags 'keep-modified))))
-      ;; P3:删 app launcher + .chandler/<name>/(runner + manifest 快照;不经 registry,须单独清)
+          [name (flag flags 'name)]
+          [ver (flag flags 'version)])
+      (unless name (error 'uninstall "usage: chandler uninstall --name=<name> [--version=<ver>] [--prefix=DIR|--system]"))
+      (let ([opts (list (cons 'keep-modified (flag? flags 'keep-modified)))])
+        (if ver
+            (uninstall-global name libdir opts ver)
+            ;; 无 version → 删该 name 的所有版本
+            (for-each (lambda (nv)
+                        (when (eq? (car nv) (if (symbol? name) name (string->symbol name)))
+                          (uninstall-global name libdir opts (cdr nv))))
+                      (list-registry-names libdir))))
       (remove-app-launcher! name (target-bindir flags))
-      ;; v2: manifest snapshots live in <name>/<version>/.chandler/ - cleaned by uninstall-global
-      ;; but clean up any old v1-style .chandler/<name>/ directory
-      (let ([snap (join-paths libdir ".chandler" name)])
-        (when (file-directory? snap) (rm-rf snap)))
       (printf "uninstalled ~a~%" name)
       0))
 
@@ -423,6 +426,18 @@
             (for-each (lambda (i) (fprintf (current-error-port) "  ~a~%" i)) issues)
             (fprintf (current-error-port) "doctor: ~a issue(s) found~%" (length issues))
             65))))
+
+  ;; v2: chandler list — 列出全局已装包(多版本)
+  (define (cmd-list root flags)
+    (let ([libdir (target-libdir flags)]
+          [rows (list-global (target-libdir flags))])
+      (if (null? rows)
+          (printf "no packages installed in ~a~%" libdir)
+          (begin
+            (for-each (lambda (r)
+                        (printf "~a\t~a~%" (car r) (cadr r)))
+                      (list-sort (lambda (a b) (string<? (car a) (car b))) rows))))
+      0))
 
   ;; install/uninstall/doctor 的**安装落点**:`--prefix=DIR` / `--user`(默认)/ `--system`。
   ;;   --prefix=DIR → 任意目录(测试/隔离/自定义前缀)
