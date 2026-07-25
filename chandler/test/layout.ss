@@ -61,4 +61,10 @@
       (assert-string= "lib/http" (srcdir-join "lib/http" "."))
       (assert-string= "lib/http" (srcdir-join "lib/http" ""))
       (assert-string= "lib/http" (srcdir-join "lib/http" #f))
-      (assert-string= "lib/http/src" (srcdir-join "lib/http" "src")))))
+      (assert-string= "lib/http/src" (srcdir-join "lib/http" "src")))
+
+    ;; v3 method B:资源与库源码同居
+    (lib-resource-dir-basic
+      (assert-string= "src/myapp/resources" (lib-resource-dir "src" "myapp"))
+      (assert-string= "src/mylib/parser/resources" (lib-resource-dir "src" "mylib/parser"))
+      (assert-string= "/abs/prefix/x/resources" (lib-resource-dir "/abs/prefix" "x")))))

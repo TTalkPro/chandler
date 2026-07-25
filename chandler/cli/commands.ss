@@ -378,9 +378,9 @@
                    [rel-path (cdr entry)]
                    [src-dir (join-paths root rel-path)]
                    [libpath (string-join (map symbol->string libref) "/")]
-                   [dst-dir (src-resource-dir
-                              (join-paths (version-root libdir name version) "src")
-                              libpath)])
+                   [dst-dir (lib-resource-dir
+                             (join-paths (version-root libdir name version) "src")
+                             libpath)])
               (when (file-directory? src-dir)
                 (ensure-dir dst-dir)
                 (let ([pre (string-append src-dir "/")])

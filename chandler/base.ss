@@ -38,7 +38,7 @@
     windows-mt?
     join-paths path-join
     path-sep split-pair entry->arg libdirs->arg
-    resources-dirname prefix-resource-dir src-resource-dir
+    resources-dirname lib-resource-dir
     native-so? lib-native-dir lib-native-path native-so-name
     library-name->path srcdir-join
     rel-to

@@ -28,6 +28,9 @@
   ;; ══════════════════════════════════════════════════════════════════
   ;; 资源定位:**扫 (library-directories)**(2026-07-24 起的统一 API)
   ;;
+  ;; v3(D13 method B):资源与库源码同居 ——
+  ;;   <src>/<libpath>/resources/<segs>
+  ;; 例:(myapp) 在 src/myapp.ss,资源在 src/myapp/resources/<segs>。
   ;; 一个调用覆盖全部四态,且**不依赖任何环境变量**:
   ;;
   ;;   (resource-path '(mylib sub) "schema.json")
@@ -35,11 +38,11 @@
   ;;
   ;; 解析序:
   ;;   ① 顺序扫 (library-directories) 的每个条目,**src 侧与 obj 侧都看**:
-  ;;        <side>/resources/<libpath>/<segs>
+  ;;        <side>/<libpath>/resources/<segs>
   ;;      条目序即优先级 —— chandler 的 run/repl/activate 把项目前缀排在全局之前,
   ;;      故项目自己的资源自然遮蔽全局装的同名库。
   ;;   ② 兜底:(library-object-filename libref) 反推安装前缀,再拼
-  ;;        <prefix>/src/resources/<libpath>/<segs>
+  ;;        <prefix>/<libpath>/resources/<segs>
   ;;      —— 覆盖「库从某个不在 library-directories 里的前缀被加载」的情形。
   ;;
   ;; **为什么没有 APP_ROOT**:资源与库住在同一个前缀里,而进程要能 import 那个
@@ -61,18 +64,19 @@
         (if (string=? (car e) (cdr e)) (list (car e)) (list (car e) (cdr e)))
         (list e)))
 
-  (define (scan-library-directories libpath segs)
+(define (scan-library-directories libpath segs)
     (let loop ([entries (library-directories)])
       (and (pair? entries)
            (or (let side-loop ([sides (entry-sides (car entries))])
                  (and (pair? sides)
                       (let ([path (apply join-paths
-                                         (cons (src-resource-dir (car sides) libpath) segs))])
+                                         (cons (lib-resource-dir (car sides) libpath) segs))])
                         (if (file-exists? path) path (side-loop (cdr sides))))))
-               (loop (cdr entries))))))
+                 (loop (cdr entries))))))
 
-  ;; 兜底:从 object filename 反推安装前缀
-  ;;   /prefix/<mt>/mylib/sub.so → N+1 次 parent-dir(N = libref 段数)
+;; 兜底:从 object filename 反推安装前缀(v3 nested layout)
+  ;;   /libdir/<name>/<version>/<mt>/<libpath>.so → N+1 次 parent-dir(N = libref 段数)
+  ;;   得到 <libdir>/<name>/<version>,再 join "src" + libpath + resources
   ;; library-object-filename 对未加载库抛异常 —— ignore-errors 捕获后返回 #f
   (define (prefix-from-object obj-path n)
     (if (= n 0) obj-path (prefix-from-object (parent-dir obj-path) (- n 1))))
@@ -80,9 +84,11 @@
   (define (via-object libref libpath segs)
     (let ([obj (ignore-errors (library-object-filename libref))])
       (and obj
-           (let* ([prefix (prefix-from-object obj (+ (length libref) 1))]
+           (let* ([vroot (prefix-from-object obj (+ (length libref) 1))]
+                  ;; vroot = <libdir>/<name>/<version>;src 侧 = vroot/src
+                  [src-side (join-paths vroot "src")]
                   [path (apply join-paths
-                               (cons (prefix-resource-dir prefix libpath) segs))])
+                               (cons (lib-resource-dir src-side libpath) segs))])
              (and (file-exists? path) path)))))
 
   (define (locate-resource libref segs)

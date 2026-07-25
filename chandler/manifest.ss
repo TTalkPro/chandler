@@ -28,11 +28,18 @@
   ;; chez / skiff / chandler 三个字段是**运行时门**,不是依赖:声明的是版本区间,
   ;; 实体由环境提供(chez/skiff 是解释器本身;chandler 是全局库前缀
   ;; ~/.local/share/chez 里装好的那一份)。故 chandler **不写进 (deps …)** ——
-  ;; 它没有 URL、不需要 fetch,只需要「装的那份够不够新」(designs/12 §5)。
+  ;; 它没有 URL、不需要 fetch,只需要「装的那份够不够新」(designs/06 §5)。
+  ;;
+  ;; v3(D13)取消 (resources ...) 字段:资源靠约定 `<src>/<libpath>/resources/`
+  ;; 与库源码同居。manifest-resources 保留为 export 但恒返回 #f(向后兼容)。
   (define-record-type manifest
     (fields format name version chez skiff chandler srcdir
             deps dev-deps native overrides scripts app
-            resources runtime-subset))
+            runtime-subset))
+
+  ;; manifest-resources:向后兼容,恒返回 #f
+  ;; (旧代码可能调用它,如 resolve;现在资源靠约定,不需要 manifest 声明)
+  (define (manifest-resources m) #f)
 
   ;; app:这个包是**可分发的应用**时声明入口(designs/09 §CLI)。
   ;;   (app (entry (mdserver)) (main main))
@@ -55,6 +62,8 @@
   ;; ── 解析 datum → manifest record(结构性错误此处即抛)──
   (define (parse-manifest datum)
     (let ([body (expect-tag datum 'manifest 'parse-manifest)])
+      ;; v3:静默忽略 (resources ...) 字段 —— 资源靠约定,不靠声明(D13)。
+      ;; 旧 manifest 含此字段不报错,但解析器不再消费它。
       (make-manifest
         (or (field-ref body 'format) 1)
         (field-ref body 'name)
@@ -69,68 +78,13 @@
         (parse-overrides (field-ref* body 'overrides))
         (field-ref* body 'scripts)
         (parse-app (field-ref* body 'app))
-        (or (parse-resources (field-ref* body 'resources) (field-ref body 'name)) #f)
         (parse-runtime-subset (field-ref* body 'runtime-subset)))))
 
-  ;; (resources "rel/path") 或 (resources ((lib) "path") ...) —— designs/11 §6
-  ;; 字段缺省 → #f。simple 形按 package name 标准化为单条;multi-lib 形逐项校验。
-  (define (parse-resources items pkg-name)
-    (and (not (null? items))
-         (let ([entries
-                 (if (and (= 1 (length items)) (string? (car items)))
-                     ;; simple 形:单字符串 → 标准化为 ((<pkg-sym>) . path)
-                     ;; 包名为 #f 时(manifest 缺 (name …))让 string->symbol 自爆,
-                     ;; validate-manifest 仍会在更早时报"name 缺失"。
-                     (let ([path (car items)])
-                       (check-resource-path path 'resources)
-                       (list (cons (list (string->symbol pkg-name)) path)))
-                     ;; multi-lib 形:((libref ...) "path") ...
-                     (map (lambda (it)
-                            (unless (and (pair? it) (= 2 (length it))
-                                         (pair? (car it)) (string? (cadr it)))
-                              (error 'parse-manifest
-                                     "(resources …) entry must be ((libref …) \"path\")"
-                                     it))
-                            (let ([libref (car it)]
-                                  [path   (cadr it)])
-                              (unless (and (pair? libref) (for-all symbol? libref))
-                                (error 'parse-manifest
-                                       "(resources …) libref must be a non-empty symbol list"
-                                       libref))
-                              (check-resource-path path 'resources)
-                              (cons libref path)))
-                          items))])
-           (check-unique-librefs entries)
-           entries)))
+  ;; v3(D13):资源 method B —— 删 manifest (resources ...) 字段。
+  ;; 旧 parse-resources / check-resource-path / check-unique-librefs 全部作废。
+  ;; 资源约定:<src>/<libpath>/resources/<file>(见 layout.ss:lib-resource-dir)。
 
-  ;; 路径必须相对、不得含空段 / `.` / `..`
-  (define (check-resource-path path who)
-    (when (or (not (string? path)) (absolute-path? path))
-      (error who "resource path must be a relative path" path))
-    (when (string=? "" path)
-      (error who "resource path must not be empty" path))
-    (let loop ([segs (string-split path #\/)])
-      (cond
-        [(null? segs) (void)]
-        [(member "" segs)
-         (error who "resource path must not contain empty segments" path)]
-        [(member "." segs)
-         (error who "resource path must not contain `.` segments" path)]
-        [(member ".." segs)
-         (error who "resource path must not contain `..` segments" path)]
-        [else (void)])))
-
-  ;; multi-lib 形下,同 libref 只能声明一次(designs/11 §6 校验表)
-  (define (check-unique-librefs entries)
-    (let loop ([xs entries] [seen '()])
-      (unless (null? xs)
-        (let ([lr (caar xs)])
-          (when (member lr seen)
-            (error 'parse-manifest
-                   "(resources …) declares the same libref more than once" lr))
-          (loop (cdr xs) (cons lr seen))))))
-
-  ;; (runtime-subset name1 name2 ...) —— designs/12 §6
+  ;; (runtime-subset name1 name2 ...) —— designs/06 §6.3(chandler 自身用)
   ;; 字段缺省 → #f。每一项必须是 symbol。
   (define (parse-runtime-subset items)
     (and (not (null? items))

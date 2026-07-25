@@ -14,9 +14,12 @@
           (chandler util)
           (chandler fs))
 
-  ;; 造一个前缀:<root>/src/resources/<ns>/<rel> 写入 content,返回该文件路径
-  (define (put-resource! root ns rel content)
-    (let ([p (join-paths (prefix-resource-dir root ns) rel)])
+  ;; 造一个前缀(method B):<src>/<libpath>/resources/<rel> 写入 content,返回该文件路径
+  ;; 资源与库源码同居 —— src 侧在 <prefix>/src,资源在 <prefix>/src/<libpath>/resources/<rel>
+  ;; put-resource! 接收**前缀**(非 src),内部拼 src。
+  (define (put-resource! prefix ns rel content)
+    (let* ([src-side (join-paths prefix "src")]
+           [p (join-paths (lib-resource-dir src-side ns) rel)])
       (ensure-parent p)
       (write-file p content)
       p))
@@ -59,8 +62,9 @@
     (resource-found-on-obj-side
       (with-temp-dirs 1
         (lambda (p)
+          ;; method B:obj 侧的 <obj>/<libpath>/resources/<rel>
           (let* ([objdir (join-paths p (current-machine-type))]
-                 [f (join-paths objdir "resources" "mylib" "data.bin")])
+                 [f (join-paths (lib-resource-dir objdir "mylib") "data.bin")])
             (ensure-parent f)
             (write-file f "x")
             ;; 条目是 (src . obj) 且两侧不同 —— src 侧没有,必须落到 obj 侧才找得到
@@ -71,7 +75,8 @@
     (resource-string-entry
       (with-temp-dirs 1
         (lambda (p)
-          (let ([f (join-paths p "resources" "mylib" "a.txt")])
+          ;; method B:字符串条目 = src=obj,资源在 <p>/<libpath>/resources/<rel>
+          (let ([f (join-paths (lib-resource-dir p "mylib") "a.txt")])
             (ensure-parent f)
             (write-file f "x")
             (parameterize ([library-directories (list p)])
@@ -104,7 +109,7 @@
     (zero-segments-returns-directory
       (with-temp-dirs 1
         (lambda (p)
-          (let ([dir (prefix-resource-dir p "myapp")])
+          (let ([dir (lib-resource-dir (join-paths p "src") "myapp")])
             (ensure-dir dir)
             (with-prefixes (list p)
               (lambda ()

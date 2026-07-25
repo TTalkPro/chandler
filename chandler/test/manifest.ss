@@ -112,46 +112,43 @@
       (assert-true (builtin-prefix? 'skiff))
       (assert-false (builtin-prefix? 'http)))
 
-    ;; ── (resources ...) 字段 ──
-    (resources-simple
-      ;; (resources "data") → 标准化为 ((<pkg-sym>) . "data")
+    ;; ── v3 (resources ...) 字段:静默忽略(D13)──
+    ;; v3 取消 manifest 的 (resources ...) 声明;资源靠约定 <src>/<libpath>/resources/。
+    ;; 旧 manifest 含此字段 → 解析成功(不报错),manifest-resources 恒返回 #f。
+
+    (resources-silently-ignored-simple
+      ;; 旧 simple 形("data" 字符串)→ 解析成功,manifest-resources = #f
       (let ([x (m '(manifest (name "mylib") (version "0.1.0")
                       (resources "data")))])
-        (assert-equal (list (cons '(mylib) "data"))
-                      (manifest-resources x))))
+        (assert-false (manifest-resources x))))
 
-    (resources-multi-lib
-      ;; multi-lib 形保留为 (libref . path) pair 列表
+    (resources-silently-ignored-multi-lib
+      ;; 旧 multi-lib 形 → 同样静默忽略
       (let ([x (m '(manifest (name "suite") (version "0.1.0")
                       (resources ((mylib) "resources")
                                  ((mylib parser) "resources/parser"))))])
-        (assert-equal (list (cons '(mylib) "resources")
-                            (cons '(mylib parser) "resources/parser"))
-                      (manifest-resources x))))
+        (assert-false (manifest-resources x))))
 
-    (resources-absent
+    (resources-absent-still-false
+      ;; 无 (resources ...) 字段 → manifest-resources = #f(原行为)
       (let ([x (m '(manifest (name "a") (version "0.1.0")))])
         (assert-false (manifest-resources x))))
 
-    (resources-abs-path
-      (assert-raises
-        (lambda () (m '(manifest (name "a") (version "0.1.0")
-                        (resources "/abs/x"))))))
-
-    (resources-dotdot
-      (assert-raises
-        (lambda () (m '(manifest (name "a") (version "0.1.0")
-                        (resources "a/../b"))))))
-
-    (resources-empty-seg
-      (assert-raises
-        (lambda () (m '(manifest (name "a") (version "0.1.0")
-                        (resources "a//b"))))))
-
-    (resources-dup-libref
-      (assert-raises
-        (lambda () (m '(manifest (name "a") (version "0.1.0")
-                        (resources ((mylib) "p1") ((mylib) "p2")))))))
+    (resources-v3-no-validation
+      ;; v3 不再校验路径:abs path / .. / // / dup 全部静默接受
+      ;; (因为这些字段的"非法性"已无意义,不再被消费)
+      (assert-true
+        (manifest? (m '(manifest (name "a") (version "0.1.0")
+                         (resources "/abs/x")))))
+      (assert-true
+        (manifest? (m '(manifest (name "a") (version "0.1.0")
+                         (resources "a/../b")))))
+      (assert-true
+        (manifest? (m '(manifest (name "a") (version "0.1.0")
+                         (resources "a//b")))))
+      (assert-true
+        (manifest? (m '(manifest (name "a") (version "0.1.0")
+                         (resources ((mylib) "p1") ((mylib) "p2")))))))
 
     ;; ── (runtime-subset ...) 字段 ──
     (runtime-subset-basic

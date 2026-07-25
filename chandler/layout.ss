@@ -19,7 +19,7 @@
           windows-mt?
           join-paths path-join
           path-sep split-pair version-root entry->arg libdirs->arg
-          resources-dirname prefix-resource-dir src-resource-dir
+          resources-dirname lib-resource-dir
           native-so? lib-native-dir lib-native-path native-so-name
           library-name->path srcdir-join
           rel-to)
@@ -87,31 +87,27 @@
     ;; name 收 symbol 或 string(manifest/CLI 给字符串,lock 记录给 symbol)
     (join-paths prefix (if (symbol? name) (symbol->string name) name) version))
 
-  ;; ── 资源落点(C4/C5,2026-07-24):<prefix>/src/resources/<namespace>/… ──
+  ;; ── 资源落点(D13 method B,2026-07-25):<src>/<libpath>/resources/… ──
   ;;
-  ;; 一个库前缀自此只有**两层**:`src/`(与 ABI 无关 —— 源码 + 资源)与 `<mt>/`
-  ;; (平台绑定 —— 编译对象 + native)。原先并列的第三层 `share/<ns>/resources/`
-  ;; 取消:资源与源码本就同属「跨 mt 共享、随源码走」的一档,拆成两层没有换来
-  ;; 任何区分度,却让 install / pack / 资源定位三处各拼一遍路径。
+  ;; v3 取消 manifest (resources ...) 声明,资源与库源码**同居**:每个库的资源
+  ;; 住在同名子目录的 `resources/` 下。这跟 dev 期 `_vendor/<dep>/<srcdir>/`
+  ;; 的源码布局一致 —— 资源不需要任何特殊路径变换,随源码树拷贝即可。
   ;;
-  ;; **与 designs/11 §3 否决过的 `src/<lib>/resources/` 不是一回事**:那个方案把
-  ;; 资源散进**每个库自己的源码目录**,与库搜索树交织(11 §3 的原话是「source-only
-  ;; 的偶然可见继续污染契约」);这里是 `src/` 下**一个保留目录** `resources/`,
-  ;; 其内再按 namespace 分,资源与库源码永不交错。
+  ;;   (myapp)        → <src>/myapp/resources/…
+  ;;   (mylib parser) → <src>/mylib/parser/resources/…
   ;;
-  ;; 代价(记录在案):`resources` 这个名字在源码根被占用 —— 一个真名为
-  ;; `(resources …)` 的库会与它撞。namespace 分层同样保证跨包不撞车:
-  ;;   app "myapp"        → <prefix>/src/resources/myapp/…
-  ;;   dep (mylib sub)    → <prefix>/src/resources/mylib/sub/…
+  ;; 资源定位 API(runtime-paths)扫各 library-directories 条目的 src 侧:
+  ;;   <src>/<libpath>/resources/<segs>
+  ;;
+  ;; v2 的 prefix-resource-dir / src-resource-dir 已废弃 —— 它们把所有库的资源
+  ;; 塞进单一 `<src>/resources/<ns>/` 顶层目录,与库源码树分离;method B 改为
+  ;; 每个库自己管理自己的 resources/,自然且无冲突。
   (define resources-dirname "resources")
 
-  ;; prefix + namespace(形如 "myapp" / "mylib/sub")→ 该 namespace 的资源根
-  (define (prefix-resource-dir prefix ns)
-    (join-paths prefix "src" resources-dirname ns))
-
-  ;; 已知 src 侧目录(= <prefix>/src)时的同一落点 —— 省掉「回到 prefix 再下来」
-  (define (src-resource-dir src-dir ns)
-    (join-paths src-dir resources-dirname ns))
+  ;; lib-resource-dir : src-dir libpath → <src-dir>/<libpath>/resources
+  ;; libpath 形如 "myapp" / "mylib/parser"(符号列表 join 而)。
+  (define (lib-resource-dir src-dir libpath)
+    (join-paths src-dir libpath resources-dirname))
 
   ;; 目录分隔符 = Chez 的 $separator-character:**Windows 为 ";",其余为 ":"**。
   ;; 权威依据 ChezScheme s/syntax.ss 的 parse-string 注释:
