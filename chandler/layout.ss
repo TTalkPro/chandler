@@ -82,7 +82,8 @@
   ;;   (split-pair (version-root "<prefix>" 'foo "1.2.0"))
   ;;     → (cons "<prefix>/foo/1.2.0/src" "<prefix>/foo/1.2.0/<mt>")
   (define (version-root prefix name version)
-    (join-paths prefix (symbol->string name) version))
+    ;; name 收 symbol 或 string(manifest/CLI 给字符串,lock 记录给 symbol)
+    (join-paths prefix (if (symbol? name) (symbol->string name) name) version))
 
   ;; ── 资源落点(C4/C5,2026-07-24):<prefix>/src/resources/<namespace>/… ──
   ;;
