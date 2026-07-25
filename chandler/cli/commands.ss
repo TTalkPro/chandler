@@ -399,14 +399,15 @@
           [name (flag flags 'name)]
           [ver (flag flags 'version)])
       (unless name (error 'uninstall "usage: chandler uninstall --name=<name> [--version=<ver>] [--prefix=DIR|--system]"))
-      (let ([opts (list (cons 'keep-modified (flag? flags 'keep-modified)))])
+      (let ([opts (list (cons 'keep-modified (flag? flags 'keep-modified)))]
+            [name-sym (if (symbol? name) name (string->symbol name))])
         (if ver
             (uninstall-global name libdir opts ver)
-            ;; 无 version → 删该 name 的所有版本
-            (for-each (lambda (nv)
-                        (when (eq? (car nv) (if (symbol? name) name (string->symbol name)))
-                          (uninstall-global name libdir opts (cdr nv))))
-                      (list-registry-names libdir))))
+            ;; 无 version → 删该 name 的所有版本:读 registered,逐 version 删
+            (let ([reg (read-registered libdir name-sym)])
+              (when reg
+                (for-each (lambda (p) (uninstall-global name libdir opts (car p)))
+                          (registered-versions reg))))))
       (remove-app-launcher! name (target-bindir flags))
       (printf "uninstalled ~a~%" name)
       0))

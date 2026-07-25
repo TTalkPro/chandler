@@ -302,20 +302,27 @@
 ;; (2026-07-24:原 global-prefix 读 CHANDLER_PREFIX,已统一到 CHANDLER_HOME;
 ;;  "安装落点"是另一回事,走 --user/--system,见 registry。)
   (define (global-prefix) (chandler-home))
-  ;; 全局库目录条目:v2 扫中央仓库的 <name>/<version>/{src,<mt>}/
+  ;; 全局库目录条目:v3 扫中心 .registry/ 找已装的 (name . version) pairs
   ;; 返回 list of (src . obj) pairs(可能为空)
+  ;; 注:v3 的 list-registered-names 返回 ((name-sym . active|#f) ...);
+  ;; 我们要的是 (name-sym . version-str) 全展开,故读各 registered 拿 versions。
   (define (global-libdir)
     (let ([home (chandler-home)])
       (if (file-directory? home)
           (let ([result '()])
             (for-each
-              (lambda (nv)
-                (let* ([vroot (version-root home (car nv) (cdr nv))]
-                       [src (join-paths vroot "src")]
-                       [obj (join-paths vroot (current-machine-type))])
-                  (when (file-directory? src)
-                    (set! result (cons (cons src obj) result)))))
-              (list-registry-names home))
+              (lambda (name-sym)
+                (let ([reg (read-registered home name-sym)])
+                  (when reg
+                    (for-each
+                      (lambda (p)
+                        (let* ([vroot (version-root home name-sym (car p))]
+                               [src (join-paths vroot "src")]
+                               [obj (join-paths vroot (current-machine-type))])
+                          (when (file-directory? src)
+                            (set! result (cons (cons src obj) result)))))
+                      (registered-versions reg)))))
+              (map car (list-registered-names home)))
             result)
           '())))
 
