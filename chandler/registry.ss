@@ -69,10 +69,16 @@
   ;; ── 安装:src(布局规范库根)→ libdir ──
   ;; meta: (name version source-datum installed-at installer) — 时钟由调用方传入
   ;; opts: (adopt . #t) (force . #t)
-  (define (install-global src libdir meta version opts)
+  (define (install-global src libdir meta version opts . rest)
     (let* ([name (car meta)]
+           ;; v2: 从 entry library 推导源码名(skiff-demo 的 library 是 mdserver,不是 skiff-demo)
+           ;; . rest 是 ((entry_value)) 形式,需要双层 car
+           [entry (and (pair? rest) (car rest))]
+           [src-name (and (pair? entry) (car entry))]
+           [src-name-str (if src-name (symbol->string src-name)
+                             (if (symbol? name) (symbol->string name) name))]
            [vroot (version-root libdir name version)]
-           [entries (enumerate-lib src name)]      ; ((dest-rel . src-abs) …);dest-rel 已带 src//<mt>/ 命名空间
+           [entries (enumerate-lib src src-name-str)]      ; ((dest-rel . src-abs) …);dest-rel 已带 src//<mt>/ 命名空间
            [files (map car entries)])              ; 相对 <prefix> 的目标路径清单
       (when (null? entries)
         (error 'install-global "source directory has no installable library files (no <name>.ss and no <name>/)" src name))
@@ -247,8 +253,8 @@
   ;; ── 库文件枚举 → ((dest-rel . src-abs) …);dest-rel 相对 <prefix>,已含 src//<mt>/ 命名空间──
   ;;   源码 <name>.ss + <name>/**            → src/<...>
   ;;   编译产物整棵 _build/<mt>/**(若在)   → <mt>/<...>(编译 .so + native;排除构建内部物)
-  (define (enumerate-lib src name)
-    (let ([name-str (if (symbol? name) (symbol->string name) name)])
+  (define (enumerate-lib src name-str)
+    (let ([name-str (if (symbol? name-str) (symbol->string name-str) name-str)])
       (append
         ;; 源码 → src/
         (let ([srcs (append
