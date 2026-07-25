@@ -302,60 +302,20 @@
         ;; 前置:deps + build 必须已完成
         (unless (file-exists? (project-lock-path root))
           (error 'install "chandler-manifest.lock not found; run `chandler deps` first"))
-        ;; 1. 安装项目自身(经 registry:冲突检测 + hash 追踪 + 清卸)
-        (let* ([mapp (manifest-app mf)]
-               [entry (and mapp (app-entry mapp))]
-               [meta (list name version `(path ,root) (now-iso) 'chandler)]
-               [opts (list (cons 'adopt (flag? flags 'adopt))
-                           (cons 'force (flag? flags 'force)))])
-          (install-global root libdir meta version opts entry))
-        ;; 2. 合并依赖源码 + 编译产物(从 _vendor → 全局前缀)
-        (merge-lib-to-global! root libdir)
-        ;; 3. v3(D13):资源随源码树拷贝(method B),不再需要专门的
-        ;; install-project-resources! —— 它已删,manifest (resources ...) 也已删。
-        ;; 4. 安装 manifest + lock 到 <name>/<version>/.chandler/
-        ;;    lock 必须同去:run.sps(D18)启动时读它挂精确 dep 版本,缺即崩。
-        (let ([manifest-dir (join-paths (version-root libdir name version) ".chandler")])
-          (ensure-dir manifest-dir)
-          (copy-file mpath (join-paths manifest-dir "chandler-manifest.ss"))
-          (copy-file (project-lock-path root)
-                     (join-paths manifest-dir "chandler-manifest.lock")))
-        ;; 5. P3:app 生成命令行入口(runner + launcher),用本机运行时
-        (let ([app (manifest-app mf)])
-          (when app
-            (write-app-launcher! name version (app-entry app) (app-main app)
+        ;; 1-4. 安装载荷(自身 + 依赖 + manifest/lock 快照),与 pack 同一管线
+        (let ([mapp (manifest-app mf)])
+          (install-project-payload! root libdir name version
+                                    (and mapp (app-entry mapp))
+                                    (list (cons 'register? #t)
+                                          (cons 'adopt (flag? flags 'adopt))
+                                          (cons 'force (flag? flags 'force))))
+          ;; 5. P3:app 生成命令行入口(runner + launcher),用本机运行时
+          (when mapp
+            (write-app-launcher! name version (app-entry mapp) (app-main mapp)
                                  libdir (target-bindir flags)
                                  (project-locked-deps root))))
         (printf "installed ~a ~a + dependencies to ~a~%" name version libdir)
         0)))
-
-  ;; 把各依赖装进全局前缀(合并,不覆盖同名)。C0:来源是**每个依赖自己的树**,
-  ;; 不再有汇总的 lib/。一个依赖贡献三样,恰好对应前缀的两层:
-  ;;   <src-root>/**(除 _build/、.git/)  → <prefix>/<name>/<version>/src/     源码 + resources/<ns>/
-  ;;   <src-root>/_build/<mt>/**          → <prefix>/<name>/<version>/<mt>/    编译对象 + native
-  ;; **资源不必单独搬**:它在源码树里就住在 `resources/<ns>/`,而前缀要的是
-  ;; `src/resources/<ns>/` —— 拷源码树时自动就位(C4 选这个落点的收益之一)。
-  (define (merge-lib-to-global! root libdir)
-    (let ([mt (current-machine-type)]
-          [all (lambda (_) #t)])   ; 源码/对象全拷(对象层暂无 ext 过滤;registry 按包兜)
-      (for-each
-        (lambda (d)
-          (let* ([name (symbol->string (locked-dep-name d))]
-                 [version (locked-dep-pin-val d)]  ; pin-val is the version string
-                 [src-root (vendor-dir root (locked-dep-name d))]
-                 [vroot (version-root libdir (locked-dep-name d) version)]
-                 [src-dest (join-paths vroot "src")]
-                 [obj-dest (join-paths vroot mt)]
-                 [obj (join-paths src-root "_build" mt)])
-            ;; P7:改调共享 copy-tree!。累积前缀 → skip-existing + warn。
-            ;; 别包拥有的文件由 registry check-conflicts 兜硬错;warn 抓依赖间同名悄悄丢。
-            (copy-tree! src-root src-dest '("_build" ".git") all 'skip-existing #t)
-            (copy-tree! obj obj-dest '() all 'skip-existing #t)))
-        (project-locked-deps root))))
-
-  (define (project-locked-deps root)
-    (let ([lpath (project-lock-path root)])
-      (if (file-exists? lpath) (lock-deps (read-lock lpath)) '())))
 
   ;; v3(D13):install-project-resources! 已删除。资源靠 method B 约定,
   ;; 随源码树拷贝时自动落位到 <vroot>/src/<libpath>/resources/。
@@ -466,14 +426,6 @@
       [(flag flags 'prefix) => (lambda (p) (join-paths p "bin"))]
       [(flag? flags 'system) (default-system-bindir)]
       [else (default-user-bindir)]))
-
-  ;; ISO-ish 时间戳(installed-at,纯记录)
-  (define (now-iso)
-    (let ([t (current-date)])
-      (format "~a-~a-~aT~a:~a:~a"
-              (date-year t) (pad2 (date-month t)) (pad2 (date-day t))
-              (pad2 (date-hour t)) (pad2 (date-minute t)) (pad2 (date-second t)))))
-  (define (pad2 n) (if (< n 10) (format "0~a" n) (format "~a" n)))
 
 ;; ── build:编译依赖闭包 + 当前项目 ──
 ;; 1. 依赖:进程内排单编译 → 各 _vendor/<dep>/<srcdir>/_build/<mt>/

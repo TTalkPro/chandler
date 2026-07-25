@@ -16,7 +16,8 @@
           chandler-runtime-sublibs chandler-dev-only-rel?
           copy-tree!
           global-prefix global-libdir
-          project-mode? resolved-libdirs)
+          project-mode? resolved-libdirs
+          install-project-payload! merge-lib-to-global! project-locked-deps)
   (import (chezscheme)
           (chandler util)
           (chandler fs)
@@ -463,4 +464,68 @@
   (define (opt opts k default) (alist-ref opts k default))
   (define (dot-entry? e) (and (> (string-length e) 0) (char=? #\. (string-ref e 0))))
   (define (short-rev rev)
-    (if (and (string? rev) (>= (string-length rev) 10)) (substring rev 0 10) rev)))
+    (if (and (string? rev) (>= (string-length rev) 10)) (substring rev 0 10) rev))
+
+  ;; ═══════════════════════════════════════════════════════════════════
+  ;; 安装载荷(cmd-install 步骤 1-4,不含 app launcher)
+  ;;   供两处复用,保证 install 与 pack 的载荷字节级一致(I2 by construction):
+  ;;     cmd-install  register?=#t → install-global(staging + .registry/)
+  ;;     pack 阶段1   register?=#f → install-payload-global(直拷,无注册表)
+  ;; ═══════════════════════════════════════════════════════════════════
+
+  (define (project-locked-deps root)
+    (let ([lpath (project-lock-path root)])
+      (if (file-exists? lpath) (lock-deps (read-lock lpath)) '())))
+
+  ;; 把各依赖装进全局前缀(合并,不覆盖同名)。C0:来源是**每个依赖自己的树**。
+  (define (merge-lib-to-global! root libdir)
+    (let ([mt (current-machine-type)]
+          [all (lambda (_) #t)])
+      (for-each
+        (lambda (d)
+          (let* ([name (symbol->string (locked-dep-name d))]
+                 [version (locked-dep-pin-val d)]
+                 [src-root (vendor-dir root (locked-dep-name d))]
+                 [vroot (version-root libdir (locked-dep-name d) version)]
+                 [src-dest (join-paths vroot "src")]
+                 [obj-dest (join-paths vroot mt)]
+                 [obj (join-paths src-root "_build" mt)])
+            ;; P7:共享 copy-tree!。累积前缀 → skip-existing + warn。
+            (copy-tree! src-root src-dest '("_build" ".git") all 'skip-existing #t)
+            (copy-tree! obj obj-dest '() all 'skip-existing #t)))
+        (project-locked-deps root))))
+
+  ;; ISO-ish 时间戳(installed-at,纯记录)
+  (define (now-iso)
+    (let ([t (current-date)])
+      (format "~a-~a-~aT~a:~a:~a"
+              (date-year t) (pad2 (date-month t)) (pad2 (date-day t))
+              (pad2 (date-hour t)) (pad2 (date-minute t)) (pad2 (date-second t)))))
+  (define (pad2 n) (if (< n 10) (format "0~a" n) (format "~a" n)))
+
+  ;; install-project-payload!:app 自身 + 依赖合并 + manifest/lock 快照。
+  ;; opts:(register? . #t/#f) (adopt . b) (force . b)。
+  ;; 调用方负责前置检查(manifest/lock 存在)与 app launcher 生成(如有)。
+  (define (install-project-payload! root libdir name version entry opts)
+    ;; 1. 项目自身
+    (if (alist-ref opts 'register?)
+        (install-global root libdir
+                        (list name version `(path ,root) (now-iso) 'chandler)
+                        version
+                        (list (cons 'adopt (alist-ref opts 'adopt))
+                              (cons 'force (alist-ref opts 'force)))
+                        entry)
+        (install-payload-global root libdir name version entry))
+    ;; 2. 合并依赖源码 + 编译产物(从 _vendor → 前缀)
+    (merge-lib-to-global! root libdir)
+    ;; 3. manifest + lock 快照 → <vroot>/.chandler/
+    ;;    lock 必须同去:run.sps(D18)启动时读它挂精确 dep 版本,缺即崩。
+    ;;    无清单场景(pack --name/--entry 临时打包)由调用方自行合成。
+    (let ([manifest-dir (join-paths (version-root libdir name version) ".chandler")]
+          [mpath (project-manifest-path root)]
+          [lpath (project-lock-path root)])
+      (ensure-dir manifest-dir)
+      (when (file-exists? mpath)
+        (copy-file mpath (join-paths manifest-dir "chandler-manifest.ss")))
+      (when (file-exists? lpath)
+        (copy-file lpath (join-paths manifest-dir "chandler-manifest.lock"))))))

@@ -7,6 +7,7 @@
     default-user-bindir default-system-bindir
     chandler-home
     install-global uninstall-global switch-active
+    install-payload-global
     doctor-global list-global
     make-registered registered? registered-name registered-kind
     registered-versions registered-active registered-has-version?
@@ -131,6 +132,27 @@
                                (registered-set-active with-new version)
                                with-new)])
            (write-registered! libdir name-sym final-reg)))]))
+
+  ;; ── install-payload-global:只铺文件,不写 .registry/、不走 staging ──
+  ;; 用于可再分发前缀(pack 的 share/chez):注册表是安装机私有状态(且含构建机
+  ;; 绝对路径 source),不该进包;pack 目录全新,也不需要 staging 的原子性。
+  ;; 文件集与 install-global 完全相同(同一 enumerate-lib),保证 payload 字节级一致。
+  (define (install-payload-global src libdir name version entry)
+    (let* ([name-sym (if (symbol? name) name (string->symbol name))]
+           [src-name (and (pair? entry) (car entry))]
+           [src-name-str (if src-name (symbol->string src-name)
+                             (symbol->string name-sym))]
+           [vroot (version-root libdir name-sym version)]
+           [entries (enumerate-lib src src-name-str)])
+      (when (null? entries)
+        (error 'install-payload-global
+               "source directory has no installable library files" src name))
+      (for-each (lambda (e)
+                  (let ([s (cdr e)] [d (join-paths vroot (car e))])
+                    (ensure-parent d)
+                    (when (file-exists? d) (delete-file d))
+                    (copy-file s d)))
+                entries)))
 
   ;; ── uninstall-global ──
   (define uninstall-global
