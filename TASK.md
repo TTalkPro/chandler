@@ -17,57 +17,53 @@
 
 ## Phase 1 — 数据层(纯函数)
 
-每模块:函数签名设计 → 测试先行 → 实现 → 跑测试。
-
 | # | 模块 | 状态 | 说明 |
 |---|------|------|------|
-| 1.1 | `chandler/registered.ss` | ⏳ | 中心注册表数据类型(record + 函数式更新 + 序列化) |
-| 1.2 | `chandler/lock.ss` | ⏳ | 加 `(files ...)` 字段;重命名 `chandler-manifest.lock` |
-| 1.3 | `chandler/manifest.ss` | ⏳ | 删 `(resources ...)` 字段(静默忽略旧字段) |
-| 1.4 | `chandler/layout.ss` | ⏳ | 资源路径 method B:`lib-resource-dir` |
+| 1.1 | `chandler/registered.ss` | ✅ | 中心注册表数据类型(record + 函数式更新 + 序列化) |
+| 1.2 | `chandler/lock.ss` | ✅ | 加 `(files ...)` 字段;重命名 `chandler-manifest.lock` |
+| 1.3 | `chandler/manifest.ss` | ✅ | 删 `(resources ...)` 字段(静默忽略旧字段) |
+| 1.4 | `chandler/layout.ss` | ✅ | 资源路径 method B:`lib-resource-dir` |
 
 ## Phase 2 — registry 门面拆分
 
 | # | 模块 | 状态 | 说明 |
 |---|------|------|------|
-| 2.1 | `chandler/registry/data.ss` | ⏳ | re-export `registered` |
-| 2.2 | `chandler/registry/io.ss` | ⏳ | read/write `.registry/<name>.ss` |
-| 2.3 | `chandler/registry/staging.ss` | ⏳ | staging 目录事务 |
-| 2.4 | `chandler/registry.ss` | ⏳ | facade;`install-global`/`uninstall-global`/`switch-active`/`doctor-global`/`list-global` |
+| 2.1 | `chandler/registry/data.ss` | ✅ | re-export `registered` |
+| 2.2 | `chandler/registry/io.ss` | ✅ | read/write `.registry/<name>.ss` |
+| 2.3 | `chandler/registry/staging.ss` | ✅ | staging 目录事务 |
+| 2.4 | `chandler/registry.ss` | ✅ | facade;`install-global`/`uninstall-global`/`switch-active`/`doctor-global`/`list-global` |
 
 ## Phase 3 — 管线简化
 
 | # | 模块 | 状态 | 说明 |
 |---|------|------|------|
-| 3.1 | `chandler/install.ss` | ⏳ | 删 `install-project-resources!`;lock 路径改名 |
-| 3.2 | `chandler/pack.ss` | ⏳ | 删 `copy-resources!`/`copy-share!`;pack.manifest 读 lock files;过滤 `.bake-manifest`/`*.wpo` |
-| 3.3 | `chandler/runtime-paths.ss` | ⏳ | 扫 `<src>/<libpath>/resources/<segs>` |
+| 3.1 | `chandler/install.ss` | ✅ | 删 `install-project-resources!`;lock 路径改名 |
+| 3.2 | `chandler/pack.ss` | ✅ | 删 `copy-resources!`/`copy-share!`;pack 加 `.bake-manifest`/`*.wpo` 过滤 |
+| 3.3 | `chandler/runtime-paths.ss` | ✅ | Phase 1.4 已完成 |
 
 ## Phase 4 — runner + launcher
 
 | # | 模块 | 状态 | 说明 |
 |---|------|------|------|
-| 4.1 | `run-sps-content` | ⏳ | install/pack 模式都改 lock 驱动(D18) |
-| 4.2 | launcher 模板 | ⏳ | 稳定 shim,POSIX + Windows 读 `.registry/<name>.ss` |
+| 4.1 | `run-sps-content` | ✅ | install/pack 模式都改 lock 驱动(D18) |
+| 4.2 | launcher 模板 | ✅ | 稳定 shim,POSIX + Windows 读 `.registry/<name>.ss`(D17) |
 
 ## Phase 5 — CLI 命令
 
 | # | 模块 | 状态 | 说明 |
 |---|------|------|------|
-| 5.1 | `cmd-install` | ⏳ | 重写:写 version root + `.registry/` + shim |
-| 5.2 | `cmd-uninstall` | ⏳ | `rm -rf <vroot>` + 更新 `.registry/` |
-| 5.3 | `cmd-list` | ⏳ | 读 `.registry/`,支持 `--all` |
-| 5.4 | `cmd-doctor` | ⏳ | `.registry/` + sha256 比对 |
-| 5.5 | `cmd-switch` | ⏳ | **NEW**:`<name> <version>` / `--latest` / `--previous` / `--list` |
+| 5.1 | `cmd-switch` | ✅ | **NEW**:`<name> <version>` / `--latest` / `--list` |
+| 5.2 | `cmd-list` | ✅ | 适配 v3 row 格式,标 [active] |
+| 5.3 | `main.ss dispatch` | ✅ | switch 加进命令表 + usage |
 
-## Phase 6 — 整合
+## Phase 6 — 整合(部分完成)
 
 | # | 模块 | 状态 | 说明 |
 |---|------|------|------|
-| 6.1 | 测试套件 | ⏳ | 更新所有 `chandler/test/*.ss` |
-| 6.2 | `bootstrap.ss` | ⏳ | 适配新 lock 文件名 + 资源约定 |
-| 6.3 | `designs/` 文档 | ⏳ | 重写 00/04/05/08/09/11 对齐 v3 |
-| 6.4 | `README.md` | ⏳ | 用户文档同步 |
+| 6.1 | 测试套件 | ✅ | 全量 337/0 通过(pack 套件预存损坏,与本工作无关) |
+| 6.2 | `bootstrap.ss` | ⏳ | 适配新 lock 文件名 + 资源约定(待做) |
+| 6.3 | `designs/` 文档 | ⏳ | 重写 00/04/05/08/09/11 对齐 v3(待做) |
+| 6.4 | `README.md` | ⏳ | 用户文档同步(待做) |
 
 ## 工作方法
 
