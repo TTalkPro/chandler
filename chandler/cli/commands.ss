@@ -313,10 +313,13 @@
         (merge-lib-to-global! root libdir)
         ;; 3. v3(D13):资源随源码树拷贝(method B),不再需要专门的
         ;; install-project-resources! —— 它已删,manifest (resources ...) 也已删。
-        ;; 4. 安装 manifest 到 <name>/<version>/.chandler/chandler-manifest.ss
+        ;; 4. 安装 manifest + lock 到 <name>/<version>/.chandler/
+        ;;    lock 必须同去:run.sps(D18)启动时读它挂精确 dep 版本,缺即崩。
         (let ([manifest-dir (join-paths (version-root libdir name version) ".chandler")])
           (ensure-dir manifest-dir)
-          (copy-file mpath (join-paths manifest-dir "chandler-manifest.ss")))
+          (copy-file mpath (join-paths manifest-dir "chandler-manifest.ss"))
+          (copy-file (project-lock-path root)
+                     (join-paths manifest-dir "chandler-manifest.lock")))
         ;; 5. P3:app 生成命令行入口(runner + launcher),用本机运行时
         (let ([app (manifest-app mf)])
           (when app

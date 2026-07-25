@@ -629,7 +629,7 @@
         "                       [src (string-append vroot \"/src\")]\n"
         "                       [obj (string-append vroot \"/\" %mt)])\n"
         "                  (when (file-directory? src)\n"
-        "                    (cons src obj)))))\n"
+        "                    (cons src obj))))))\n"
         "       %resolved))\n"
         ;; 自己的 vroot 对(src . obj)
         "(define %self-pair\n"
@@ -649,9 +649,15 @@
         (if pack? native-walk-src "")
         (if pack? "(%load-natives %root)\n" "")
         ;; ── 入口(共享) ──
+        ;; args 必须 quote:(list 'main args) 会把实参表当 form 求值
+        ;; (变成把 "--version" 当过程 apply)。契约:main 接收整个 argv 表。
+        ;; 传退出码:main 契约是 argv → exit-code;不 exit 则启动器包住的 app
+        ;; 恒退 0,失败无法被调用方(如 bootstrap 编排)检测。
+        ;; env 必须含 (chezscheme):否则 quote/let 等核心语法在 eval 环境里未绑定。
         "(let ([args (cdr (command-line))]\n"
-        "      [env (environment '(" entry-str "))])\n"
-        "  (eval (list '" main-str " args) env))\n")))
+        "      [env (environment '(chezscheme) '(" entry-str "))])\n"
+        "  (let ([rc (eval (list '" main-str " (list 'quote args)) env)])\n"
+        "    (exit (if (fixnum? rc) rc 0))))\n")))
 
   ;; ═══════════════════════════════════════════════════════════════════
   ;; §7 pack.manifest
