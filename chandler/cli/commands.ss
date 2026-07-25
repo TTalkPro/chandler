@@ -317,13 +317,10 @@
                [opts (list (cons 'adopt (flag? flags 'adopt))
                            (cons 'force (flag? flags 'force)))])
           (install-global root libdir meta version opts entry))
-        ;; 2. 合并依赖源码 + 编译产物 + 资源(从 _vendor → 全局前缀)
+        ;; 2. 合并依赖源码 + 编译产物(从 _vendor → 全局前缀)
         (merge-lib-to-global! root libdir)
-        ;; 3. 安装项目自身 resources(manifest 声明的)—— 落在 version-root 的
-        ;; src/resources/<ns>/ 下,与 pack 的 copy-resources! 同构,run.sps 的
-        ;; scan-libdirs 才能扫到(prefix-resource-dir 全局层的写法是 pre-C0 残留,
-        ;; 当时还没 version 嵌套,运行时找不到应用自己的资源)。
-        (install-project-resources! root mf libdir name version)
+        ;; 3. v3(D13):资源随源码树拷贝(method B),不再需要专门的
+        ;; install-project-resources! —— 它已删,manifest (resources ...) 也已删。
         ;; 4. 安装 manifest 到 <name>/<version>/.chandler/chandler-manifest.ss
         (let ([manifest-dir (join-paths (version-root libdir name version) ".chandler")])
           (ensure-dir manifest-dir)
@@ -365,33 +362,8 @@
     (let ([lpath (project-lock-path root)])
       (if (file-exists? lpath) (lock-deps (read-lock lpath)) '())))
 
-  ;; 安装项目自身的 resources(manifest 的 (resources ...) 声明)。
-  ;; 落在 <libdir>/<name>/<version>/src/resources/<libpath>/ —— 与 pack 的
-  ;; copy-resources! 同构(nested layout):run.sps 的 scan-libdirs 只扫
-  ;; <root>/<name>/<version>/{src,<mt>},不扫全局 <libdir>/src/,故必须嵌套。
-  (define (install-project-resources! root mf libdir name version)
-    (let ([resources (manifest-resources mf)])
-      (when resources
-        (for-each
-          (lambda (entry)
-            (let* ([libref (car entry)]
-                   [rel-path (cdr entry)]
-                   [src-dir (join-paths root rel-path)]
-                   [libpath (string-join (map symbol->string libref) "/")]
-                   [dst-dir (lib-resource-dir
-                             (join-paths (version-root libdir name version) "src")
-                             libpath)])
-              (when (file-directory? src-dir)
-                (ensure-dir dst-dir)
-                (let ([pre (string-append src-dir "/")])
-                  (for-each
-                    (lambda (abs)
-                      (let* ([rel (strip-prefix abs pre)]
-                             [dst (join-paths dst-dir rel)])
-                        (ensure-parent dst)
-                        (copy-file abs dst)))
-                    (files-under src-dir))))))
-          resources))))
+  ;; v3(D13):install-project-resources! 已删除。资源靠 method B 约定,
+  ;; 随源码树拷贝时自动落位到 <vroot>/src/<libpath>/resources/。
 
   ;; uninstall 只操作全局前缀(无本地卸载一说),故不再强制 --global —— 直接卸载。
   (define (cmd-uninstall-global root flags)

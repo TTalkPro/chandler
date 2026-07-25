@@ -169,25 +169,8 @@
          (not (string-suffix? ".wpo" rel))))
 
 
-  ;; 应用资源:源码态的 <project>/resources/ **原样**搬进 <pack>/<name>/<version>/src/resources/。
-  ;;
-  ;; v2 nested:layout:资源落 <root>/<name>/<version>/src/resources/<libpath>/,
-  ;; 与 install 字节级统一(designs/05 §4.1)。**verbatim,不插 <app> 一层**:
-  ;; <libpath>/ 那层已在 resources/ 里(与 dev 期 resource-path 扫描同一约定)。
-  (define (copy-resources! project root name version)
-    (let ([src (join-paths project "resources")]
-          [dst-root (version-root root name version)])
-      (and (file-directory? src)
-           (let ([n 0])
-             (for-each
-               (lambda (abs)
-                 (let ([dst (join-paths dst-root "src" resources-dirname
-                                        (strip-prefix abs (string-append src "/")))])
-                   (ensure-parent dst)
-                   (copy-file abs dst)
-                   (set! n (+ n 1))))
-               (files-under src))
-             (> n 0)))))
+  ;; v3(D13):copy-resources! / copy-share! 已删除。资源随源码树拷贝时自动落位
+  ;; 到 <root>/<name>/<version>/src/<libpath>/resources/(method B)。
 
   (define (datum->str d)
     (let ([op (open-output-string)]) (write d op) (get-output-string op)))
@@ -211,27 +194,7 @@
               "(manifest (format 1) (name \"" app "\") (version \"" version "\")\n"
               "  (app (entry " (datum->str entry) ") (main " (symbol->string main-proc) ")))\n")))))
 
-  ;; M2: 依赖库的资源(ABI-independent,designs/11 §5;落点 C4;来源 C0)
-  ;; 从各依赖**自己的源码树** _vendor/<dep>/<srcdir>/resources/<libpath>/ 复制到
-  ;; <pack>/<dep-name>/<dep-version>/src/resources/<libpath>/ —— v2 nested layout,
-  ;; 与 install 字节级统一(designs/05 §4.1)。
-  (define (copy-share! project root locked)
-    (for-each
-      (lambda (d)
-        (let* ([dn (symbol->string (locked-dep-name d))]
-               [dv (locked-dep-pin-val d)]
-               [vr (version-root root dn dv)]
-               [src-root (dep-src-root project d)]
-               [res (join-paths src-root resources-dirname)])
-          (when (file-directory? res)
-            (for-each
-              (lambda (abs)
-                (let ([dst (join-paths vr "src" resources-dirname
-                                       (strip-prefix abs (string-append res "/")))])
-                  (ensure-parent dst)
-                  (copy-file abs dst)))
-              (files-under res)))))
-      locked))
+  ;; v3(D13):copy-share! 已删除(同上,资源随源码树拷贝)。
 
   ;; 一个依赖在 _vendor 里的源码根(= 它的库搜索根,也是 `chandler build` 的 cwd)
   (define (dep-src-root project d)
@@ -240,6 +203,11 @@
   ;; 该依赖的编译产物树:它自己的 _build/<mt>/
   (define (dep-obj-dir project d)
     (join-paths (dep-src-root project d) "_build" (current-machine-type)))
+
+  ;; v3:对象树拷贝的交付物过滤(与 install-global 的 deliverable? 对齐)
+  (define (obj-deliverable? rel)
+    (not (or (string=? (base-name rel) ".bake-manifest")
+             (string-suffix? ".wpo" rel))))
 
   ;; ═══════════════════════════════════════════════════════════════════
   ;; §4 native 清点
@@ -800,29 +768,34 @@
         (printf "pack ~a~%" root)
         ;; 1) v2 nested layout:每个 dep + app 装到 <root>/<name>/<version>/{src,<mt>}/
         ;;    payload 与 install 字节级统一(designs/05 §P1)
-        (for-each
-          (lambda (d)
-            (let* ([dn (symbol->string (locked-dep-name d))]
-                   [dv (locked-dep-pin-val d)]
-                   [vr  (version-root root dn dv)]
-                   [obj-dest (join-paths vr mt)]
-                   [src-dest (join-paths vr "src")]
-                   [src-root (vendor-dir project (locked-dep-name d))]
-                   [obj (dep-obj-dir project d)])
-              (ensure-dir obj-dest)
-              (ensure-dir src-dest)
-              (when (file-directory? obj)
-                (copy-tree! obj obj-dest '() (lambda (_) #t) 'overwrite #f))
-              (copy-tree! src-root src-dest '("_build" ".git") (lambda (_) #t) 'overwrite #f)))
-          locked)
-        ;; app 自己装到 <root>/<name>/<version>/{src,<mt>}/
-        (let* ([vr (version-root root name version)]
-               [obj-dest (join-paths vr mt)]
-               [src-dest (join-paths vr "src")])
+;; v3:对象树拷贝过滤 .bake-manifest(构建指纹缓存)和 *.wpo(WPO 中间物),
+           ;; 与 install-global 的 deliverable? 对齐 —— 它们非交付物,不应进 pack。
+           ;; 同步修复 v2 的 I2 差异 4。
+           (for-each
+             (lambda (d)
+               (let* ([dn (symbol->string (locked-dep-name d))]
+                      [dv (locked-dep-pin-val d)]
+                      [vr  (version-root root dn dv)]
+                      [obj-dest (join-paths vr mt)]
+                      [src-dest (join-paths vr "src")]
+                      [src-root (vendor-dir project (locked-dep-name d))]
+                      [obj (dep-obj-dir project d)])
+                 (ensure-dir obj-dest)
+                 (ensure-dir src-dest)
+                 (when (file-directory? obj)
+                   (copy-tree! obj obj-dest '() obj-deliverable? 'overwrite #f))
+                 (copy-tree! src-root src-dest '("_build" ".git") (lambda (_) #t) 'overwrite #f)))
+             locked)
+           ;; app 自己装到 <root>/<name>/<version>/{src,<mt>}/
+           (let* ([vr (version-root root name version)]
+                  [obj-dest (join-paths vr mt)]
+                  [src-dest (join-paths vr "src")])
           (ensure-dir obj-dest)
           (ensure-dir src-dest)
-          (copy-tree! (join-paths project "_build" mt) obj-dest '() (lambda (_) #t) 'overwrite #f)
-          (copy-tree! project src-dest '("_build" "_vendor" ".git" "dist" "resources") (lambda (_) #t) 'overwrite #f))
+          (copy-tree! (join-paths project "_build" mt) obj-dest '() obj-deliverable? 'overwrite #f)
+          ;; v3(D13):src 拷贝排除 resources(资源已在 method B 约定下随源码 tree 拷贝;
+          ;; 不再单独 copy-resources! 故 src 侧不需要排除 resources,但保持兼容)
+          (copy-tree! project src-dest '("_build" "_vendor" ".git" "dist") (lambda (_) #t) 'overwrite #f))
         ;; 入口库必须真的在包里 —— 否则打出的包一路正常,到启动 import 才报
         ;; "library (x) not found"。这一步把那个失败提前到打包期。
         ;; v2 nested:layout: entry .so 在 <root>/<name>/<version>/<mt>/<entry-path>.so
@@ -841,10 +814,8 @@
         ;; 源码时滤掉,这里原样搬对象。
         (when (and mf (manifest-chandler mf))
           (copy-chandler-into-pack! project root (manifest-chandler mf)))
-        ;; 2) v2 nested: <name>/<version>/src/resources/<app>/ + dep resources
+        ;; 2) v3(D13):资源随源码树拷贝自动落位(method B,无需 copy-resources!/copy-share!)
         ;;    + <name>/<version>/.chandler/chandler-manifest.ss(清单快照)
-        (copy-resources! project root name version)
-        (copy-share! project root locked)
         (write-app-manifest! project root name version entry mainp)
         ;; 3) v2 nested: run.sps + 启动器(无 --libdirs,由 run.sps 自己 scan-libdirs)
         (unless lib?
