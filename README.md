@@ -6,9 +6,11 @@
 
 ## 定位
 
+> **v3 新增**:多版本共存 + `chandler switch` 版本切换;资源 method B(与库源码同居);中心 `.registry/`;lock 驱动 run.sps。详见 [designs/06-installed-layout.md](designs/06-installed-layout.md)。
+
 - **Skiff**(轻舟)= 运行时(Chez + libuv);**Chandler**(船具商)= 包管理器 + 构建器,管**依赖获取、编译、激活、打包**。
 - git-first:依赖来源(URL + tag/rev/branch pin)写在 `chandler-manifest.ss`,无需中心 registry。
-- 依赖 = 整仓 checkout 到 `_vendor/<name>/`,各依赖**就地编译**(产物留在它自己的 `_build/<mt>/`);`manifest.lock` 锁确切 commit,可复现。
+- 依赖 = 整仓 checkout 到 `_vendor/<name>/`,各依赖**就地编译**(产物留在它自己的 `_build/<mt>/`);`chandler-manifest.lock` 锁确切 commit,可复现。
 - 消费方用 Chez 库目录**对** `<src>::<obj>`(`::` = 源::对象)同时解析源码与对象;native 收进所属库 `<obj>/<lib>/native/`。
 
 ## 安装
@@ -93,13 +95,13 @@ chandler repl                              # 交互 shell(自动挂库路径)
 
 ```
 myapp/
-  chandler-manifest.ss  manifest.lock
+  chandler-manifest.ss  chandler-manifest.lock
   _vendor/<name>/                    ← git 依赖整仓 checkout(源码 live)
     <srcdir>/_build/<mt>/            ← chandler build 就地编译产物(留在原地)
   _vendor/chandler/                  ← 运行时门(deps 从 CHANDLER_HOME copy)
     chandler/<sub>.ss                ← runtime subset 源码
     _build/<mt>/chandler/<sub>.so    ← 对象
-  resources/<libpath>/               ← 项目自己的资源(verbatim)
+  resources/<libpath>/               ← 项目自己的资源(与库源码同居:method B,`<src>/<libpath>/resources/`)
 ```
 
 - **`chandler deps`**:git 依赖整仓 checkout 到 `_vendor/<name>/`(源码 live);chandler 运行时门从 CHANDLER_HOME copy 进 `_vendor/chandler/`。
@@ -121,7 +123,7 @@ chandler run --script main.ss [args...]
 
 它交接一样东西:**库搜索路径**(`resolved-libdirs` 的 per-dep `(src . obj)` 对 + path 源目录 + 项目库根 + 全局兜底)。之后脚本里 `(import (dep))` 即通。
 
-**资源定位不依赖环境变量**:`(chandler runtime-paths)` 的 `resource-path` / `find-resource-path` 扫 `(library-directories)` 的 src/obj 两侧(`<side>/resources/<libpath>/<file>`),进程对着哪些前缀跑,资源就在那里——不再需要 `APP_ROOT`。
+**资源定位不依赖环境变量**:`(chandler runtime-paths)` 的 `resource-path` / `find-resource-path` 扫 `(library-directories)` 的 src/obj 两侧(`<side>/<libpath>/resources/<file>`,method B:资源与库源码同居),进程对着哪些前缀跑,资源就在那里——不再需要 `APP_ROOT`。
 
 `.env`(项目根)由 `run`/`repl`/`env` 消费(`.env` 覆盖进程环境);刻意**不碰** `build`/`deps`/`install`,保住可复现。
 
@@ -148,9 +150,11 @@ chandler run --script main.ss [args...]
 | `exec -- <cmd…>` | 设 `CHEZSCHEMELIBDIRS` 后跑命令 |
 | `repl [--runtime skiff\|chez]` | 交互 shell,自动挂库路径(项目优先 + 全局兜底) |
 | `make [task]` | 跑 `chandler-tasks.ss` 的任务(`build`/`test`/…);无任务文件时从 manifest 推导 |
-| `install [--user\|--system\|--prefix=DIR]` | 装项目库 + 依赖到全局前缀(注册表事务)。**app 自动建命令行入口** `~/.local/bin/<app>`(POSIX)/ `%LOCALAPPDATA%\chez\bin\<app>.ps1`(Windows) |
-| `uninstall --name=<n>` | 干净卸载(含 app 的命令行入口) |
-| `list --global` / `doctor` | 列出/体检全局已装包 |
+| `install [--user\|--system\|--prefix=DIR]` | 装项目库 + 依赖到全局前缀(中心 `.registry/` 登记)。**app 自动建命令行入口** `~/.local/bin/<app>`(POSIX,稳定 shim)/ `%LOCALAPPDATA%\chez\bin\<app>.ps1`(Windows)。首次 install 自动设 active;同 name 多 version 共存 |
+| `uninstall --name=<n> [--version=<v>]` | 干净卸载(`rm -rf <vroot>` + 更新 `.registry/`);删 active 自动清空 |
+| `list` | 列出全局已装包(active 版本标 `[active]`) |
+| `switch <name> <version>` | **切换 app 的 active version**(D19);`--latest` 选最高;`--list` 列所有 active |
+| `doctor` | 体检:missing-vroot / missing-active / stale-staging |
 | `pack [--runtime r] [--out dir]` | 组装自包含分发包(自带运行时) |
 
 全局旗标:`-C <dir>` `--offline` `--production` `--force` `--keep-extra` `--verbose`。
@@ -201,7 +205,7 @@ chandler 0.1.4 (chez 10.4.1)                 # 跑在标准 Chez 上
 
 ## 安全模型(designs/08)
 
-- **清单只 `read` 不求值**:`chandler-manifest.ss`/`manifest.lock`/registry 一律纯数据,永不 `eval`/`load`。
+- **清单只 `read` 不求值**:`chandler-manifest.ss`/`chandler-manifest.lock`/`.registry/` 一律纯数据,永不 `eval`/`load`。
 - **git clone/checkout 零执行**:所有 git 调用带 `-c core.hooksPath=/dev/null`。
 - **native 构建 = RCE,须显式授权**:依赖的 native 构建(别人的代码)须 `--allow-build`,且授权**绑构建描述哈希**写入 `.chandler-approvals`——脚本掉包(描述变更)则授权失效重提示。
 - **rev 全长锁定 = 内容寻址**:物化只认 lock 里的确切 commit,篡改/重放由 git 对象哈希兜底。
