@@ -7,7 +7,7 @@
 (library (chandler cli commands)
   (export cmd-init cmd-deps cmd-install cmd-add cmd-remove cmd-run cmd-env cmd-repl
           cmd-build cmd-pack cmd-verify-pack
-          cmd-uninstall-global cmd-doctor cmd-list)
+          cmd-uninstall-global cmd-doctor cmd-list cmd-switch)
   (import (chezscheme)
           (chandler util)
           (chandler fs)
@@ -386,7 +386,8 @@
             (fprintf (current-error-port) "doctor: ~a issue(s) found~%" (length issues))
             65))))
 
-  ;; v2: chandler list — 列出全局已装包(多版本)
+  ;; v3: chandler list — 列出全局已装包(多版本,active 标记)
+  ;; row = (name-str version-str tag installer-symbol);tag = "active" 或 ""
   (define (cmd-list root flags)
     (let ([libdir (target-libdir flags)]
           [rows (list-global (target-libdir flags))])
@@ -394,9 +395,53 @@
           (printf "no packages installed in ~a~%" libdir)
           (begin
             (for-each (lambda (r)
-                        (printf "~a\t~a~%" (car r) (cadr r)))
-                      (list-sort (lambda (a b) (string<? (car a) (car b))) rows))))
+                        ;; r = (name version tag installer)
+                        (if (string=? "active" (caddr r))
+                            (printf "~a\t~a\t[active]~%" (car r) (cadr r))
+                            (printf "~a\t~a~%" (car r) (cadr r))))
+                      (list-sort (lambda (a b)
+                                   (or (string<? (car a) (car b))
+                                       (and (string=? (car a) (car b))
+                                            (string<? (cadr a) (cadr b)))))
+                                 rows))))
       0))
+
+  ;; v3(D19): chandler switch — 切换 app 的 active version
+  ;;   chandler switch <name> <version>
+  ;;   chandler switch <name> --latest
+  ;;   chandler switch --list
+  (define (cmd-switch root flags positionals)
+    (cond
+      ;; --list:列所有 app + active
+      [(flag? flags 'list)
+       (let ([rows (list-global (target-libdir flags))])
+         (for-each (lambda (r)
+                     (when (string=? "active" (caddr r))
+                       (printf "~a\t~a~%" (car r) (cadr r))))
+                   rows)
+         0)]
+      [else
+       (let ([name (and (pair? positionals) (car positionals))]
+             [ver-or-flag (and (pair? positionals) (pair? (cdr positionals)) (cadr positionals))]
+             [libdir (target-libdir flags)])
+         (unless name
+           (error 'switch "usage: chandler switch <name> <version> | --latest | --list"))
+         (let ([version
+                (cond
+                  [(string=? ver-or-flag "--latest")
+                   ;; 选该 name 的最高 version
+                   (let ([reg (or (read-registered libdir name)
+                                  (error 'switch "name not registered" name))])
+                     (let* ([versions (map car (registered-versions reg))]
+                            [sorted (list-sort string>? versions)])
+                       (when (null? sorted)
+                         (error 'switch "no versions installed" name))
+                       (car sorted)))]
+                  [(string? ver-or-flag) ver-or-flag]
+                  [else (error 'switch "specify <version> or --latest")])])
+           (switch-active libdir name version)
+           (printf "switched ~a to ~a~%" name version)
+           0))]))
 
   ;; install/uninstall/doctor 的**安装落点**:`--prefix=DIR` / `--user`(默认)/ `--system`。
   ;;   --prefix=DIR → 任意目录(测试/隔离/自定义前缀)

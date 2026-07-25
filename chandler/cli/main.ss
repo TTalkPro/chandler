@@ -49,6 +49,7 @@
           [(uninstall) (cmd-uninstall-global root flags)]
           [(list)    (cmd-list root flags)]
           [(doctor)  (cmd-doctor root flags)]
+          [(switch)  (cmd-switch root flags pos)]
          [(-T)      (list-tasks) 0]
          [else
           (fprintf (current-error-port)
@@ -88,7 +89,7 @@
     (printf " (chez ~a)~%" (chez-version-string)))
 
   (define (list-tasks)
-    (printf "commands: init add remove install update build make pack verify verify-pack list tree run exec repl version~%"))
+    (printf "commands: init add remove install update build make pack verify verify-pack list tree run exec repl switch version~%"))
 
   (define (usage)
     (printf "chandler -- git-first library manager for Chez Scheme (Skiff ecosystem)~%~%")
@@ -110,11 +111,14 @@
     (printf "  env                          export CHEZSCHEMELIBDIRS + .env (eval it)~%")
     (printf "  repl [--runtime skiff|chez]  interactive shell with library paths mounted~%")
     (printf "  list                         list installed packages in the global prefix~%")
+    (printf "                               (active version marked [active])~%")
     (printf "  pack [--runtime r] [--lib]   assemble a self-contained distribution (app pack);~%")
     (printf "                               --lib for library pack (no runtime/launcher)~%")
     (printf "  verify-pack [--target] <dir> re-hash a pack; --target also checks the target triple~%")
     (printf "  uninstall --name=N [--version=V]  uninstall a package (--version for specific version)~%")
-    (printf "  doctor                       inspect the global library prefix~%~%")
+    (printf "  doctor                       inspect the global library prefix~%")
+    (printf "  switch <name> <version>      switch app's active version (multi-version coexist)~%")
+    (printf "                               (--latest picks highest; --list shows all active)~%~%")
     (printf "Global flags: -C <dir> --offline --production --force --keep-extra --verbose~%~%")
     (printf "Environment:~%")
     (printf "  CHANDLER_RUNTIME=skiff|chez  pick WHICH runtime (run/exec/repl and the~%")
