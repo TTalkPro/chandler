@@ -15,6 +15,7 @@
           (chandler layout)
           (chandler fetch)
           (chandler install)
+          (chandler lock)
           (chandler runtime-detector)
           (chandler pack))
 
@@ -42,6 +43,17 @@
   (define (pack-out root name version)
     (join-paths root "dist" (pack-dir-name name version)))
 
+  ;; v2 nested layout:app 载荷在 <pack>/<name>/<version>/ 下;
+  ;; dep 在 <pack>/<dep>/<pin>/ 下(pin = lock 里的 pin-val,fixture 依赖走 (branch "main"))。
+  (define (app-vroot app name version)
+    (join-paths (pack-out app name version) name version))
+
+  (define (dep-pin app dep)
+    (locked-dep-pin-val (lock-ref (read-lock (project-lock-path app)) dep)))
+
+  (define (dep-vroot app d dep)
+    (join-paths d (symbol->string dep) (dep-pin app dep)))
+
   ;; 组装到 out,不捆运行时:runtime 定位/版本探测要真二进制。故这些用例只调用
   ;; 到「对象树 + resources + 前置校验」这一层,用 assert-raises 兜住运行时那步。
   ;; 能这样切分,是因为 pack 先把对象树落盘、最后才碰运行时。
@@ -50,16 +62,18 @@
 
   (define-suite suite
 
-    ;; ── 布局:每一样平台绑定物都在 <mt> 层下,且 <mt> 直接挂包根(P1:与全局
-    ;; 安装前缀 ~/.local/share/chez/ 逐层同构,不再多一层 lib/)──
+    ;; ── 布局:v2 nested —— 应用对象树落 <pack>/<name>/<version>/<mt>/
+    ;; (与全局安装前缀 <prefix>/<name>/<version>/{src,<mt>} 逐层同构)──
     (pack-layout-mt-partitioned
       (let* ([app (make-app '())]
              [_ (fake-build! app "myapp")])
         (pack-until-runtime app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . petite)))
-        (let ([d (pack-out app "myapp" "1.0")])
-          (assert-true (file-exists? (join-paths d mt "myapp.so")))
-          (assert-true (file-exists? (join-paths d mt "myapp" "core.so")))
-          ;; 塌缩过的旧布局会把对象直接放包根下 —— 钉住不回退
+        (let ([d (pack-out app "myapp" "1.0")]
+              [vr (app-vroot app "myapp" "1.0")])
+          (assert-true (file-exists? (join-paths vr mt "myapp.so")))
+          (assert-true (file-exists? (join-paths vr mt "myapp" "core.so")))
+          ;; 塌缩过的旧布局:<pack>/<mt>/ 直接挂包根 —— 钉住不回退
+          (assert-false (file-exists? (join-paths d mt "myapp.so")))
           (assert-false (file-exists? (join-paths d "myapp.so")))
           ;; 旧的 lib/ 前缀已去掉 —— 钉住不回潮
           (assert-false (file-exists? (join-paths d "lib" mt "myapp.so"))))))
@@ -77,10 +91,11 @@
           ;; lib/<mt>/ 里塞一份**同名的陈旧应用产物**:必须被新的覆盖,而不是反过来
           (put! (join-paths app "lib" mt "myapp.so") "STALE")
           (pack-until-runtime app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . petite)))
-          (let ([d (pack-out app "myapp" "1.0")])
-            (assert-string= "app-umbrella" (read-file (join-paths d mt "myapp.so")))
-            (assert-true (file-exists? (join-paths d mt "b.so")))
-            (assert-true (file-exists? (join-paths d mt "b" "sub.so")))))))
+          (let ([d (pack-out app "myapp" "1.0")]
+                [bvr (dep-vroot app (pack-out app "myapp" "1.0") 'b)])
+            (assert-string= "app-umbrella" (read-file (join-paths d "myapp" "1.0" mt "myapp.so")))
+            (assert-true (file-exists? (join-paths bvr mt "b.so")))
+            (assert-true (file-exists? (join-paths bvr mt "b" "sub.so")))))))
 
     ;; lib/<mt>/ 里没被 lock 声明的东西不进包(陈旧残留不该随包发出去)
     (pack-undeclared-namespace-not-shipped
@@ -93,11 +108,11 @@
           (put! (join-paths app "lib" mt "ghost.so") "leftover")
           (pack-until-runtime app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . petite)))
           (assert-false
-            (file-exists? (join-paths (pack-out app "myapp" "1.0") mt "ghost.so"))))))
+            (file-exists? (join-paths (pack-out app "myapp" "1.0") "myapp" "1.0" mt "ghost.so"))))))
 
     ;; ── 应用资源:源目录名约定死(<project>/resources/),**原样**搬进
-    ;; <pack>/src/resources/ —— <libpath>/ 那层已在 resources/ 里(与依赖资源、
-    ;; 与 dev 期 resource-path 扫描同一约定);数据不带 ABI,落 src/ 层不进 <mt>。──
+    ;; <pack>/<name>/<version>/src/resources/ —— <libpath>/ 那层已在 resources/ 里
+    ;; (与依赖资源、与 dev 期 resource-path 扫描同一约定);数据不带 ABI,落 src/ 层不进 <mt>。──
     (pack-resources-by-convention
       (let* ([app (make-app '())])
         (fake-build! app "myapp")
@@ -105,31 +120,31 @@
         (put! (join-paths app "resources" "myapp" "greeting.txt") "res-hello")
         (put! (join-paths app "resources" "myapp" "sub" "nested.txt") "nested")
         (pack-until-runtime app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . petite)))
-        (let ([d (pack-out app "myapp" "1.0")])
-          ;; verbatim:resources/myapp/… → src/resources/myapp/…(不再多套一层 <app>)
-          (assert-string= "res-hello" (read-file (join-paths d "src" "resources" "myapp" "greeting.txt")))
-          (assert-true (file-exists? (join-paths d "src" "resources" "myapp" "sub" "nested.txt")))
+        (let ([vr (app-vroot app "myapp" "1.0")])
+          ;; verbatim:resources/myapp/… → <name>/<version>/src/resources/myapp/…(不再多套一层 <app>)
+          (assert-string= "res-hello" (read-file (join-paths vr "src" "resources" "myapp" "greeting.txt")))
+          (assert-true (file-exists? (join-paths vr "src" "resources" "myapp" "sub" "nested.txt")))
           ;; 不该出现 dev 期读不到的双层 src/resources/myapp/myapp/
-          (assert-false (file-exists? (join-paths d "src" "resources" "myapp" "myapp")))
+          (assert-false (file-exists? (join-paths vr "src" "resources" "myapp" "myapp")))
           ;; 数据不带 ABI → 不该落进 <mt> 层(也就不会进库搜索根)
-          (assert-false (file-exists? (join-paths d mt "resources"))))))
+          (assert-false (file-exists? (join-paths vr mt "resources"))))))
 
     (pack-no-resources-dir-is-fine
       (let* ([app (make-app '())])
         (fake-build! app "myapp")
         (pack-until-runtime app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . petite)))
-        (let ([d (pack-out app "myapp" "1.0")])
-          (assert-false (file-exists? (join-paths d "resources")))
-          (assert-false (file-exists? (join-paths d "src" "resources"))))))
+        (let ([vr (app-vroot app "myapp" "1.0")])
+          (assert-false (file-exists? (join-paths vr "resources")))
+          (assert-false (file-exists? (join-paths vr "src" "resources"))))))
 
-    ;; ── .chandler/<app>/chandler-manifest.ss:清单快照,与全局 install 落点同构;
-    ;; 也是 app-resource-path 认出应用名的依据(包里恒只有一个条目)──
+    ;; ── <name>/<version>/.chandler/chandler-manifest.ss:清单快照,与全局 install 落点
+    ;; 同构;也是 app-resource-path 认出应用名的依据(包里恒只有一个条目)──
     (pack-writes-app-manifest-snapshot
       (let* ([app (make-app '())])
         (fake-build! app "myapp")
         (pack-until-runtime app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . petite)))
-        (let* ([d (pack-out app "myapp" "1.0")]
-               [m (join-paths d ".chandler" "myapp" "chandler-manifest.ss")])
+        (let* ([vr (app-vroot app "myapp" "1.0")]
+               [m (join-paths vr ".chandler" "chandler-manifest.ss")])
           (assert-true (file-exists? m))
           (assert-true (has? (read-file m) "(manifest")))))
 
@@ -140,7 +155,7 @@
         (fake-build! app "myapp")
         (delete-file (join-paths app "chandler-manifest.ss"))
         (pack-until-runtime app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . petite)))
-        (let ([m (join-paths (pack-out app "myapp" "1.0") ".chandler" "myapp" "chandler-manifest.ss")])
+        (let ([m (join-paths (app-vroot app "myapp" "1.0") ".chandler" "chandler-manifest.ss")])
           (assert-true (file-exists? m))
           (assert-true (has? (read-file m) "(name \"myapp\")")))))
 
@@ -158,6 +173,7 @@
               (assert-false (has? s "(lib-dirs \"lib/")))))))
 
     ;; native 落点同样去掉 lib/ 前缀:清单里的相对路径必须指得到包里那个文件
+    ;; (v2 nested:<pack>/<dep>/<pin>/<mt>/<lib>/native/<soname>)
     (pack-manifest-native-paths-without-lib-prefix
       (parameterize ([cache-root (mktmp)])
         (let* ([n (make-native-lib "n" "libn")]
@@ -168,11 +184,12 @@
           (put! (join-paths app "_vendor" "n" "_build" mt "n" "native" (string-append "libn." (so-ext))) "ELF")
           (pack-until-runtime app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . petite)))
           (let* ([d (pack-out app "myapp" "1.0")]
+                 [nvr (dep-vroot app d 'n)]
                  [m (join-paths d "pack.manifest")])
-            (assert-true (file-exists? (join-paths d mt "n" "native" (string-append "libn." (so-ext)))))
+            (assert-true (file-exists? (join-paths nvr mt "n" "native" (string-append "libn." (so-ext)))))
             (when (file-exists? m)
               (let ([s (read-file m)])
-                (assert-true (has? s (string-append "(libn \"" mt "/n/native/libn." (so-ext) "\")")))
+                (assert-true (has? s (string-append "(libn \"n/" (dep-pin app 'n) "/" mt "/n/native/libn." (so-ext) "\")")))
                 (assert-false (has? s "\"lib/"))))))))
 
     ;; ── 前置校验:pack 只组装,缺件必须当场说清该跑哪个命令 ──
@@ -228,7 +245,7 @@
         (fake-build! app "notthename")
         (pack-until-runtime app '((name . "myapp") (version . "1.0") (entry . (notthename)) (runtime . petite)))
         (assert-true
-          (file-exists? (join-paths (pack-out app "myapp" "1.0") mt "notthename.so")))))
+          (file-exists? (join-paths (pack-out app "myapp" "1.0") "myapp" "1.0" mt "notthename.so")))))
 
     ;; 无 (app ...) 声明 + 未传 --entry → 拒绝(防止 lib 被悄声打成 app 包)
     (pack-rejects-lib-without-entry
@@ -444,7 +461,7 @@
       (let ([bs (packed-bootstrap)])
         (assert-true (< (index-of bs "(exit 65)") (index-of bs "(library-directories")))
         (assert-true (< (index-of bs "(exit 70)") (index-of bs "(library-directories")))
-        (assert-true (< (index-of bs "(exit 78)") (index-of bs "(%load-natives %lib)")))
+        (assert-true (< (index-of bs "(exit 78)") (index-of bs "(%load-natives %root-native)")))
         (assert-true (< (index-of bs "(exit 78)") (index-of bs "(import "))))))
 
   ;; 造一个 petite 包到 runtime 步为止,读回生成的 bootstrap.ss
