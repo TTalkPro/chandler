@@ -13,7 +13,7 @@
 | 级别 | POSIX | Windows |
 |------|-------|---------|
 | **用户级** | `~/.local/share/chez/` | `%LOCALAPPDATA%\chez\` |
-| **系统级** | `/usr/local/share/chez/` | `%ProgramData%\chez\` |
+| **系统级** | `/usr/local/chez/` | `%ProgramData%\chez\` |
 
 **系统级安装需要 root 权限**（POSIX）或管理员权限（Windows）。
 
@@ -28,7 +28,7 @@
 ### 3.1 根布局（引用 00 §4.1）
 
 ```
-<root>/                              ← ~/.local/share/chez/ 或 /usr/local/share/chez/
+<root>/                              ← ~/.local/share/chez/ 或 /usr/local/chez/
   .chandler/
     format.ss                        ← (= 2)，版本号
     registry/
@@ -174,7 +174,7 @@ lazy 重建确保：即使 index 被误删，下次 read 时自动恢复。
 | 旗标 | 行为 |
 |------|------|
 | `--user`（默认） | 安装到用户级 `~/.local/share/chez/` |
-| `--system` | 安装到系统级 `/usr/local/share/chez/`（需 root） |
+| `--system` | 安装到系统级 `/usr/local/chez/`（需 root） |
 | `--prefix=DIR` | 安装到指定目录 |
 
 ## 7. uninstall 操作

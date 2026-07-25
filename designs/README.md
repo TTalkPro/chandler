@@ -45,6 +45,17 @@
 
 详见 [00 §10 决策记录](00-design-principles.md#10-设计决策记录)。
 
+## 实现偏差(实际 vs 设计)
+
+| 项 | 设计文档 | 实际实现 | 原因 |
+|----|---------|---------|------|
+| `(chandler setup)` 库 | Bundler 模型,import 即接管 library-directories | ❌ 取消;改用 launcher `--libdirs`(编译时生效) | Chez import 在编译时处理,setup 的 top-level 来不及影响展开 |
+| install 旗标 | `--global` | `--user`(默认) / `--system` / `--prefix` | 更清晰的语义 |
+| system 路径 | `/usr/local/share/chez` | `/usr/local/chez` | 更简洁 |
+| APP_ROOT | 去 D8 | ✅ 完全去除 | 统一到 `(library-directories)` |
+| dev 全局兜底 | 单对 `(src . obj)` | list of per-version pairs | 扫中央仓库的 nested layout |
+| prebuilt 分发 | v2.4 完整实现 | ⏸️ 备选(schema 已定义,实现暂缓) | 中央仓库暂缓 |
+
 ## 实现进度
 
 见 [../TASK.md](../TASK.md)。
