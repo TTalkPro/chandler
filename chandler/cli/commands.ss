@@ -38,7 +38,8 @@
                 (cons 'name    (flag flags 'name))
                 (cons 'version (flag flags 'version))
                 (cons 'entry   (parse-entry (flag flags 'entry)))
-                (cons 'main    (and (flag flags 'main) (string->symbol (flag flags 'main)))))))
+                (cons 'main    (and (flag flags 'main) (string->symbol (flag flags 'main))))
+                (cons 'lib     (flag? flags 'lib)))))
 
   ;; --entry '(myapp core)' —— 库名 s-表达式;缺省由 pack 取 (<manifest name>)
   (define (parse-entry s)

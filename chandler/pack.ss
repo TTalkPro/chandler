@@ -816,6 +816,7 @@
            [mainp (or (alist-ref opts 'main) (and mapp (app-main mapp)) 'main)]
            [rt    (or (alist-ref opts 'runtime) (default-runtime mf))]
            [out   (or (alist-ref opts 'out) "dist")]
+           [lib?  (alist-ref opts 'lib)]
            [mt    (current-machine-type)])
       ;; pack 服务于**应用**:必须有显式入口。库(manifest 没声明 (app …))不该被打成
       ;; 可执行分发包 —— 它的天然分发形态是 git,消费方 `chandler add` 即可。允许用
@@ -825,7 +826,7 @@
       ;; 这取代了早先的 infer-entry:它把"包名"和"入口库名"混为一谈(skiff-demo 的包名
       ;; 是 skiff-demo、入口库却是 (mdserver)),让 lib 也能被悄无声息地打成 app 包 ——
       ;; 产出一堆无意义的 bin/boot/runtime。
-      (unless entry
+      (unless (or entry lib?)
         (error 'pack
                (string-append
                  "no entry library declared; this looks like a library, not an application.\n"
@@ -873,12 +874,14 @@
         ;; 入口库必须真的在包里 —— 否则打出的包一路正常,到启动 import 才报
         ;; "library (x) not found"。这一步把那个失败提前到打包期。
         ;; v2 nested:layout: entry .so 在 <root>/<name>/<version>/<mt>/<entry-path>.so
-        (let ([e (join-paths (version-root root name version) mt (entry-so-rel entry))])
-          (unless (file-exists? e)
-            (rm-rf root)
-            (error 'pack
-                   (format "entry library ~a has no compiled object at ~a~%  (pass --entry '(<lib>)', or run `bake build` if it is simply not built)"
-                           entry e))))
+        ;; lib pack 跳过 entry 检查(无 entry)
+        (unless lib?
+          (let ([e (join-paths (version-root root name version) mt (entry-so-rel entry))])
+            (unless (file-exists? e)
+              (rm-rf root)
+              (error 'pack
+                     (format "entry library ~a has no compiled object at ~a~%  (pass --entry '(<lib>)', or run `bake build` if it is simply not built)"
+                             entry e)))))
         ;; chandler 的 runtime 子集:它不是 lock 里的依赖(是运行时门,designs/12 §5),
         ;; v2 nested:layout 独立在 <root>/chandler/<version>/。**从 `_vendor/chandler/_build/<mt>/` 取**
         ;; (deps 期 build-chandler-runtime! 已就地编译 vendored 源码;与 build 同源 → 实例一致,
@@ -912,9 +915,10 @@
         ;; bootstrap 在 runtime 定位之前落盘:内容只依赖 entry/mt(target 三元组由它
         ;; 自己从 pack.manifest 读),与捆哪份运行时无关;stock 与 skiff 包同一份
         ;; (designs/10 §3:不再分叉;skiff 启动器在 L2 才换 --script,文件先备好)。
-        (write-text (join-paths root "bootstrap.ss") (bootstrap-source entry mainp #f mt libdirs-pairs))
-        ;; 3) 运行时 + boot + 启动器 + 清单
-        (if (eq? rt 'skiff)
+        (unless lib?
+          (write-text (join-paths root "bootstrap.ss") (bootstrap-source entry mainp #f mt libdirs-pairs))
+          ;; 3) 运行时 + boot + 启动器 + 清单
+          (if (eq? rt 'skiff)
             (let* ([exe (skiff-exe-path)]
                    [bd  (skiff-boot-dir exe)]
                    [sv  (probe-skiff-version exe)])
@@ -933,7 +937,8 @@
                 (copy-file (join-paths csv "scheme.boot") (join-paths (pack-boot-dir root) "scheme.boot")))
               (write-launcher! root name (launcher-sh-stock rt libdirs-arg) (launcher-ps1-stock rt libdirs-arg))
               (write-pack-manifest! root name version rt entry mainp ver mt #f)))
-        (printf "packed ~a ~a -> ~a~%" name version root)
+            ) ;; close unless lib?
+          (printf "packed ~a ~a -> ~a~%" name version root)
         0))))
 
   ;; _vendor/chandler/_build/<mt>/chandler/<sub>.so → <pack>/chandler/<version>/<mt>/chandler/<sub>.so。
