@@ -5,23 +5,22 @@
 ;;; 不编译** —— 编译由 chandler build 进程内完成,pack 仅消费已编对象与 source;
 ;;; native 无法在消费方现编,必须先在本机 build 完毕(designs/05 §10)。
 ;;;
-;;; 包布局(designs/05;每样平台绑定物都在 <mt> 层下):
+;;; 包布局(FHS 式,dist/<name>-<version>-<mt>/;仿 ~/.local/{share/chez,bin,lib}):
 ;;;
-;;;   myapp-1.0-<mt>/
-;;;     bin/myapp[.ps1]              启动器 —— 唯一平台中立入口
-;;;     bin/<mt>/skiff|scheme        运行时可执行文件
-;;;     boot/<mt>/*.boot             boot
-;;;     <mt>/                        对象根 = 应用 _build/<mt>/ + 各依赖 _vendor/<dep>/_build/<mt>/
-;;;     src/resources/<app>/         应用数据,原样(目录名约定死,不可配置)
-;;;     src/resources/<dep-libpath>/ 依赖库资源(designs/05 §4)
-;;;     .chandler/run.sps            入口(runner,pack 模式含 native 加载 + pack.manifest 校验)
-;;;     .chandler/chandler-manifest.ss  应用清单快照(与全局 install 同构)
-;;;     pack.manifest
+;;;   myapp-1.0-ta6le/
+;;;     bin/myapp[.ps1]            启动器 —— 唯一平台中立入口
+;;;     bin/skiff|scheme[.exe]     bundled runtime 可执行文件
+;;;     lib/chez/*.boot            boot 文件(ABI 绑定)
+;;;     share/chez/                载荷根 = install 的 libdir(I2 by construction)
+;;;       myapp/1.0/{src,ta6le}/   应用源码+资源(method B)与编译产物+native
+;;;       myapp/1.0/.chandler/     manifest/lock 快照 + run.sps(pack 模式)
+;;;       <dep>/<pin>/{src,ta6le}/ 依赖闭包(版本目录名 = lock 的 pin val)
+;;;       chandler/<version>/      chandler runtime 子集(运行时门)
+;;;     pack.manifest              目标三元组 + native 清单 + files+sha256
 ;;;
-;;; 布局与**全局安装前缀** `~/.local/share/chez/` 逐层同构(P1):`<name>/<version>/<mt>/` 对象根、
-;;; `src/resources/<name>/` 资源、`.chandler/run.sps` 入口 —— pack 解开就是一个自带运行时
-;;; 的安装前缀,消费方(应用代码、native loader、chandler 自己)四态用同一套路径规则,
-;;; 不需要「pack 专用」的第二套。
+;;; 布局与**全局安装前缀** `~/.local/share/chez/` 逐层同构:pack 解开就是一个自带
+;;; 运行时的安装前缀,消费方(应用代码、native loader、chandler 自己)各态用同一套
+;;; 路径规则,不需要「pack 专用」的第二套。<mt> 已在包名里,bin/boot 下不再嵌 <mt> 层。
 
 (library (chandler pack)
   (export pack verify-pack run-sps-content)
@@ -149,9 +148,12 @@
   (define (pack-dir-name name version)
     (string-append name "-" version "-" (current-machine-type)))
 
-  (define (pack-bin-dir  root) (join-paths root "bin" (current-machine-type)))
-  (define (pack-boot-dir root) (join-paths root "boot" (current-machine-type)))
-  (define (pack-lib-dir  root) (join-paths root (current-machine-type)))
+  ;; FHS 式包内布局(designs/05):载荷走 install 同一管线 → share/chez/;
+  ;; envelope(运行时 exe / boot / 启动器)在 bin/ 与 lib/chez/。
+  ;; <mt> 已在包名里(<name>-<ver>-<mt>),bin/boot 下不再嵌 <mt> 层。
+  (define (pack-libdir root) (join-paths root "share" "chez"))
+  (define (pack-bin-dir  root) (join-paths root "bin"))
+  (define (pack-boot-dir root) (join-paths root "lib" "chez"))
 
   (define (windows-target?) (string-suffix? "nt" (current-machine-type)))
 
@@ -159,29 +161,18 @@
   (define (exe-name base) (if (windows-target?) (string-append base ".exe") base))
 
   ;; ═══════════════════════════════════════════════════════════════════
-  ;; §3 对象树搬运
+  ;; §3 清单快照 + 依赖路径
   ;; ═══════════════════════════════════════════════════════════════════
-
-  ;; 构建内部物不进包,与 `chandler build` 的 sync-obj-tree / bake install 同一份排除项:
-  ;; .bake-manifest 是路径相关的指纹缓存,*.wpo 只在构建树内被链接期消费。
-  (define (deliverable? rel)
-    (and (not (string=? (base-name rel) ".bake-manifest"))
-         (not (string-suffix? ".wpo" rel))))
-
-
-  ;; v3(D13):copy-resources! / copy-share! 已删除。资源随源码树拷贝时自动落位
-  ;; 到 <root>/<name>/<version>/src/<libpath>/resources/(method B)。
 
   (define (datum->str d)
     (let ([op (open-output-string)]) (write d op) (get-output-string op)))
 
-  ;; .chandler/chandler-manifest.ss —— 应用清单快照,v2 nested layout 落在
-  ;; <root>/<name>/<version>/.chandler/chandler-manifest.ss,与 install 字节级统一。
-  ;; 两个用途:① 部署态可回答「这包是什么、什么版本、入口是谁」而不必解析 pack.manifest;
-  ;; ② app-resource-path 由此认出应用名(包里恰好一个条目),故不必再加第二个 env。
-  ;; 项目有 chandler-manifest.ss 就原样拷;没有(--name/--entry 临时打包)则合成一份最小清单。
-  (define (write-app-manifest! project root app version entry main-proc)
-    (let* ([vr (version-root root app version)]
+  ;; .chandler/chandler-manifest.ss —— 应用清单快照,落在
+  ;; <libdir>/<name>/<version>/.chandler/chandler-manifest.ss,与 install 字节级统一。
+  ;; 项目有 chandler-manifest.ss 时 install-project-payload! 已拷过(幂等);
+  ;; 没有(--name/--entry 临时打包)则合成一份最小清单。
+  (define (write-app-manifest! project libdir app version entry main-proc)
+    (let* ([vr (version-root libdir app version)]
            [dir (join-paths vr ".chandler")]
            [dst (join-paths dir "chandler-manifest.ss")]
            [src (project-manifest-path project)])
@@ -194,8 +185,6 @@
               "(manifest (format 1) (name \"" app "\") (version \"" version "\")\n"
               "  (app (entry " (datum->str entry) ") (main " (symbol->string main-proc) ")))\n")))))
 
-  ;; v3(D13):copy-share! 已删除(同上,资源随源码树拷贝)。
-
   ;; 一个依赖在 _vendor 里的源码根(= 它的库搜索根,也是 `chandler build` 的 cwd)
   (define (dep-src-root project d)
     (vendor-dir project (locked-dep-name d)))
@@ -203,11 +192,6 @@
   ;; 该依赖的编译产物树:它自己的 _build/<mt>/
   (define (dep-obj-dir project d)
     (join-paths (dep-src-root project d) "_build" (current-machine-type)))
-
-  ;; v3:对象树拷贝的交付物过滤(与 install-global 的 deliverable? 对齐)
-  (define (obj-deliverable? rel)
-    (not (or (string=? (base-name rel) ".bake-manifest")
-             (string-suffix? ".wpo" rel))))
 
   ;; ═══════════════════════════════════════════════════════════════════
   ;; §4 native 清点
@@ -281,46 +265,44 @@
 ;; skiff 启动器 = pack 规范的薄 shim:指好 boot,直接 `exec skiff --program run.sps`
 ;; (与 stock 启动器同构 —— 各自指好 runtime + boot,通过 --program 跑 run.sps;
 ;; skiff pack 不再走 `skiff --app`)。SKIFF_BOOT_DIR 是必须的:skiff 按 exe 相对找
-;; boot(<exedir>/../lib/skiff/boot),bin/<mt> + boot/<mt> 对不上它;而 boot 必须在
+;; boot(<exedir>/../lib/skiff/boot),包内 bin/ + lib/chez/ 对不上它;而 boot 必须在
 ;; 进程有堆之前注册,远早于 --program 被解析,env 是唯一可用的交接方式。
   (define (launcher-sh-skiff name version)
-    (let ([mt (current-machine-type)]
-          [runner (string-append name "/" version "/.chandler/run.sps")])
+    (let ([runner (string-append "share/chez/" name "/" version "/.chandler/run.sps")])
       (string-append
         (sh-head)
-        "export SKIFF_BOOT_DIR=\"$HERE/boot/" mt "\"\n"
-        "exec \"$HERE/bin/" mt "/skiff\" -q --program \"$HERE/" runner "\" \"$@\"\n")))
+        "export SKIFF_BOOT_DIR=\"$HERE/lib/chez\"\n"
+        "exec \"$HERE/bin/skiff\" -q --program \"$HERE/" runner "\" \"$@\"\n")))
 
   (define (launcher-ps1-skiff name version)
-    (let ([mt (current-machine-type)]
-          [runner (string-append name "/" version "/.chandler/run.sps")])
+    (let ([runner (string-append "share/chez/" name "/" version "/.chandler/run.sps")])
       (string-append
         (ps1-head)
-        "$env:SKIFF_BOOT_DIR = \"$Here/boot/" mt "\"\n"
-        "& \"$Here/bin/" mt "/skiff.exe\" -q --program \"$Here/" runner "\" @PackArgs\n"
+        "$env:SKIFF_BOOT_DIR = \"$Here/lib/chez\"\n"
+        "& \"$Here/bin/skiff.exe\" -q --program \"$Here/" runner "\" @PackArgs\n"
         "exit $LASTEXITCODE\n")))
 
   ;; stock Chez:绝对 -b 链(bake designs/22 机制 C —— 最稳,exe 名任意,相对 -b 不可用)。
   ;; petite.boot 恒随;scheme.boot 只在 runtime=scheme 时随(部署态只 fasl 载入预编译
   ;; .so,petite 单独即可,包更小)。
   (define (boots-flags runtime prefix)
-    (let ([p (string-append prefix "/boot/" (current-machine-type) "/")])
+    (let ([p (string-append prefix "/lib/chez/")])
       (string-append "-b \"" p "petite.boot\""
                      (if (eq? runtime 'scheme) (string-append " -b \"" p "scheme.boot\"") ""))))
 
   (define (launcher-sh-stock runtime name version)
-    (let ([runner (string-append name "/" version "/.chandler/run.sps")])
+    (let ([runner (string-append "share/chez/" name "/" version "/.chandler/run.sps")])
       (string-append
         (sh-head)
-        "exec \"$HERE/bin/" (current-machine-type) "/scheme\" "
+        "exec \"$HERE/bin/scheme\" "
         (boots-flags runtime "$HERE")
         " -q --program \"$HERE/" runner "\" \"$@\"\n")))
 
   (define (launcher-ps1-stock runtime name version)
-    (let ([runner (string-append name "/" version "/.chandler/run.sps")])
+    (let ([runner (string-append "share/chez/" name "/" version "/.chandler/run.sps")])
       (string-append
         (ps1-head)
-        "& \"$Here/bin/" (current-machine-type) "/scheme.exe\" "
+        "& \"$Here/bin/scheme.exe\" "
         (boots-flags runtime "$Here")
         " -q --program \"$Here/" runner "\" @PackArgs\n"
         "exit $LASTEXITCODE\n")))
@@ -348,8 +330,9 @@
 ;;   不再单独生成 bootstrap.ss —— verifier 直接内联进 run.sps。
 ;; ═══════════════════════════════════════════════════════════════════
 
-;; 包根 = 4× 从自身路径向上 —— run.sps 恒在 <name>/<version>/.chandler/run.sps,
-;; install 模式同构,故 root 推导两边一样。
+;; 包根推导:run.sps 恒在 <libdir>/<name>/<version>/.chandler/run.sps → 4× path-parent
+;; = %root(install 模式 = libdir;pack 模式 = share/chez)。pack.manifest 在包根,
+;; 即 %root 再上两层(见 manifest-read-src 的 %pack-root)。
 
   ;; stderr 诊断:人类可读行 + 单行 s-expr(orchestrator 用 read 收,故 s-expr
   ;; 恒单行、无换行;designs/10 §5)。
@@ -439,7 +422,9 @@
   ;; 由 full-target-check-src 判(先让 (format N) 检查跑,顺序与 skiff --app 一致)。
   (define manifest-read-src
     (string-append
-      "(define %manifest-path (string-append %root \"/pack.manifest\"))\n"
+      ;; %root = share/chez(库前缀);pack.manifest 在包根 = 再上两层。
+      "(define %pack-root (path-parent (path-parent %root)))\n"
+      "(define %manifest-path (string-append %pack-root \"/pack.manifest\"))\n"
       "(define %manifest\n"
       "  (guard (e [#t #f])\n"
       "    (call-with-input-file %manifest-path read)))\n"
@@ -594,11 +579,13 @@
         "(define %root (path-parent %name-dir))\n"
         "(define %mt (symbol->string (machine-type)))\n"
         ;; ── lock 驱动:读 chandler-manifest.lock,挂精确 dep 版本 ──
+        ;; 零依赖项目没有 lock 文件(deps 从未需要写)→ 视为空闭包,不算错误。
         "(define %lock-path (string-append %dot-chandler \"/chandler-manifest.lock\"))\n"
-        "(define %lock-datum (call-with-input-file %lock-path read))\n"
+        "(define %lock-datum (and (file-exists? %lock-path)\n"
+        "                         (call-with-input-file %lock-path read)))\n"
         ;; lock datum = (lock (format 1) (manifest-sha256 ...) (chandler ...)
         ;;               (resolved (dep1 ...) (dep2 ...) ...) [(files ...)])
-        ;; 我们要 (resolved ...) 各项的 (name (pin (kind val)) ...)
+        ;; 我们要 (resolved ...) 各项的 (name (pin (kind "val")) ...)
         "(define (lock-resolved body)\n"
         "  (let loop ([xs body])\n"
         "    (cond\n"
@@ -606,18 +593,20 @@
         "      [(and (pair? (car xs)) (eq? 'resolved (caar xs))) (cdr (car xs))]\n"
         "      [else (loop (cdr xs))])))\n"
         "(define (dep-name+version entry)\n"
-        "  ;; entry: (name (source ...) (pin (tag/rev/branch/version \"v\")) ...)\n"
+        "  ;; entry: (name (source ...) (pin (kind \"val\")) (rev ...) ...)\n"
+        "  ;; 版本目录名 = pin 的 val(与 locked-dep-pin-val / install 布局一致),\n"
+        "  ;; 不是顶层的 (rev \"hash\") —— 那是内容寻址,不是目录名。\n"
         "  (let* ([name (car entry)]\n"
-        "         [body (cdr entry)]\n"
-        "         [pin-field (let loop ([xs body])\n"
+        "         [pin-field (let loop ([xs (cdr entry)])\n"
         "                      (cond\n"
         "                        [(null? xs) #f]\n"
-        "                        [(and (pair? (car xs)) (memq (caar xs) '(tag rev branch version)))\n"
+        "                        [(and (pair? (car xs)) (eq? (caar xs) 'pin))\n"
         "                         (car xs)]\n"
         "                        [else (loop (cdr xs))]))]\n"
-        "         [pin-val (and pin-field (pair? (cdr pin-field)) (cadr pin-field))])\n"
+        "         [inner (and pin-field (pair? (cdr pin-field)) (cadr pin-field))]\n"
+        "         [pin-val (and inner (pair? inner) (pair? (cdr inner)) (cadr inner))])\n"
         "    (cons name pin-val)))\n"
-        "(define %lock-body (cdr %lock-datum))\n"
+        "(define %lock-body (if %lock-datum (cdr %lock-datum) '()))\n"
         "(define %resolved (lock-resolved %lock-body))\n"
         "(define %dep-pairs\n"
         "  (map (lambda (e)\n"
@@ -628,8 +617,7 @@
         "                (let* ([vroot (string-append %root \"/\" n \"/\" v)]\n"
         "                       [src (string-append vroot \"/src\")]\n"
         "                       [obj (string-append vroot \"/\" %mt)])\n"
-        "                  (when (file-directory? src)\n"
-        "                    (cons src obj))))))\n"
+        "                  (if (file-directory? src) (cons src obj) #f)))))\n"
         "       %resolved))\n"
         ;; 自己的 vroot 对(src . obj)
         "(define %self-pair\n"
@@ -664,8 +652,8 @@
   ;; ═══════════════════════════════════════════════════════════════════
 
   (define (manifest-head app version runtime entry main-proc ver mt skiff-ver)
-    (let ([bootp (string-append "boot/" mt "/")]
-          [binp  (string-append "bin/" mt "/")])
+    (let ([bootp "lib/chez/"]
+          [binp  "bin/"])
       (string-append
         ";; generated by chandler pack (designs/09)\n"
         "(pack\n"
@@ -695,14 +683,15 @@
   ;; (native <soname> "<rel>") —— `skiff --app`(与 stock 的 bootstrap)在 import 入口库
   ;; 之前统一 load-shared-object 这些(pack 规范 §4:infra 载 native,库只写
   ;; foreign-procedure)。按组装后的树实扫,故应用自己的 native 也在内。空则省略。
-  ;; v2 nested layout:对象根不止一个 —— app 与每个 dep 各有
-  ;; <root>/<name>/<version>/<mt>/,故逐 version-root 扫描,<rel> 相对包根。
+  ;; 对象根不止一个 —— app 与每个 dep 各有 <libdir>/<name>/<version>/<mt>/,
+  ;; 故逐 version-root 扫描;<rel> 相对包根(带 share/chez/ 前缀)。
   (define (manifest-native-lines root)
     (let ([mt (current-machine-type)]
+          [libdir (pack-libdir root)]
           [out '()])
       (for-each
         (lambda (name-dir)
-          (let ([nd (join-paths root name-dir)])
+          (let ([nd (join-paths libdir name-dir)])
             (when (file-directory? nd)
               (for-each
                 (lambda (ver-dir)
@@ -712,7 +701,7 @@
                         (lambda (segs)
                           (let* ([rel (string-join segs "/")]
                                  [ndir (join-paths obj rel "native")]
-                                 [pre (string-append name-dir "/" ver-dir "/" mt "/"
+                                 [pre (string-append "share/chez/" name-dir "/" ver-dir "/" mt "/"
                                                      rel "/native/")])
                             (for-each
                               (lambda (f)
@@ -722,7 +711,7 @@
                               (native-files-in ndir))))
                         (native-libs-under obj)))))
                 (list-sort string<? (dir-entries nd))))))
-        (list-sort string<? (dir-entries root)))
+        (if (file-directory? libdir) (list-sort string<? (dir-entries libdir)) '()))
       (let ([entries (reverse out)])
         (if (null? entries) "" (string-append "  (native\n" (apply string-append entries) "    )\n")))))
 
@@ -801,69 +790,41 @@
              [root (if (and (> (string-length out) 0) (char=? (string-ref out 0) #\/))
                        (join-paths out (pack-dir-name name version))
                        (join-paths project out (pack-dir-name name version)))]
-             [objdir (pack-lib-dir root)])
+             [libdir (pack-libdir root)])
         (preflight project mt locked)
         (rm-rf root)
-        (ensure-dir objdir)
         (printf "pack ~a~%" root)
-        ;; 1) v2 nested layout:每个 dep + app 装到 <root>/<name>/<version>/{src,<mt>}/
-        ;;    payload 与 install 字节级统一(designs/05 §P1)
-;; v3:对象树拷贝过滤 .bake-manifest(构建指纹缓存)和 *.wpo(WPO 中间物),
-           ;; 与 install-global 的 deliverable? 对齐 —— 它们非交付物,不应进 pack。
-           ;; 同步修复 v2 的 I2 差异 4。
-           (for-each
-             (lambda (d)
-               (let* ([dn (symbol->string (locked-dep-name d))]
-                      [dv (locked-dep-pin-val d)]
-                      [vr  (version-root root dn dv)]
-                      [obj-dest (join-paths vr mt)]
-                      [src-dest (join-paths vr "src")]
-                      [src-root (vendor-dir project (locked-dep-name d))]
-                      [obj (dep-obj-dir project d)])
-                 (ensure-dir obj-dest)
-                 (ensure-dir src-dest)
-                 (when (file-directory? obj)
-                   (copy-tree! obj obj-dest '() obj-deliverable? 'overwrite #f))
-                 (copy-tree! src-root src-dest '("_build" ".git") (lambda (_) #t) 'overwrite #f)))
-             locked)
-           ;; app 自己装到 <root>/<name>/<version>/{src,<mt>}/
-           (let* ([vr (version-root root name version)]
-                  [obj-dest (join-paths vr mt)]
-                  [src-dest (join-paths vr "src")])
-          (ensure-dir obj-dest)
-          (ensure-dir src-dest)
-          (copy-tree! (join-paths project "_build" mt) obj-dest '() obj-deliverable? 'overwrite #f)
-          ;; v3(D13):src 拷贝排除 resources(资源已在 method B 约定下随源码 tree 拷贝;
-          ;; 不再单独 copy-resources! 故 src 侧不需要排除 resources,但保持兼容)
-          (copy-tree! project src-dest '("_build" "_vendor" ".git" "dist") (lambda (_) #t) 'overwrite #f))
+        ;; ── 阶段 1:载荷(与 install 同一管线,I2 by construction)──
+        ;; app 自身 + 各 dep 装到 share/chez/<name>/<version>/{src,<mt>}/,
+        ;; + manifest/lock 快照;register?=#f → 无 .registry/(可再分发包不带
+        ;; 安装机私有状态),无 staging(目录全新),不写 install shim。
+        (install-project-payload! project libdir name version entry
+                                  (list (cons 'register? #f)))
+        ;; chandler 的 runtime 子集:它不是 lock 里的依赖(是运行时门,designs/12 §5),
+        ;; 独立在 share/chez/chandler/<version>/。从 `_vendor/chandler/_build/<mt>/` 取
+        ;; (deps 期 build-chandler-runtime! 已就地编译;与 build 同源 → 实例一致)。
+        (when (and mf (manifest-chandler mf))
+          (copy-chandler-into-pack! project libdir (manifest-chandler mf)))
+        ;; 清单快照(无源清单时合成最小清单)
+        (write-app-manifest! project libdir name version entry mainp)
         ;; 入口库必须真的在包里 —— 否则打出的包一路正常,到启动 import 才报
         ;; "library (x) not found"。这一步把那个失败提前到打包期。
-        ;; v2 nested:layout: entry .so 在 <root>/<name>/<version>/<mt>/<entry-path>.so
         ;; lib pack 跳过 entry 检查(无 entry)
         (unless lib?
-          (let ([e (join-paths (version-root root name version) mt (entry-so-rel entry))])
+          (let ([e (join-paths (version-root libdir name version) mt (entry-so-rel entry))])
             (unless (file-exists? e)
               (rm-rf root)
               (error 'pack
                      (format "entry library ~a has no compiled object at ~a~%  (pass --entry '(<lib>)', or run `chandler build` if it is simply not built)"
                              entry e)))))
-        ;; chandler 的 runtime 子集:它不是 lock 里的依赖(是运行时门,designs/12 §5),
-        ;; v2 nested:layout 独立在 <root>/chandler/<version>/。**从 `_vendor/chandler/_build/<mt>/` 取**
-        ;; (deps 期 build-chandler-runtime! 已就地编译 vendored 源码;与 build 同源 → 实例一致,
-        ;; BUG-1)—— 包必须自包含,不能指望目标机装了 chandler。dev-only 已在 deps 铺
-        ;; 源码时滤掉,这里原样搬对象。
-        (when (and mf (manifest-chandler mf))
-          (copy-chandler-into-pack! project root (manifest-chandler mf)))
-        ;; 2) v3(D13):资源随源码树拷贝自动落位(method B,无需 copy-resources!/copy-share!)
-        ;;    + <name>/<version>/.chandler/chandler-manifest.ss(清单快照)
-        (write-app-manifest! project root name version entry mainp)
-        ;; 3) v2 nested: run.sps + 启动器(无 --libdirs,由 run.sps 自己 scan-libdirs)
+        ;; ── 阶段 2:envelope(仅 app pack;lib pack 到阶段 1 为止)──
         (unless lib?
-          (let* ([runner-dir (join-paths (version-root root name version) ".chandler")])
+          ;; pack 模式 run.sps:目标三元组校验 + native 加载在 install 模式之上
+          (let ([runner-dir (join-paths (version-root libdir name version) ".chandler")])
             (ensure-dir runner-dir)
             (write-text (join-paths runner-dir "run.sps")
               (run-sps-content entry mainp 'pack)))
-          ;; 4) 运行时 + boot + 启动器 + 清单
+          ;; 运行时 exe → bin/,boot → lib/chez/,启动器 → bin/<app>
           (if (eq? rt 'skiff)
             (let* ([exe (skiff-exe-path)]
                    [bd  (skiff-boot-dir exe)]
@@ -887,18 +848,16 @@
           (printf "packed ~a ~a -> ~a~%" name version root)
         0)))
 
-  ;; _vendor/chandler/_build/<mt>/chandler/<sub>.so → <pack>/chandler/<version>/<mt>/chandler/<sub>.so。
-  ;; v2 nested:layout:chandler runtime 独立在 <root>/chandler/<version>/,与 app/deps 的
-  ;; <root>/<name>/<version>/ 平级(designs/05 §P1)。
+  ;; _vendor/chandler/_build/<mt>/chandler/<sub>.so → <libdir>/chandler/<version>/<mt>/chandler/<sub>.so。
   ;; **来源 = _vendor/chandler/_build/<mt>/**(BUG-1,2026-07-24):与 build-chandler-runtime!
   ;; 编译产物同源(就地编译 vendored chandler 源码),不再读全局前缀 —— 故 app 链到的
   ;; 实例与包内交付的实例是同一个物理对象文件。版本门用进程内常量,不再读快照。
-  (define (copy-chandler-into-pack! project root range)
+  (define (copy-chandler-into-pack! project libdir range)
     (unless (version-match? range chandler-version)
       (error 'pack
              (format "manifest requires chandler ~s, but the running chandler is ~a"
                      range chandler-version)))
-    (let* ([chandler-vr (version-root root 'chandler chandler-version)]
+    (let* ([chandler-vr (version-root libdir 'chandler chandler-version)]
            [obj-dest (join-paths chandler-vr (current-machine-type) "chandler")]
            [src-dest (join-paths chandler-vr "src" "chandler")]
            [from (join-paths project "_vendor" "chandler" "_build"
@@ -929,10 +888,6 @@
   ;; 预编译 .so,不需要编译器,包更小)。--runtime 覆盖。
   (define (default-runtime mf)
     (if (and mf (manifest-skiff mf)) 'skiff 'petite))
-
-  (define (project-locked-deps project)
-    (let ([lpath (project-lock-path project)])
-      (if (file-exists? lpath) (lock-deps (read-lock lpath)) '())))
 
   ;; ── 前置校验:pack 只组装。缺什么就说清楚该跑哪个命令补 ──
   ;; C0:每个依赖各有自己的对象树(_vendor/<dep>/<srcdir>/_build/<mt>/),故逐依赖查,
