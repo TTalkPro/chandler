@@ -836,7 +836,9 @@
       (unless (memq rt '(skiff scheme petite))
         (error 'pack (format "runtime ~s not supported (skiff | scheme | petite)" rt)))
       (let* ([locked (project-locked-deps project)]
-             [root (join-paths project out (pack-dir-name name version))]
+             [root (if (and (> (string-length out) 0) (char=? (string-ref out 0) #\/))
+                       (join-paths out (pack-dir-name name version))
+                       (join-paths project out (pack-dir-name name version)))]
              [objdir (pack-lib-dir root)])
         (preflight project mt locked)
         (rm-rf root)
