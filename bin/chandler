@@ -7,14 +7,14 @@
 # chandler 的 app**(用 (chandler runtime-paths) 等)时**别用它** —— 进程内编译会把 app
 # 链到本进程已加载的 chandler 实例,与 CHANDLER_HOME 的磁盘对象 UID 不符,打出的包一
 # 启动就报「different compilation instance」。那种情形用**装好的 chandler**,或
-# `chandler make && scheme --script bootstrap.ss --dev` 后的 `dist/bin/chandler`
-# (它从 dist/chez 加载,与 CHANDLER_HOME 一致)。
+# `scheme --script bootstrap.ss --bootstrap-only` 后的 `_bootstrap/bin/chandler`
+# (它与正常安装同构,从 _bootstrap 前缀加载)。
 set -eu
 
 # 从**平铺的仓库源码**跑 CLI(dev-from-source,免 build)。这是开发便利,不是安装。
 # 不设 CHANDLER_HOME —— 它指"装好的 src/mt 前缀",而这里是平铺仓库,两码事;
 # 经此跑的 deps 会用装好的 chandler(默认 ~/.local)。想让工作副本喂进下游 _vendor,
-# 走真前缀:`chandler make && scheme --script bootstrap.ss --dev`,再用 dist/bin/chandler。
+# 走真前缀:`scheme --script bootstrap.ss --bootstrap-only`,再用 _bootstrap/bin/chandler。
 here=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 
 # 能否运行 R6RS 程序?(跳过只会打印 demo 的早期 skiff stub;Chez 各名已知可用)

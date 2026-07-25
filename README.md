@@ -47,8 +47,11 @@ $env:PATH = "$HOME\.local\bin;$env:PATH"
 chandler --version
 ```
 
-> `bootstrap.ss` 是自包含安装器(纯 `(chezscheme)`,零 chandler 依赖):铺源码 + 编译产物 + 写运行时发现启动器。
-> 用法:`scheme --script bootstrap.ss [--user|--system|--dev] [--force] [--uninstall]`。`--user`(默认)装 `~/.local`;`--system` 装 `/usr/local`;`--dev` 装进仓库 `./dist/`(开发用)。用户通过调用方式选择运行时(`scheme` vs `skiff`)。
+> `bootstrap.ss` 是自包含的**三段式自举安装器**(纯 `(chezscheme)`,零 chandler import,chandler 库坏了也能装):
+> ① 源码直载 CLI 跑 `deps` + `build` + `install --prefix=./_bootstrap`,产出一个与正常 `--user` 安装**完全同构**的 `_bootstrap/`(库树 + `.registry/` + 稳定 shim);
+> ② 用 `_bootstrap` 里的 chandler 重新 `build` 本仓库(自托管验证);
+> ③ 再用它 `install` 到最终前缀并冒烟启动器。安装逻辑全部复用 chandler 自己的 `cmd-install`,bootstrap 只做编排。
+> 用法:`scheme --script bootstrap.ss [--user|--system|--prefix=DIR] [--force] [--uninstall] [--bootstrap-only]`。`--user`(默认)装 `~/.local`;`--system` 装 `/usr/local`;`--prefix=DIR` 装 `DIR` + `DIR/bin`;`--bootstrap-only` 只跑①(调试自举用)。用户通过调用方式选择运行时(`scheme` vs `skiff`)。
 >
 > 若 PowerShell 报「running scripts is disabled」,是执行策略为 Restricted,二选一:
 > `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`(一次性),或
@@ -56,11 +59,11 @@ chandler --version
 
 ### 装完之后
 
-安装出的启动器做**运行时发现**:优先 `skiff`,回退 `scheme`/`chez`(designs/06 双运行时),并挂 `<prefix>/src::<prefix>/<mt>` 一对跑 `<prefix>/src/chandler/cli/main.sps`。POSIX 是 `chandler`(sh),Windows 是 `chandler.ps1`(PowerShell)。
+安装出的启动器是**稳定 shim**(D17):运行时读 `<libdir>/.registry/chandler.ss` 找 active 版本,交接给 `<vroot>/.chandler/run.sps`(lock 驱动挂库路径,D18),再做**运行时发现**(优先 `skiff`,回退 `scheme`/`chez`)。POSIX 是 `chandler`(sh),Windows 是 `chandler.ps1`(PowerShell)。多版本共存时用 `chandler switch` 切换,shim 本身不变。
 
 想固定用某个运行时,见下面[「指定运行时」](#指定运行时skiff--chez)——安装脚本与启动器认同一套变量。
 
-**卸载**:`scheme --script bootstrap.ss --uninstall`(按命名空间删库 + 删启动器,**不依赖文件清单**,装完把仓库删了也能卸干净)。
+**卸载**:`scheme --script bootstrap.ss --uninstall`(registry 驱动:删 `<vroot>` + 更新 `.registry/` + 删启动器,同时清掉 `_bootstrap/`;需仓库源码在,因为要加载 CLI 执行卸载)。
 
 **开发期不必安装**:仓库里直接 `./bin/chandler <命令>`(同样 skiff 优先)。
 
