@@ -12,6 +12,7 @@
 
 # Chandler 生成物
 /_vendor/
+manifest.lock
 # bootstrap.ss --dev 的本地前缀(dist/{bin,chez})
 /dist/
 chandler-setup.ss
