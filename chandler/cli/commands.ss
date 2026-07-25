@@ -191,7 +191,6 @@
     (cond
       [(flag? flags 'list)  (cmd-deps-list root flags)]
       [(flag? flags 'tree)  (cmd-deps-tree root flags)]
-      [(flag? flags 'global) (cmd-install-global root flags)]
       [else
        (if (check-chandler-dep root flags)
            (let ([rc (install root (list (cons 'production (flag? flags 'production))
@@ -513,22 +512,16 @@
 
   ;; ── deps --list / deps --tree ──
   (define (cmd-deps-list root flags)
-    (if (flag? flags 'global)
-        (let ([rows (list-global (target-libdir flags))])
-          (if (null? rows)
-              (printf "(no packages installed in the global library prefix)~%")
-              (for-each (lambda (r) (printf "~a  ~a  [~a]~%" (car r) (cadr r) (caddr r))) rows))
-          0)
-        (let ([rows (list-deps root)])
-          (if (null? rows)
-              (printf "(no locked dependencies; run `chandler deps` first)~%")
+    (let ([rows (list-deps root)])
+      (if (null? rows)
+          (printf "(no locked dependencies; run `chandler deps` first)~%")
               (for-each
                 (lambda (r)
                   (printf "~a  ~a  ~a~a~%"
                           (car r) (cadr r) (caddr r)
                           (if (eq? 'dev (cadddr r)) "  [dev]" "")))
-                rows))
-          0)))
+                 rows))
+      0))
 
   (define (cmd-deps-tree root flags)
     (let ([lpath (project-lock-path root)])

@@ -38,7 +38,7 @@
   (define (default-system-libdir)
     (if (win?)
         (join-paths (or (getenv* "ProgramData") "C:/ProgramData") "chez")
-        "/usr/local/share/chez"))
+        "/usr/local/chez"))
 
   ;; bin/ 落点(P3:app install 的命令行入口)。POSIX 不在前缀内(~/.local/bin 而非
   ;; ~/.local/share/chez/bin,遵循 XDG 惯例);Windows 在前缀子目录(chez\bin)。
