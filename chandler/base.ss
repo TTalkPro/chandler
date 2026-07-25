@@ -41,7 +41,7 @@
     resources-dirname prefix-resource-dir src-resource-dir
     native-so? lib-native-dir lib-native-path native-so-name
     library-name->path srcdir-join
-    lib-root rel-to
+    rel-to
     ;; runtime-detector(designs/06 §3-4)
     current-runtime runtime-version chez-version-string verify-runtime!
     runtime-env-var preferred-runtime parse-runtime-kind

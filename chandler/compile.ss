@@ -141,7 +141,7 @@
 
   ;; 编译一个 node,统一注入编译旗标(designs/07 §编译动作 / 09 / 13),然后记下
   ;; 它的指纹。kind:compile-kinds 覆盖优先,否则有名字即 library,再否则 program。
-  ;; boot-entry(designs/13)走 compile-file —— make-boot-file 不接受
+  ;; boot-entry 走 compile-file —— make-boot-file 不接受
   ;; compile-program 的产物。
   (define (compile-lib node target)
     (unless (compiler-available?)
@@ -386,14 +386,14 @@
         (register-task! name 'phony (list delivery) #f #f))))
 
   ;; ====================================================================
-  ;; §18g boot 文件交付 — make-boot-file(designs/13)
+  ;; §18g boot 文件交付 — make-boot-file
   ;;   (boot-task name "src/main.ss") → 可跑的 .boot,落 _build/<mt>/<name>.boot。
   ;;   **不**碰 *generate-wpo*(boot 是 fasl 级,无 WPO)。入口走 compile-file、
   ;;   库走 compile-library,再调 Chez 的 make-boot-file 组装。
   ;; ====================================================================
 
-  ;; make-boot-file 的基础 boot:优先 scheme.boot(带编译器),回落 petite.boot
-  ;; (对分发友好)。designs/13 §未解决问题 1。
+;; make-boot-file 的基础 boot:优先 scheme.boot(带编译器),回落 petite.boot
+;; (对分发友好)。
   (define *boot-bases* '("scheme" "petite"))
 
   ;; 同 register-compile-task!,但把目标标成 'boot-entry,于是 compile-lib

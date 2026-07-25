@@ -1,14 +1,16 @@
 #!chezscheme
-;;; chandler/activate.ss --- activate / load-native(src/mt 拆分:lib/{src,<mt>})
+;;; chandler/activate.ss --- activate / load-native(per-dep 挂载)
 ;;;
-;;; 运行期激活(脚本顶层):挂 lib/ 一对(源.对象)(+ path 源目录 + 全局)到
-;;; library-directories。规则与 run/exec/repl 一致(install 的 resolved-libdirs)。
-;;; native 收进所属库 lib/<mt>/<lib>/native/。
+;;; 运行期激活(脚本顶层):挂 resolved-libdirs 的 per-dep (src . obj) 对(+ 全局兜底)
+;;; 到 library-directories。规则与 run/exec/repl 一致(同走 resolved-libdirs)。
+;;; native 收进所属库 _vendor/<dep>/_build/<mt>/<lib>/native/。
 ;;;
-;;; **native 分层(bake designs/24)**:挂好该对本身就使 bake 生成的
-;;; `(<lib> native-loader)` 自加载生效(loader 按 library-directories 的 obj 侧定位,
-;;; 且惰性——不引用 FFI 就不 dlopen)。故 activate-natives 已降级为**兜底**:
-;;; 只预加载「无生成 loader」的第三方库(见 install 的 native-load-paths)。
+;;; **native 分层**:挂好该对本身就使 bake 生成的 `(<lib> native-loader)` 自加载生效
+;;; (loader 按 library-directories 的 obj 侧定位,且惰性——不引用 FFI 就不 dlopen)。
+;;;
+;;; 故 activate-natives 已降级为**兜底**:只预加载「无生成 loader」的第三方库
+;;; (见 install 的 native-load-paths)。
+;;;
 ;;; 注:日常启动统一走 `chandler run`(它同样挂这套路径);(activate)
 ;;; 是同一套规则的**进程内**入口,供已经持有 (chandler) 的脚本/REPL 使用。
 
@@ -21,7 +23,7 @@
           (chandler install)
           (chandler runtime-detector))
 
-  (define native-root (make-parameter "lib"))   ; 项目 lib 前缀(base)
+  (define native-root (make-parameter "."))   ; 项目 native 搜索根(默认 cwd)
   (define loaded (make-hashtable string-hash string=?))   ; 幂等注册表
 
   ;; (activate [root]) —— 挂库路径 + 载 native
@@ -54,7 +56,7 @@
           (verify-runtime! (list (cons 'chez (manifest-chez mf))
                                  (cons 'skiff (manifest-skiff mf))))))))
 
-  ;; ── load-native / native-path(边缘/显式用;native 收进所属库 lib/<mt>/<lib>/native/)──
+  ;; ── load-native / native-path(边缘/显式用;native 收进所属库 <root>/_build/<mt>/<lib>/native/)──
   ;;   (native-path pkg soname) → <native-root>/<mt>/<pkg>/native/<soname>.<ext>
   ;;   (native-path soname)     → 同上,pkg 缺省取 soname(native 常与所属库同名)
   (define native-path

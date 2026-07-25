@@ -1,5 +1,5 @@
 #!chezscheme
-;;; chandler/proc.ss --- 子进程封装(git / bake 调用复用)
+;;; chandler/proc.ss --- 子进程封装(git 等调用复用)
 ;;;
 ;;; 约定:参数以**列表**传入并逐个 shell 引用(不拼裸串),避免 URL/路径里的元字符注入。
 ;;; 用 `system` + 临时文件重定向捕获 stdout/stderr 与**退出码**(open-process-ports 拿不到

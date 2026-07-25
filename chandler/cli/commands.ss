@@ -7,9 +7,7 @@
 (library (chandler cli commands)
   (export cmd-init cmd-deps cmd-install cmd-add cmd-remove cmd-run cmd-env cmd-repl
           cmd-build cmd-pack cmd-verify-pack
-          cmd-uninstall-global cmd-doctor cmd-list
-          cmd-deps-list cmd-deps-tree
-          ensure-gitignore-lib skeleton-manifest-datum)
+          cmd-uninstall-global cmd-doctor cmd-list)
   (import (chezscheme)
           (chandler util)
           (chandler fs)
@@ -28,9 +26,9 @@
           (only (chandler recipe) default-tasks-file)   ; 只取文件名常量,避开 task/file/run 等宏
           (chandler cli args))
 
-  ;; ── pack / verify-pack(designs/09)──
-  ;; pack 只**组装**:应用编译树(bake build)+ 依赖闭包(chandler build)+ 随包运行时。
-  ;; 缺件一律在前置校验里停下并说清该跑哪个命令 —— native 尤其无法在消费方现编。
+;; ── pack / verify-pack(designs/05)──
+;; pack 只**组装**:应用编译树 + 依赖闭包(由 chandler build 进程内编译) + 随包运行时。
+;; 缺件一律在前置校验里停下并说清该跑哪个命令 —— native 尤其无法在消费方现编。
   (define (cmd-pack root flags)
     (pack root
           (list (cons 'runtime (and (flag flags 'runtime) (string->symbol (flag flags 'runtime))))
@@ -174,19 +172,7 @@
                  chandler-version)
                #t])))))
 
-  ;; --global:装当前项目库树到全局 libdir(注册表事务,designs/05)
-  (define (cmd-install-global root flags)
-    (let* ([libdir (target-libdir flags)]
-           [mpath (join-paths root "chandler-manifest.ss")]
-           [mf (and (file-exists? mpath) (read-manifest mpath))]
-           [name (or (and mf (manifest-name mf)) (basename root))]
-           [version (or (and mf (manifest-version mf)) "0.0.0")]
-           [meta (list name version `(path ,root) (now-iso) 'chandler)]
-           [opts (list (cons 'adopt (flag? flags 'adopt)) (cons 'force (flag? flags 'force)))])
-      (install-global root libdir meta version opts)
-      (printf "installed ~a ~a globally to ~a~%" name version libdir)
-      0))
-
+  ;; --user/--system/--prefix 决定装到哪个 libdir(注册表事务,designs/04)
   (define (cmd-deps root flags)
     (cond
       [(flag? flags 'list)  (cmd-deps-list root flags)]
@@ -476,9 +462,9 @@
               (pad2 (date-hour t)) (pad2 (date-minute t)) (pad2 (date-second t)))))
   (define (pad2 n) (if (< n 10) (format "0~a" n) (format "~a" n)))
 
-  ;; ── build:编译依赖闭包 + 当前项目 ──
-  ;; 1. 依赖:bake build-all per dep → chandler lay out to lib/<mt>/
-  ;; 2. 项目:有 chandler-tasks.ss 跑它的 default-task,否则从 manifest 推导
+;; ── build:编译依赖闭包 + 当前项目 ──
+;; 1. 依赖:进程内排单编译 → 各 _vendor/<dep>/<srcdir>/_build/<mt>/
+;; 2. 项目:有 chandler-tasks.ss 跑它的 default-task,否则从 manifest 推导
   (define (cmd-build root flags)
     (let ([verbose? (flag? flags 'verbose)])
       (build root (list (cons 'allow-build (flag flags 'allow-build))
@@ -593,7 +579,7 @@
              [datum (read-datum-file mpath)]
              [datum* (cons 'manifest (remove-dep (cdr datum) name))])
         (write-canonical-file mpath datum*)
-        (printf "removed dependency ~a (next install will clean lib/)~%" name)
+        (printf "removed dependency ~a (next deps will clean vendor/)~%" name)
         0)))
 
   (define (remove-dep body name)
@@ -715,16 +701,15 @@
   (define (short rev)
     (if (and (string? rev) (>= (string-length rev) 10)) (substring rev 0 10) rev))
 
-  ;; ── .gitignore / scaffold / basename(init 用)──
-  ;; chandler/bake 生成物:依赖 checkout(vendor/)、装好的库前缀(lib/)、各临时
-  ;; recipe/preamble,以及 `chandler build` 经 bake 产出的 _build/。
-  ;; 注:`.chandler-approvals`(native 构建授权记录)**不**入此列——它是信任决定,
-  ;; 提交与否属项目策略(提交=团队共享授权;不提交=各人各自授权),由用户自决。
-  ;; `.chandler-build.ss` / `.chandler-install.ss` 是**已作废**的生成物:B6a 之后
-  ;; build 直接在进程内排单编译,不再往依赖树里写临时 recipe 交给 bake 子进程。
-  ;; 仍留在列表里 —— 老项目的 .gitignore 已经有这两行,删掉只会让它们变成噪声;
-  ;; 新项目多两行无害。`.chandler-run.ss` / `.chandler-repl.ss` 仍在用(run/repl 的
-  ;; native preamble)。
+;; ── .gitignore / scaffold / basename(init 用)──
+;; 生成物:依赖 checkout(vendor/)、编译产物(_build/<mt>/)、各临时 recipe。
+;; 注:`.chandler-approvals`(native 构建授权记录)**不**入此列——它是信任决定,
+;; 提交与否属项目策略(提交=团队共享授权;不提交=各人各自授权),由用户自决。
+;; `.chandler-build.ss` / `.chandler-install.ss` 是**已作废**的生成物:build
+;; 直接在进程内排单编译,不再往依赖树里写临时 recipe。
+;; 仍留在列表里 —— 老项目的 .gitignore 已经有这两行,删掉只会让它们变成噪声;
+;; 新项目多两行无害。`.chandler-run.ss` / `.chandler-repl.ss` 仍在用(run/repl 的
+;; native preamble)。
   (define gitignore-entries '("/vendor/" "/lib/" "/_build/"
                               ".chandler-run.ss" ".chandler-repl.ss"
                               ".chandler-install.ss" ".chandler-build.ss"))

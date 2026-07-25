@@ -2,15 +2,17 @@
 ;;; chandler/layout.ss --- machine-type / so-ext / 路径拼接 / 库名↔路径 / src·mt 拆分
 ;;;
 ;;; 落地[库布局规范]与总设计 load-native 草案的路径推导。纯函数,无 I/O。
-;;; 供 activate、install、registry、以及(反向依赖的)bake 复用(见 designs/07 §5)。
+;;; 供 activate、install、registry 等 chandler 内部库复用。
 ;;;
-;;; **src/mt 拆分模型(2026-07-22 对齐 bake install 改版)**:一个安装前缀 <prefix>
-;;; 下,源码落 <prefix>/src/、平台绑定产物(编译 .so + native)整棵 _build/<mt>/ 落
-;;; <prefix>/<mt>/。消费方用一条 Chez 库目录**对** (源目录 . 对象目录) 解析二者:
-;;;   library-directories 形式:(cons "<prefix>/src" "<prefix>/<mt>")
-;;;   --libdirs / CHEZSCHEMELIBDIRS 串形式:"<prefix>/src::<prefix>/<mt>"
+;;; **src/mt 拆分模型(2026-07-22 引入)**:一个安装前缀 <prefix> 下,源码落
+;;; <prefix>/<name>/<version>/src/、平台绑定产物(编译 .so + native)落
+;;; <prefix>/<name>/<version>/<mt>/。消费方用一条 Chez 库目录**对** (源目录 . 对象目录)
+;;; 解析二者:
+;;;   library-directories 形式:(cons "<prefix>/<name>/<version>/src"
+;;;                                  "<prefix>/<name>/<version>/<mt>")
+;;;   --libdirs / CHEZSCHEMELIBDIRS 串形式:"<prefix>/<name>/<version>/src::<prefix>/<name>/<version>/<mt>"
 ;;;     (双分隔符分隔 源::对象;分隔符随平台:Windows ";" 其余 ":",见 path-sep)
-;;; native 收进所属库:<prefix>/<mt>/<lib>/native/<soname>.<ext>(与该库编译 .so 同处)。
+;;; native 收进所属库:<obj>/<lib>/native/<soname>.<ext>(与该库编译 .so 同处)。
 
 (library (chandler layout)
   (export current-machine-type machine-type-string so-ext
@@ -20,7 +22,7 @@
           resources-dirname prefix-resource-dir src-resource-dir
           native-so? lib-native-dir lib-native-path native-so-name
           library-name->path srcdir-join
-          lib-root rel-to)
+          rel-to)
   (import (chezscheme)
           (chandler util))
 
@@ -156,8 +158,4 @@
   (define (srcdir-join dep-root srcdir)
     (if (or (not srcdir) (string=? srcdir "") (string=? srcdir "."))
         dep-root
-        (join-paths dep-root srcdir)))
-
-  ;; 项目内某依赖的源库根(src/mt 拆分:源在 lib/src/ 下):<project>/lib/src/<name>/<srcdir>
-  (define (lib-root project-root name srcdir)
-    (srcdir-join (join-paths project-root "lib" "src" name) srcdir)))
+        (join-paths dep-root srcdir))))

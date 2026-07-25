@@ -61,8 +61,4 @@
       (assert-string= "lib/http" (srcdir-join "lib/http" "."))
       (assert-string= "lib/http" (srcdir-join "lib/http" ""))
       (assert-string= "lib/http" (srcdir-join "lib/http" #f))
-      (assert-string= "lib/http/src" (srcdir-join "lib/http" "src")))
-
-    (lib-root-compose
-      (assert-string= "proj/lib/src/http" (lib-root "proj" "http" "."))
-      (assert-string= "proj/lib/src/http/src" (lib-root "proj" "http" "src")))))
+      (assert-string= "lib/http/src" (srcdir-join "lib/http" "src")))))

@@ -1,14 +1,14 @@
 #!chezscheme
-;;; chandler/registry.ss --- 全局安装文件清单事务(designs/05;src/mt 拆分)
+;;; chandler/registry.ss --- 全局安装文件清单事务(designs/04;src/mt 拆分)
 ;;;
-;;; 让 --global 安装可审计、可干净卸载、可检测冲突。注册表 = <prefix>/.chandler/registry/<name>.ss,
+;;; 让全局安装可审计、可干净卸载、可检测冲突。注册表 = <prefix>/.chandler/registry/<name>.ss,
 ;;; 记已装文件 + sha256。安装事务:冲突检测 → staging → 进位 → 登记(registry 最后写 = 弱事务)。
-;;; bake install 复用本库(designs/07 §5),故导出干净、不 import 上层。
+;;; 本库不 import 上层,导出干净,可独立复用。
 ;;;
-;;; 2026-07-22 对齐 bake install 的 src/mt 拆分:目标是库**前缀**(~/.local/share/chez),
-;;; 源码落 <prefix>/src/、编译产物整棵 _build/<mt>/ 落 <prefix>/<mt>/(与 bake install
-;;; 同一全局库目录,消费方一条 <prefix>/src::<prefix>/<mt> 解析二者)。注册记录的相对
-;;; 路径已含 src//<mt>/ 前缀,故冲突检测/卸载/doctor 逻辑不变,只是相对路径带了命名空间。
+;;; 落点是库**前缀**(~/.local/share/chez 等),源码落 <prefix>/<name>/<version>/src/、
+;;; 编译产物整棵 _build/<mt>/ 落 <prefix>/<name>/<version>/<mt>/(consumers 一对 pair
+;;; 解析)。注册记录的相对路径已含 src/<mt> 前缀,故冲突检测/卸载/doctor 逻辑不变,
+;;; 只是相对路径带了命名空间。
 
 (library (chandler registry)
   (export default-user-libdir default-system-libdir default-user-bindir default-system-bindir

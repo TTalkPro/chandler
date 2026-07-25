@@ -1,39 +1,30 @@
 #!chezscheme
-;;; chandler/pack.ss --- `chandler pack`:无源码、可重定位、自包含的分发包(designs/09)
+;;; chandler/pack.ss --- `chandler pack`:无源码、可重定位、自包含的分发包(designs/05)
 ;;;
-;;; 自 bake 移交(bake 职责收敛为 build + install)。打包是「依赖闭包 + 部署」,那是
-;;; chandler 的领域:lock 精确知道闭包与每个依赖的 native,lib/{src,<mt>} 是它自己铺的,
-;;; 运行时选择本就由 manifest 的运行时门决定。**pack 只组装,不编译** —— 编译动作永远
-;;; 是 bake 的(designs/07 §1),native 尤其无法在此现编。
+;;; 打包是「依赖闭包 + 部署」,lock 精确知道闭包与每个依赖的 native。**pack 只组装,
+;;; 不编译** —— 编译由 chandler build 进程内完成,pack 仅消费已编对象与 source;
+;;; native 无法在消费方现编,必须先在本机 build 完毕(designs/05 §10)。
 ;;;
-;;; 包布局(designs/09;每一样平台绑定物都在 <mt> 层下):
+;;; 包布局(designs/05;每样平台绑定物都在 <mt> 层下):
 ;;;
 ;;;   myapp-1.0-<mt>/
 ;;;     bin/myapp[.ps1]              启动器 —— 唯一平台中立入口
 ;;;     bin/<mt>/skiff|scheme        运行时可执行文件
 ;;;     boot/<mt>/*.boot             boot
-;;;     <mt>/                        对象根 = 应用 _build/<mt>/ + 依赖 lib/<mt>/
+;;;     <mt>/                        对象根 = 应用 _build/<mt>/ + 各依赖 _vendor/<dep>/_build/<mt>/
 ;;;     src/resources/<app>/         应用数据,原样(目录名约定死,不可配置)
-;;;     src/resources/<dep-libpath>/ 依赖库资源(designs/11 §5;落点见 C4)
-;;;     .chandler/<app>/chandler-manifest.ss  应用清单快照(与全局 install 同构)
+;;;     src/resources/<dep-libpath>/ 依赖库资源(designs/05 §4)
+;;;     .chandler/run.sps            入口(runner,pack 模式含 native 加载 + pack.manifest 校验)
+;;;     .chandler/chandler-manifest.ss  应用清单快照(与全局 install 同构)
 ;;;     pack.manifest
 ;;;
-;;; 布局与**全局安装前缀** `~/.local/share/chez/` 逐层同构(P1/C4):`<mt>/` 对象根、
-;;; `src/resources/<name>/` 资源、`.chandler/<name>/chandler-manifest.ss` 清单 —— 一个包解开
-;;; 就是一个自带运行时的安装前缀,消费方(应用代码、native loader、chandler 自己)
-;;; 四态用同一套路径规则,不需要「pack 专用」的第二套。
-;;;
-;;; 对象根同构同样成立:_build/<mt>(build)、<prefix>/<mt>(install)、lib/<mt>
-;;; (项目)、<mt>(pack)结构完全一致 —— 包里的 <mt>/ 就是一个普通对象根,
-;;; chandler 铺好的依赖树整棵拷进去即可;运行时也不再与库名空间混住。
+;;; 布局与**全局安装前缀** `~/.local/share/chez/` 逐层同构(P1):`<name>/<version>/<mt>/` 对象根、
+;;; `src/resources/<name>/` 资源、`.chandler/run.sps` 入口 —— pack 解开就是一个自带运行时
+;;; 的安装前缀,消费方(应用代码、native loader、chandler 自己)四态用同一套路径规则,
+;;; 不需要「pack 专用」的第二套。
 
 (library (chandler pack)
-  (export pack verify-pack pack-dir-name
-          skiff-exe-path skiff-boot-dir chez-exe-path chez-csv-dir
-          run-sps-content
-          stderr-diag-src runtime-detect-src version-match-src
-          manifest-read-src verify-format-src full-target-check-src
-          native-walk-src)
+  (export pack verify-pack run-sps-content)
   (import (chezscheme)
           (chandler util)
           (chandler fs)
@@ -319,11 +310,11 @@
       "$PackArgs = $args\n"
       "$Here = Split-Path -Parent $PSScriptRoot\n"))
 
-  ;; skiff 启动器 = pack 规范 §8 的薄 shim:指好 boot、交给 `skiff --script bootstrap.ss`
-  ;; (designs/10 §6:与 stock 对称;L0 之后 bootstrap.ss 是统一 runtime-aware verifier,
-  ;; skiff pack 不再走 `skiff --app`)。SKIFF_BOOT_DIR 是必须的:skiff 按 exe 相对找
-  ;; boot(<exedir>/../lib/skiff/boot),bin/<mt> + boot/<mt> 对不上它;而 boot 必须在
-  ;; 进程有堆之前注册,远早于 --script 被解析,env 是唯一可用的交接方式。
+;; skiff 启动器 = pack 规范的薄 shim:指好 boot,直接 `exec skiff --program run.sps`
+;; (与 stock 启动器同构 —— 各自指好 runtime + boot,通过 --program 跑 run.sps;
+;; skiff pack 不再走 `skiff --app`)。SKIFF_BOOT_DIR 是必须的:skiff 按 exe 相对找
+;; boot(<exedir>/../lib/skiff/boot),bin/<mt> + boot/<mt> 对不上它;而 boot 必须在
+;; 进程有堆之前注册,远早于 --program 被解析,env 是唯一可用的交接方式。
   (define (launcher-sh-skiff name version)
     (let ([mt (current-machine-type)]
           [runner (string-append name "/" version "/.chandler/run.sps")])
@@ -377,16 +368,20 @@
             (write-text f sh)
             (run-status "chmod" (list "+x" f))))))
 
-  ;; ═══════════════════════════════════════════════════════════════════
-  ;; §6 bootstrap.ss(runtime-aware verifier,designs/10 §3-5)
-  ;;   生成的 bootstrap 在 stock Chez 与 Skiff 上跑**同一份**:先读 pack.manifest,
-  ;;   校验 (format N) 与 target 三元组(按当前 runtime 分派,矩阵见 designs/10 §4),
-  ;;   全部通过才碰 library-directories / native / import。校验失败一律显式
-  ;;   (exit N)(sysexits:65/70/78)+ 单行 s-expr 诊断,不走 Chez error。
-  ;; ═══════════════════════════════════════════════════════════════════
+;; ═══════════════════════════════════════════════════════════════════
+;; §6 pack 模式 run.sps 的内联段(runtime-aware verifier)
+;;   pack 模式的 run.sps 在 install 模式之上追加:
+;;     stderr-diag + runtime-detect + version-match + manifest-read
+;;     + verify-format + full-target-check + native-walk
+;;   都在 stock Chez 与 Skiff 上跑**同一份** —— 先读 pack.manifest,校验 (format N)
+;;   与 target 三元组(按当前 runtime 分派,矩阵见 designs/05 §verify-pack),
+;;   全部通过才碰 library-directories / native / import。校验失败一律显式
+;;   (exit N)(sysexits:65/70/78)+ 单行 s-expr 诊断,不走 Chez error。
+;;   不再单独生成 bootstrap.ss —— verifier 直接内联进 run.sps。
+;; ═══════════════════════════════════════════════════════════════════
 
-  ;; 包根 = 4× 从自身路径向上 —— run.sps 恒在 <name>/<version>/.chandler/run.sps,
-  ;; install 模式同构,故 root 推导两边一样。
+;; 包根 = 4× 从自身路径向上 —— run.sps 恒在 <name>/<version>/.chandler/run.sps,
+;; install 模式同构,故 root 推导两边一样。
 
   ;; stderr 诊断:人类可读行 + 单行 s-expr(orchestrator 用 read 收,故 s-expr
   ;; 恒单行、无换行;designs/10 §5)。
@@ -837,7 +832,7 @@
             (unless (file-exists? e)
               (rm-rf root)
               (error 'pack
-                     (format "entry library ~a has no compiled object at ~a~%  (pass --entry '(<lib>)', or run `bake build` if it is simply not built)"
+                     (format "entry library ~a has no compiled object at ~a~%  (pass --entry '(<lib>)', or run `chandler build` if it is simply not built)"
                              entry e)))))
         ;; chandler 的 runtime 子集:它不是 lock 里的依赖(是运行时门,designs/12 §5),
         ;; v2 nested:layout 独立在 <root>/chandler/<version>/。**从 `_vendor/chandler/_build/<mt>/` 取**

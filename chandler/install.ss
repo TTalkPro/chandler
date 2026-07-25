@@ -1,31 +1,21 @@
 #!chezscheme
-;;; chandler/install.ss --- vendor/ 物化 + 源码安装 → 项目前缀 lib/(designs/01)
+;;; chandler/install.ss --- 依赖物化 → _vendor/(每依赖 live,逐依赖挂载)
 ;;;
-;;; 依赖模型(Bundler 式,2026-07-22 对齐 bake install 的 src/mt 拆分):
-;;;   git 依赖整仓 checkout → vendor/<name>/;chandler 再把源码装进 lib/,
-;;;   lib/ 成为一个 Chez 库目录**前缀**,与 ~/.local/share/chez 及解开的 pack 逐层同构:
-;;;     lib/src/                        ← 源码(umbrella <name>.ss + <name>/… 各依赖并存)
-;;;     lib/<mt>/                       ← 平台绑定产物(编译 .so + native/<lib>/…),
-;;;                                        `chandler build` 后填充
-;;;     lib/src/resources/<libpath>/    ← 资源(依赖声明的 + 本项目自己的 resources/;
-;;;                                        C4:并入 src/ 层,原 lib/share/ 取消)
-;;;     lib/.chandler/<name>/chandler-manifest.ss ← 清单快照(应用名由此可辨,见 runtime-paths)
-;;;   故库搜索挂**一对** (lib/src . lib/<mt>);消费方一条 pair 同时解析源码与对象。
-;;;   path 依赖不进 vendor/lib,activate/run 时直挂其源目录(live)。
+;;; **C0(2026-07-24):不再有汇总的 lib/**。每个依赖留在 _vendor/<name>/ 自己的
+;;;   src/ 与 _build/<mt>/;resolved-libdirs 逐依赖挂一条 (src . obj) 对,挂上即生效。
+;;;   资源同理 live 在 _vendor/<dep>/<srcdir>/resources/<libpath>/。
 ;;;
-;;;   **前缀即这个 lib/**:`chandler run`/`repl`/`activate` 把它挂进
-;;;   library-directories,pack 同理挂包根 —— 三态同一形状。D8 起 APP_ROOT 环境
-;;;   变量完全去除,资源与 native 定位统一扫 library-directories。
-;;;   生成 chandler-setup.ss 的旧做法已取消:启动统一走 `chandler run`。
+;;;   git 依赖整仓 checkout → _vendor/<name>/;chandler 运行时门从 CHANDLER_HOME copy
+;;;   进 _vendor/chandler/。path 依赖不进 _vendor,activate/run 时直挂其源目录(live)。
+;;;   启动统一走 `chandler run`(早期的 `chandler-setup.ss` Bundler 模型已取消)。
 
 (library (chandler install)
-  (export install verify sync-status list-deps
+  (export install verify list-deps
           vendor-dir lib-dir project-lock-path project-manifest-path
-          library-search-dirs native-load-paths
+          native-load-paths
           chandler-runtime-sublibs chandler-dev-only-rel?
           copy-tree!
-          project-libdir project-lib-pair project-obj-dir
-          global-prefix global-libdir path-dep-source-dirs
+          global-prefix global-libdir
           project-mode? resolved-libdirs)
   (import (chezscheme)
           (chandler util)
@@ -44,10 +34,6 @@
   (define (project-lock-path root) (join-paths root "manifest.lock"))
   (define (vendor-dir root name) (join-paths (join-paths root "_vendor") (symbol->string name)))
   (define (lib-dir root name) (vendor-dir root name))   ; 兼容:依赖源码树现居 _vendor/
-  ;; ── 项目本地安装前缀 lib/ 的 src/mt 拆分 ──
-  (define (project-libdir root) (join-paths root "lib"))                 ; 安装前缀(base)
-  (define (project-lib-pair root) (split-pair (project-libdir root)))    ; (lib/src . lib/<mt>)
-  (define (project-obj-dir root) (join-paths (project-libdir root) (current-machine-type))) ; lib/<mt>
 
   ;; ── install:主命令 ──
   ;; opts: (production . bool) (force . bool) (keep-extra . bool) (offline . bool)
@@ -229,8 +215,8 @@
   ;; 把 src 下所有文件拷到 dst。语义差异由参数表达(而非两个函数):
   ;;   skip-dirs   路径首段在其中的整棵跳过(如 ("_build" ".git"))
   ;;   file-filter 谓词 (rel → bool),只拷满足的文件;全拷传 (lambda (_) #t)
-  ;;   policy      'skip-existing — dst 已存在则跳(累积前缀,如 install --global)
-  ;;               'overwrite      — 总是拷(隔离目标,如 pack 的 rm-rf 后目录)
+;;   policy      'skip-existing — dst 已存在则跳(累积前缀,如 install --user)
+;;               'overwrite      — 总是拷(隔离目标,如 pack 的 rm-rf 后目录)
   ;;   warn?       skip-existing 命中时往 stderr 警告(抓依赖间同名悄悄丢的 latent bug)
   ;;
   ;; **为什么不硬编码 policy**:全局前缀是跨安装的**累积存储**(不是 R6RS 单程序),
@@ -310,11 +296,11 @@
 
   (define (list-deps root) (sync-status root))
 
-  ;; ── 库搜索路径(src/mt 拆分:lib/ 一对 (src . obj) + path 依赖源目录)──
-  ;; 正在跑的 chandler 的库前缀 = CHANDLER_HOME(见 (chandler registry) chandler-home)。
-  ;; 读侧用它:deps 从这里 copy chandler runtime 进 _vendor、run/build 的全局兜底挂它。
-  ;; (2026-07-24:原 global-prefix 读 CHANDLER_PREFIX,已统一到 CHANDLER_HOME;
-  ;;  "安装落点"是另一回事,走 --user/--system,见 registry。)
+;; ── 库搜索路径(每依赖 _vendor/<dep>/{src,_build/<mt>} 对 + path 依赖源目录)──
+;; 正在跑的 chandler 的库前缀 = CHANDLER_HOME(见 (chandler registry) chandler-home)。
+;; 读侧用它:deps 从这里 copy chandler runtime 进 _vendor、run/build 的全局兜底挂它。
+;; (2026-07-24:原 global-prefix 读 CHANDLER_PREFIX,已统一到 CHANDLER_HOME;
+;;  "安装落点"是另一回事,走 --user/--system,见 registry。)
   (define (global-prefix) (chandler-home))
   ;; 全局库目录条目:v2 扫中央仓库的 <name>/<version>/{src,<mt>}/
   ;; 返回 list of (src . obj) pairs(可能为空)
@@ -395,13 +381,14 @@
     (let ([mp (project-manifest-path root)])
       (if (file-exists? mp) (manifest-srcdir (read-manifest mp)) ".")))
 
-  ;; ── native 兜底加载清单(designs/24 分层:自加载优先、统一加载兜底)──
-  ;;   bake 现为每个带 native 的库生成 `(<lib> native-loader)`,其编译产物
-  ;;   lib/<mt>/<lib>/native-loader.so 随交付树落位;该库 FFI 被引用时,loader 自己
-  ;;   按候选序定位并 load —— 候选 2 正是 (library-directories) 各根的 obj 侧,
-  ;;   而 chandler 挂的 lib/src::lib/<mt> 对,obj 侧恰是 native 落点,故**天然命中**。
-  ;;   ⇒ 有 loader 的库**无需预加载**(且自加载是惰性的:不碰 FFI 就不 dlopen);
-  ;;      这里只为「非 bake 构建、无生成 loader」的第三方库保留统一加载兜底。
+;; ── native 兜底加载清单(自加载优先、统一加载兜底)──
+;;   bake 现为每个带 native 的库生成 `(<lib> native-loader)`,其编译产物
+;;   _build/<mt>/<lib>/native-loader.so 随交付树落位;该库 FFI 被引用时,loader 自己
+;;   按候选序定位并 load —— 候选 2 正是 (library-directories) 各根的 obj 侧,
+;;   而 resolved-libdirs 挂的各 per-dep (src . obj) 对,obj 侧恰是 native 落点,
+;;   故**天然命中**。
+;;   ⇒ 有 loader 的库**无需预加载**(且自加载是惰性的:不碰 FFI 就不 dlopen);
+;;      这里只为「无生成 loader」的第三方库保留统一加载兜底。
   ;;   **2026-07-24(C2)**:扫的范围从「只有项目自己的 lib/<mt>」推广到
   ;;   **所有挂载条目的 obj 侧** —— 与资源定位(C1)同一条原则:进程对着哪些前缀跑,
   ;;   `(library-directories)` / `resolved-libdirs` 就是权威答案,兜底不该只认其中一个。
