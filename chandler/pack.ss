@@ -173,56 +173,6 @@
     (and (not (string=? (base-name rel) ".bake-manifest"))
          (not (string-suffix? ".wpo" rel))))
 
-  ;; 拷一棵对象树进包(剥源码:只带 Chez 编译产物 .so 与 native 的 OS 扩展名)
-  ;; P7:改调共享 copy-tree!(overwrite,隔离目标)。
-  (define (copy-obj-tree! from to)
-    (let* ([nx (string-append "." (so-ext))]
-           [obj? (lambda (rel)
-                   (and (deliverable? rel)
-                        (or (string-suffix? ".so" rel) (string-suffix? nx rel))))])
-      (copy-tree! from to '() obj? 'overwrite #f)))
-
-  ;; 只搬 lock 里**声明过的**依赖命名空间 —— 不整棵拷 lib/<mt>/。
-  ;;
-  ;; 整棵拷会把该目录里的**陈旧残留**一并带走:`chandler build` 曾把整个
-  ;; _build/<mt>/ 同步进来,其中包含应用自己那一轮的产物;下一次应用改了代码只跑
-  ;; `bake build`,lib/<mt>/ 里那份就过期了,而它会覆盖掉刚编好的新产物 —— 包能跑,
-  ;; 跑的却是旧代码(实测:改过的 docs-root 没生效,应用仍去找旧路径)。
-  ;;
-  ;; 按 lock 精确挑正是 chandler 相对 bake 的优势:bake 只能从构建图推断、遇预构建
-  ;; 库不下探,故只能整棵命名空间搬;chandler 手里就有精确闭包。
-  ;; N6: chandler 只有 runtime 子集能进包(designs/12 §6.3)。子集定义与判据都在
-  ;; (chandler install) —— deps 阶段从全局前缀取的是同一份,两处共用免漂移。
-  (define (copy-dep-trees! obj to locked)
-    (let* ([nx (string-append "." (so-ext))]
-           [base-obj? (lambda (rel)
-                        (and (deliverable? rel)
-                             (or (string-suffix? ".so" rel) (string-suffix? nx rel))))])
-      (for-each
-        (lambda (d)
-          (let* ([ns (symbol->string (locked-dep-name d))]
-                 [um (join-paths obj (string-append ns ".so"))]
-                 [dir (join-paths obj ns)]
-                 [chandler? (string=? ns "chandler")])
-            ;; chandler.so 是 dev umbrella(export activate 等)——不进 pack;
-            ;; pack 的入口是 chandler/base.so(runtime umbrella)
-            (when (and (file-exists? um) (not chandler?))
-              (let ([dst (join-paths to (string-append ns ".so"))])
-                (ensure-parent dst) (copy-file um dst)))
-            ;; 子目录对象 → <pack>/<mt>/<ns>/。
-            ;; P7:内层遍历改调共享 copy-tree!(overwrite)。chandler 的 dev-only 过滤
-            ;; 需 "chandler/" 前缀(chandler-dev-only-rel? 检查该前缀),而 copy-tree!
-            ;; 的 rel 相对 dir(= obj/<ns>),故 filter 里补前缀。
-            (when (file-directory? dir)
-              (copy-tree! dir (join-paths to ns) '()
-                          (if chandler?
-                              (lambda (rel)
-                                (and (base-obj? rel)
-                                     (not (chandler-dev-only-rel?
-                                            (string-append "chandler/" rel)))))
-                              base-obj?)
-                          'overwrite #f))))
-        locked)))
 
   ;; 应用资源:源码态的 <project>/resources/ **原样**搬进 <pack>/<name>/<version>/src/resources/。
   ;;
