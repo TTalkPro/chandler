@@ -101,7 +101,7 @@
           ;; 4) 登记(最后写 = 安装完整标志)
           (write-registry libdir name version meta files
                           (map (lambda (rel) (sha256-file (join-paths vroot rel))) files))
-          (symbol->string name)))))
+           (if (symbol? name) (symbol->string name) name)))))
 
   ;; 冲突检测:计划集中每路径若已属其它包 → 错;野文件 → 拒(--adopt 收编);属本包 → 升级
   (define (check-conflicts files libdir vroot name version opts)
