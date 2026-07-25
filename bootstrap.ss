@@ -180,8 +180,18 @@
 
 (define prefix
   (cond [dev?    (join-paths dev-root "chez")]
-        [system? "/usr/local/share/chez"]
+        [system? "/usr/local/chez"]
         [else    (string-append home "/.local/share/chez")]))
+(define chandler-ver
+  ;; 从 chandler-manifest.ss 读 version
+  (let ([mpath (join-paths here "chandler-manifest.ss")])
+    (if (file-exists? mpath)
+        (let* ([datum (call-with-input-file mpath read)]
+               [ver-field (assoc 'version (cdr datum))])
+          (if ver-field (cadr ver-field) "0.0.0"))
+        "0.0.0")))
+;; v2 nested layout: chandler 自己装在 <prefix>/chandler/<version>/
+(define chandler-vroot (join-paths prefix "chandler" chandler-ver))
 (define bindir
   (cond [dev?    (join-paths dev-root "bin")]
         [system? "/usr/local/bin"]
@@ -315,7 +325,7 @@
     "CHANDLER_HOME=\"" prefix "\"\n"
     "CHANDLER_MT=\"" (mt-string) "\"\n"
     "export CHANDLER_HOME CHANDLER_MT\n"
-    "_main=\"$CHANDLER_HOME/src/chandler/cli/main.sps\"\n"
+    "_main=\"$CHANDLER_HOME/chandler/" chandler-ver "/src/chandler/cli/main.sps\"\n"
     "if [ ! -f \"$_main\" ]; then\n"
     "  echo \"chandler: install is broken — $_main is missing.\" 1>&2\n"
     "  echo \"  Reinstall from source:  scheme --script bootstrap.ss\" 1>&2\n"
@@ -341,7 +351,7 @@
     "      *) _prog_ok \"$rt\" || continue ;;\n"
     "    esac\n"
     "  fi\n"
-    "  exec \"$rt\" -q --libdirs \"$CHANDLER_HOME/src::$CHANDLER_HOME/$CHANDLER_MT\" \\\n"
+    "  exec \"$rt\" -q --libdirs \"$CHANDLER_HOME/chandler/" chandler-ver "/src::$CHANDLER_HOME/chandler/" chandler-ver "/$CHANDLER_MT\" \\\n"
     "    --program \"$_main\" \"$@\"\n"
     "done\n"
     "echo \"chandler: no program-capable Scheme runtime found (need skiff or Chez Scheme).\" 1>&2\n"
@@ -359,7 +369,7 @@
     "$env:CHANDLER_HOME = $Prefix\n"
     "$env:CHANDLER_MT = $Mt\n"
     "$Sep = [System.IO.Path]::PathSeparator\n"
-    "$LibDirs = \"$Prefix/src$Sep$Sep$Prefix/$Mt\"\n"
+    "$LibDirs = \"$Prefix/chandler/" chandler-ver "/src$Sep$Sep$Prefix/chandler/" chandler-ver "/$Mt\"\n"
     "$Program = \"$Prefix/src/chandler/cli/main.sps\"\n"
     "if (-not (Test-Path -LiteralPath $Program)) {\n"
     "  [Console]::Error.WriteLine(\"chandler: install is broken — $Program is missing.\")\n"
@@ -415,20 +425,46 @@
 ;; ════════════════════════════════════════════════════════════════════
 
 (define (do-install!)
-  (when force? (uninstall-libraries!))
-  (install-sources!)
-  (install-manifest!)
-  (install-objects!)
-  (write-text launcher-path (if (win?) (launcher-ps1) (launcher-sh)))
-  (unless (win?)
-    (let ([chmod-result (system (string-append "chmod +x " launcher-path))])
-      (void)))
-  (printf "install ~a~%" launcher-path)
-  (printf "chandler installed to ~a~%" prefix)
-  (let ([p (or (getenv "PATH") "")])
-    (unless (string-contains? p bindir)  ; best-effort substring check
-      (printf "  hint: add ~a to PATH: export PATH=\"~a:$PATH\"~%" bindir bindir)))
-  (exit 0))
+  ;; v2 两阶段:编译产物 → chandler install(nested layout)
+  (let* ([mt (mt-string)]
+         [bdir (join-paths here "_build" mt)]
+         [interp (or (getenv "CHANDLER_SCHEME") (getenv "CHANDLER_SKIFF") "scheme")]  ; 解释器可执行文件
+         [libdirs (string-append here-abs "::" bdir)]
+         [main-sps (join-paths here-abs "chandler" "cli" "main.sps")]
+         [install-flags (if system? "--system" "--user")])
+    ;; 检查编译产物
+    (unless (file-directory? bdir)
+      (fprintf (current-error-port)
+               "bootstrap: chandler not compiled at ~a~%  run `chandler make` first~%"
+               bdir)
+      (exit 70))
+    ;; Phase 1: 生成 lock
+    (printf "bootstrapping: chandler deps...~%")
+    (let ([rc (system (string-append
+                       "\"" interp "\" -q --libdirs \"" libdirs
+                       "\" --program \"" main-sps "\" deps"))])
+      (unless (= rc 0)
+        (fprintf (current-error-port) "bootstrap: chandler deps failed~%")
+        (exit rc)))
+    ;; Phase 2: 标准 install(按 v2 nested layout 装)
+    (printf "bootstrapping: chandler install ~a...~%" install-flags)
+    (let ([rc (system (string-append
+                       "\"" interp "\" -q --libdirs \"" libdirs
+                       "\" --program \"" main-sps "\" install " install-flags))])
+      (unless (= rc 0)
+        (fprintf (current-error-port) "bootstrap: chandler install failed~%")
+        (exit rc)))
+    ;; Phase 3: 生成启动器(指向 nested layout)
+    (write-text launcher-path (if (win?) (launcher-ps1) (launcher-sh)))
+    (unless (win?)
+      (let ([chmod-result (system (string-append "chmod +x " launcher-path))])
+        (void)))
+    (printf "install ~a~%" launcher-path)
+    (printf "chandler installed to ~a~%" prefix)
+    (let ([p (or (getenv "PATH") "")])
+      (unless (string-contains? p bindir)
+        (printf "  hint: add ~a to PATH: export PATH=\"~a:$PATH\"~%" bindir bindir)))
+    (exit 0)))
 
 (define (do-uninstall!)
   (uninstall-libraries!)
