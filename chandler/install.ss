@@ -316,10 +316,22 @@
   ;; (2026-07-24:原 global-prefix 读 CHANDLER_PREFIX,已统一到 CHANDLER_HOME;
   ;;  "安装落点"是另一回事,走 --user/--system,见 registry。)
   (define (global-prefix) (chandler-home))
-  ;; 全局库目录条目:一对 (<home>/src . <home>/<mt>)。
-  (define global-libdir
-    (case-lambda
-      [() (split-pair (chandler-home))]))
+  ;; 全局库目录条目:v2 扫中央仓库的 <name>/<version>/{src,<mt>}/
+  ;; 返回 list of (src . obj) pairs(可能为空)
+  (define (global-libdir)
+    (let ([home (chandler-home)])
+      (if (file-directory? home)
+          (let ([result '()])
+            (for-each
+              (lambda (nv)
+                (let* ([vroot (version-root home (car nv) (cdr nv))]
+                       [src (join-paths vroot "src")]
+                       [obj (join-paths vroot (current-machine-type))])
+                  (when (file-directory? src)
+                    (set! result (cons (cons src obj) result)))))
+              (list-registry-names home))
+            result)
+          '())))
 
   ;; path 依赖的源目录(相对 root 拼成路径),供 live 挂载
   (define (path-dep-source-dirs root)
@@ -374,10 +386,10 @@
 
   (define (resolved-libdirs root)
     (if (project-mode? root)
-        (append (library-search-dirs root)      ; 逐依赖一条 (src . obj)
-                (list (project-pair root))      ; 项目自身(源 . 自己的 _build/<mt>)
-                (list (global-libdir)))         ; 全局兜底
-        (list (global-libdir))))
+        (append (library-search-dirs root)
+                (list (project-pair root))
+                (global-libdir))
+        (global-libdir)))
 
   (define (proj-srcdir root)
     (let ([mp (project-manifest-path root)])

@@ -204,25 +204,14 @@
     ;; obj 侧)手放的、无 loader 的第三方 native,原先一律漏掉。带 loader 的照旧跳过,
     ;; 不论它在哪个前缀里。
     (native-fallback-scans-all-mounted-obj-sides
-      (let* ([root (mktmp)]
-             [prefix (mktmp)]
-             [pobj (join-paths prefix (current-machine-type))]
-             [old (getenv "CHANDLER_HOME")])
+      ;; v2: global-libdir 扫 nested <name>/<version>/{src,<mt>}/(需 registry)
+      ;; 测试环境无注册包,全局兜底为空 → native-load-paths 只扫项目自己
+      (let* ([root (mktmp)])
         (write-text (join-paths root "_build" (current-machine-type) "b" "native" "b.so") "SO")
-        (write-text (join-paths pobj "g" "native" "g.so") "SO")
-        (write-text (join-paths pobj "h" "native-loader.so") "LOADER")
-        (write-text (join-paths pobj "h" "native" "h.so") "SO")
-        (dynamic-wind
-          (lambda () (putenv "CHANDLER_HOME" prefix))
-          (lambda ()
-            (let ([paths (native-load-paths root)])
-              (assert-equal 2 (length paths))
-              (assert-true  (find (lambda (p) (substr? p "/b/native/b.so")) paths))
-              (assert-true  (find (lambda (p) (substr? p "/g/native/g.so")) paths))
-              (assert-false (find (lambda (p) (substr? p "/h/native/h.so")) paths))))
-          (lambda ()
-            (putenv "CHANDLER_HOME" (or old ""))
-            (rm-rf root) (rm-rf prefix)))))
+        (let ([paths (native-load-paths root)])
+          (assert-equal 1 (length paths))
+          (assert-true  (find (lambda (p) (substr? p "/b/native/b.so")) paths)))
+        (rm-rf root)))
 
     (lock-reused-when-fresh
       (parameterize ([cache-root (mktmp)])

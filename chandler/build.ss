@@ -152,8 +152,7 @@
   ;; 与 run 期 resolved-libdirs 的全局兜底同一条路径。它是个 (src . obj) 对,
   ;; 在 compile 里当预构建根 → (obj . obj),只给对象、不重编。
   (define (fallback-roots root)
-    (let ([g (global-libdir)])
-      (if (and (pair? g) (file-directory? (cdr g))) (list g) '())))
+    (filter (lambda (p) (file-directory? (cdr p))) (global-libdir)))
 
   ;; ── chandler 运行时门:把 CHANDLER_HOME 的对象 copy 进 _vendor(BUG-1,2026-07-24)──
   ;; deps 的 install-chandler-runtime! 已把 runtime subset 源码铺进
