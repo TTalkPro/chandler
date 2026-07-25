@@ -8,7 +8,7 @@
 (library (chandler base)
   (export
     ;; runtime-paths(designs/11)
-    app-root app-name resource-path find-resource-path
+    resource-path find-resource-path
     ;; hash
     sha256-bytevector sha256-string sha256-file
     ;; version

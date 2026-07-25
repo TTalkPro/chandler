@@ -17,7 +17,7 @@
   (export native-task native-task*
           native-owner-segs native-soname-of native-fingerprint toolchain-id
           run-native-backend chez-include-dir
-          native-gen-dir native-root-env native-loader-source
+          native-gen-dir native-loader-source
           record-native-loader! emit-native-loaders! prescan-native-loaders!
           install-native-hooks! reset-native-state!)
   (import (chezscheme)
@@ -329,24 +329,8 @@
           keys)
         (add-gen-root!))))
 
-  ;; APP_ROOT:进程所对的**库前缀**,由启动器(chandler pack)或 `chandler run`
-  ;; 在 exec 前导出。整个分发只此一个变量,其下只此一种形状:
-  ;;
-  ;;     $APP_ROOT/<mt>/<libpath>/native/<soname>.<ext>
-  ;;
-  ;; 每个前缀的布局都一样 —— <mt>/ 对象根、src/(源码 + resources/<name>/)、
-  ;; .chandler/<name>/ —— 不论它是 ~/.local/share/chez(全局安装)、项目自己的
-  ;; lib/(`chandler run` 把 APP_ROOT 指向那里),还是解开的分发包(designs/09
-  ;; §包布局)。故 loader 不需要按状态分支:一个后缀在三态里都解析得到。
-  ;;
-  ;; 它之所以仍然是承重的,正是 designs/24 §约束 3 确立的理由:
-  ;;   - BOOT 交付形态:loader 在 library-invoke 时就跑,早于任何桩代码能设
-  ;;     (library-directories);
-  ;;   - 用 --program 跑的全程序 `.so`:压根没发生过库搜索,(library-directories)
-  ;;     从不指向部署根。
-  ;; 两种情形下,exec 前设好的 env 是唯一时序对得上的交接方式。
-  (define native-root-env "APP_ROOT")
-
+  ;; 定位只走 `(library-directories)`(D8:APP_ROOT 已完全去除)——进程对着哪些
+  ;; 前缀跑,native 就在那些前缀的 `<obj侧>/<libpath>/native/` 下。
   (define (native-loader-source segs sonames)
     (let ((libname (string-join segs " "))         ; (chez async)   → 库名
           (libpath (string-join segs "/")))        ; chez/async     → 交付路径
@@ -366,13 +350,8 @@
         "    (and (file-exists? p) (begin (load-shared-object p) #t)))\n"
         "  (define (obj-dir d) (if (pair? d) (cdr d) d))\n"
         "  (define (locate! soname)\n"
-        ;; env 候选:APP_ROOT 是库前缀,其下只有一种形状。
-        "    (or (let ((r (getenv \"" native-root-env "\")))\n"
-        "          (and r (> (string-length r) 0)\n"
-        "               (load-if-exists\n"
-        "                 (string-append r \"/\" (symbol->string (machine-type))\n"
-        "                                \"/" libpath "/native/\" soname))))\n"
-        "        (let loop ((ds (library-directories)))\n"
+        ;; 候选 1:扫 (library-directories) 各条目的**对象**侧。
+        "    (or (let loop ((ds (library-directories)))\n"
         "          (and (pair? ds)\n"
         "               (or (load-if-exists\n"
         "                     (string-append (obj-dir (car ds)) \"/" libpath "/native/\" soname))\n"

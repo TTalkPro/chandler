@@ -2,7 +2,7 @@
 ;;; chandler/test/native-build.ss --- (chandler native-build) 测试
 ;;;
 ;;; 覆盖:clause 解析(所属库/soname)、指纹输入、loader 代码生成的两条硬约束
-;;; (APP_ROOT 候选 + native-loaded 引用边)、预扫、落点不变量,以及 script 后端
+;;; (library-directories 扫描 + native-loaded 引用边)、预扫、落点不变量,以及 script 后端
 ;;; 端到端(真 cc 编一个 C 库,真跑 FFI)。
 ;;;
 ;;; 环境门:没有 `cc` 就跳过真编 C 的用例;没有 Chez 编译器(Petite)跳过要编库的。
@@ -95,8 +95,6 @@
         (assert-true (string-contains? src "(begin native-loaded (foreign-procedure conv ...))"))
         (assert-true (string-contains? src "(define (load-if-exists p)"))
         (assert-true (string-contains? src "(file-exists? p)"))
-        ;; APP_ROOT 候选:$APP_ROOT/<mt>/<libpath>/native/<soname>
-        (assert-true (string-contains? src "(getenv \"APP_ROOT\")"))
         (assert-true (string-contains? src "/chez/async/native/"))
         ;; 兜底候选:扫 (library-directories) 的**对象**侧
         (assert-true (string-contains? src "(obj-dir (car ds))"))

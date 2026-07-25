@@ -106,7 +106,7 @@
     (printf "                               `chandler make --help` for its own options)~%")
     (printf "  run --script <s.ss> [args]   run a script with the dependency environment~%")
     (printf "                               (loads <root>/.env; --env-file <p> overrides it)~%")
-    (printf "  env                          export CHEZSCHEMELIBDIRS + APP_ROOT + .env (eval it)~%")
+    (printf "  env                          export CHEZSCHEMELIBDIRS + .env (eval it)~%")
     (printf "  repl [--runtime skiff|chez]  interactive shell with library paths mounted~%")
     (printf "  pack [--runtime r]           assemble a source-less, self-contained distribution~%")
     (printf "  verify-pack [--target] <dir> re-hash a pack; --target also checks the target triple~%")

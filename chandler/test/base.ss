@@ -9,7 +9,6 @@
 
 (define-suite suite
   (re-exports-runtime-paths
-    (assert-true (procedure? app-root))
     (assert-true (procedure? resource-path))
     (assert-true (procedure? find-resource-path)))
 

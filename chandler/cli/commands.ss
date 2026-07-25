@@ -494,17 +494,15 @@
       (append base extra)))
 
   ;; .env 覆盖进程环境 —— 故在传给子进程的 env alist 里排在**最后**(env-prefix
-  ;; 是 shell 变量前缀,同名后者胜)。chandler 自己交接的 APP_ROOT 等排在前面。
+  ;; 是 shell 变量前缀,同名后者胜)。
   (define (env-with-dotenv root flags base-env)
     (append base-env (collect-dotenv root flags)))
 
   ;; ── env:输出依赖环境变量(eval "$(chandler env)")──
-  ;;   两个变量:库搜索路径,以及 APP_ROOT(库前缀 —— 资源与 native 都挂它下面)。
+  ;;   库搜索路径 + .env(D8:APP_ROOT 已去除,路径定位统一走 library-directories)。
   (define (cmd-env root flags)
     (let ([dirs (resolved-libdirs root)])
       (printf "export CHEZSCHEMELIBDIRS=\"~a\"~%" (libdirs->arg dirs))
-      (let ([e (app-root-env root)])
-        (unless (null? e) (printf "export APP_ROOT=\"~a\"~%" (cdar e))))
       ;; .env(C3):覆盖式,故放在最后 export —— 后 export 的值在 eval 后生效。
       (for-each (lambda (kv) (printf "export ~a=~a~%" (car kv) (shell-quote (cdr kv))))
                 (collect-dotenv root flags))
@@ -598,7 +596,7 @@
                field))
          body))
 
-  ;; ── run:库搜索路径 + APP_ROOT + 载 native + 跑脚本(设计同 repl)──
+  ;; ── run:库搜索路径 + 载 native + 跑脚本(设计同 repl)──
   ;; chandler run --script <target.ss> [args...]
   (define (cmd-run root flags positionals rest)
     (let ([script (or (flag flags 'script)
@@ -619,23 +617,7 @@
                         (append (list "-q" "--libdirs" (path-list dirs)
                                       "--script" preamble)
                                 script-args)
-                        (list (cons 'env (env-with-dotenv root flags (app-root-env root))))))))
-
-   ;; **dev 期不设 APP_ROOT**(C0,2026-07-24)。
-   ;;
-   ;; 它现在只服务生成的 native-loader 的候选 1(`$APP_ROOT/<mt>/<libpath>/native/`)。
-   ;; 而 C0 之后 dev 期的 native 分散在各 `_vendor/<dep>/_build/<mt>/` 里,
-  ;; **没有单一前缀能覆盖** —— 硬造一个只会让候选 1 恒 miss,等于留一条永远走不通的
-  ;; 分支。loader 的候选 2(扫 `(library-directories)` 各条目的 obj 侧)恰好命中:
-  ;; per-dep 对的 obj 侧正是 native 落点。资源定位(C1)同理已不读它。
-  ;;
-  ;; pack **仍然设**:那里 APP_ROOT 指向一个真前缀,且 boot / 全程序模式下
-  ;; library-directories 未必已设(designs/24 §约束 3),env 是唯一时序对得上的交接。
-  ;;
-  ;; 外层已显式设了就原样透传(用户或 pack 启动器先到且权威),否则一个都不加。
-  (define (app-root-env root)
-    (let ([v (getenv* "APP_ROOT")])
-      (if v (list (cons "APP_ROOT" v)) '())))
+                        (list (cons 'env (env-with-dotenv root flags '())))))))
 
   ;; ── repl:交互式 shell,自动挂库搜索路径(与 run/exec 同规则)──
   ;;   项目模式(lock 存在且有依赖):lib/ + path 源目录 + 项目库根 + 全局(项目最高优先)
@@ -651,7 +633,7 @@
       (let ([args (append (list "--libdirs" (path-list dirs))
                           (if (null? natives) '() (list (make-repl-preamble root natives))))])
         (run-foreground interp args
-                        (list (cons 'env (env-with-dotenv root flags (app-root-env root))))))))
+                        (list (cons 'env (env-with-dotenv root flags '())))))))
 
   ;; 运行时:--runtime > CHANDLER_RUNTIME > manifest 声明 skiff-only > 跟随 chandler 当前所在
   ;; repl 与 run/exec 同一套(interp-kind 已把"跟随当前运行时"的兜底内置进默认分支)。

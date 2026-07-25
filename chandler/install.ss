@@ -13,10 +13,10 @@
 ;;;   故库搜索挂**一对** (lib/src . lib/<mt>);消费方一条 pair 同时解析源码与对象。
 ;;;   path 依赖不进 vendor/lib,activate/run 时直挂其源目录(live)。
 ;;;
-;;;   **APP_ROOT 即这个前缀**(2026-07-23):`chandler run`/`repl`/`activate` 把它指向
-;;;   <project>/lib,pack 启动器指向包根 —— 三态同一形状,应用代码与 bake 生成的
-;;;   native-loader 都只认 `$APP_ROOT/<mt>/…` 与 `$APP_ROOT/src/resources/<app>/`
-;;;   一种拼法。生成 chandler-setup.ss 的旧做法已取消:启动统一走 `chandler run`。
+;;;   **前缀即这个 lib/**:`chandler run`/`repl`/`activate` 把它挂进
+;;;   library-directories,pack 同理挂包根 —— 三态同一形状。D8 起 APP_ROOT 环境
+;;;   变量完全去除,资源与 native 定位统一扫 library-directories。
+;;;   生成 chandler-setup.ss 的旧做法已取消:启动统一走 `chandler run`。
 
 (library (chandler install)
   (export install verify sync-status list-deps

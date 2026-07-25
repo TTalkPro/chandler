@@ -1,9 +1,8 @@
 #!chezscheme
 ;;; chandler/test/runtime-paths.ss --- (chandler runtime-paths) 测试
 ;;;
-;;; 2026-07-24:资源定位改为**扫 (library-directories) 的 src/obj 两侧**,不再
-;;; 依赖 APP_ROOT。四个旧 API(app-/lib- × 严格/可选)合并为 resource-path /
-;;; find-resource-path —— app 就是一个库,不再特殊。
+;;; 2026-07-24:资源定位**扫 (library-directories) 的 src/obj 两侧**。
+;;; D8:APP_ROOT 环境变量与 app-root/app-name API 已完全去除。
 
 (library (chandler test runtime-paths)
   (export suite)
@@ -14,17 +13,6 @@
           (chandler layout)
           (chandler util)
           (chandler fs))
-
-  ;; Chez 的 putenv 不能删除变量,清理时以空值恢复未设置状态。
-  (define (with-env name val thunk)
-    (let ([old (getenv name)])
-      (dynamic-wind
-        (lambda () (putenv name val))
-        thunk
-        (lambda () (putenv name (or old ""))))))
-
-  (define (with-app-root root thunk) (with-env "APP_ROOT" root thunk))
-  (define (with-app-name name thunk) (with-env "APP_NAME" name thunk))
 
   ;; 造一个前缀:<root>/src/resources/<ns>/<rel> 写入 content,返回该文件路径
   (define (put-resource! root ns rel content)
@@ -122,19 +110,6 @@
               (lambda ()
                 (assert-string= dir (resource-path '(myapp)))))))))
 
-    ;; ── 不依赖 APP_ROOT ──
-    ;; 这是本次改动的要点:APP_ROOT 指向别处、甚至指向一个没有该资源的目录,
-    ;; 只要前缀在 library-directories 上就照样命中。
-    (does-not-depend-on-app-root
-      (with-temp-dirs 2
-        (lambda (p elsewhere)
-          (let ([f (put-resource! p "myapp" "hello.txt" "hi")])
-            (with-app-root elsewhere
-              (lambda ()
-                (with-prefixes (list p)
-                  (lambda ()
-                    (assert-string= f (resource-path '(myapp) "hello.txt"))))))))))
-
     ;; ── 找不到 ──
     (missing-raises-with-search-list
       (with-temp-dirs 1
@@ -177,48 +152,5 @@
       (assert-raises (lambda () (resource-path "mylib" "a.txt")))
       (assert-raises (lambda () (resource-path '("mylib") "a.txt")))
       (assert-raises (lambda () (find-resource-path 'mylib "a.txt"))))
-
-    ;; ── app-root / app-name:仍在,但**不再参与资源定位** ──
-    (app-root-env-set
-      (with-app-root "/tmp/some-test-dir"
-        (lambda () (assert-string= "/tmp/some-test-dir" (app-root)))))
-
-    (app-root-env-empty
-      (with-app-root ""
-        (lambda () (assert-true (string? (app-root))))))
-
-    ;; app-name 认「这个前缀属于谁」:.chandler/ 下唯一条目
-    (app-name-from-sole-chandler-entry
-      (with-temp-dirs 1
-        (lambda (root)
-          (let ([m (join-paths root ".chandler" "myapp" "chandler-manifest.ss")])
-            (ensure-parent m)
-            (write-file m "(manifest (format 1))")
-            (with-app-root root
-              (lambda ()
-                (with-app-name ""
-                  (lambda () (assert-string= "myapp" (app-name))))))))))
-
-    ;; 多个条目(共享前缀装了多个应用)→ 认不出,返回 #f,不猜
-    (app-name-ambiguous-when-multiple-entries
-      (with-temp-dirs 1
-        (lambda (root)
-          (for-each
-            (lambda (app)
-              (let ([m (join-paths root ".chandler" app "chandler-manifest.ss")])
-                (ensure-parent m)
-                (write-file m "(manifest (format 1))")))
-            '("a" "b"))
-          (with-app-root root
-            (lambda ()
-              (with-app-name "" (lambda () (assert-false (app-name)))))))))
-
-    (app-name-env-wins
-      (with-temp-dirs 1
-        (lambda (root)
-          (with-app-root root
-            (lambda ()
-              (with-app-name "explicit"
-                (lambda () (assert-string= "explicit" (app-name)))))))))
 
     ))

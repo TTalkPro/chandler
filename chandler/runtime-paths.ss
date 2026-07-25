@@ -2,23 +2,12 @@
 ;;; chandler/runtime-paths.ss --- 应用 + 库资源定位 API(designs/11 §3-4,§7)
 
 (library (chandler runtime-paths)
-  (export app-root app-name
-          resource-path find-resource-path
+  (export resource-path find-resource-path
           define-resource-path-resolver)
   (import (chezscheme)
           (chandler util)
           (chandler layout)
           (chandler fs))
-
-  ;; APP_ROOT = 进程所依的**库前缀**(全局 ~/.local/share/chez · 项目自己的 lib/ ·
-  ;; 解开的 pack —— 三者同构)。由 `chandler run`/`repl`/`activate` 或 pack 启动器在
-  ;; 起进程前设好;未设置时退回从入口脚本位置推导(此时多半不是前缀,只能尽力)。
-  (define (app-root)
-    (or (getenv* "APP_ROOT")
-        (let ([parent (parent-dir (car (command-line)))])
-          (if (or (string=? parent "") (string=? parent "."))
-              "."
-              parent))))
 
   ;; 调用者只能传入单个安全路径段，不能预拼路径。
   (define (validate-resource-segment seg)
@@ -35,21 +24,6 @@
        (error 'runtime-paths "current-directory resource segment rejected" seg)]
       [(string-contains? seg "/")
        (error 'runtime-paths "resource segment with path separator rejected" seg)]))
-
-  ;; 应用名 —— 「这个前缀属于谁」。**不再参与资源定位**(2026-07-24:资源改为扫
-  ;; library-directories,见下),仅供需要辨认前缀归属的调用方。三级:
-  ;;   ① APP_NAME 显式;② <app-root>/.chandler/ 下的唯一条目(pack 恒只写一个);
-  ;;   ③ 取不到 → #f(不猜)。
-  (define (app-name)
-    (or (getenv* "APP_NAME")
-        (sole-chandler-entry (app-root))))
-
-  (define (sole-chandler-entry root)
-    (let ([d (join-paths root ".chandler")])
-      (and (file-directory? d)
-           (let ([es (filter (lambda (e) (file-directory? (join-paths d e)))
-                             (dir-entries d))])
-             (and (pair? es) (null? (cdr es)) (car es))))))
 
   ;; ══════════════════════════════════════════════════════════════════
   ;; 资源定位:**扫 (library-directories)**(2026-07-24 起的统一 API)
@@ -68,12 +42,11 @@
   ;;        <prefix>/src/resources/<libpath>/<segs>
   ;;      —— 覆盖「库从某个不在 library-directories 里的前缀被加载」的情形。
   ;;
-  ;; **为什么不再需要 APP_ROOT**:资源与库住在同一个前缀里,而进程要能 import 那个
+  ;; **为什么没有 APP_ROOT**:资源与库住在同一个前缀里,而进程要能 import 那个
   ;; 库,该前缀本来就必须在 library-directories 上 —— 那张表本身就是「我在对着哪些
   ;; 前缀跑」的权威答案,再要一个环境变量说同一件事是重复,还多一条会漂移的路径。
-  ;; (APP_ROOT 仍由 run/repl/activate 与 pack 启动器导出,但那是给**生成的
-  ;; native-loader** 用的候选 1 —— loader 可能在 library-invoke 期就跑,那时
-  ;; library-directories 未必已设,见 designs/24 §约束 3。两件事自此分开。)
+  ;; (D8:APP_ROOT 环境变量已完全去除,native-loader 同样只扫 library-directories,
+  ;; 见 chandler/native-build.ss。)
   ;;
   ;; obj 侧也扫:一个只挂了对象目录的前缀(src=obj 的字符串条目)照样能命中。
   ;; ══════════════════════════════════════════════════════════════════

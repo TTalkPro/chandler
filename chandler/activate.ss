@@ -9,7 +9,7 @@
 ;;; `(<lib> native-loader)` 自加载生效(loader 按 library-directories 的 obj 侧定位,
 ;;; 且惰性——不引用 FFI 就不 dlopen)。故 activate-natives 已降级为**兜底**:
 ;;; 只预加载「无生成 loader」的第三方库(见 install 的 native-load-paths)。
-;;; 注:日常启动统一走 `chandler run`(它同样挂这套路径并交接 APP_ROOT);(activate)
+;;; 注:日常启动统一走 `chandler run`(它同样挂这套路径);(activate)
 ;;; 是同一套规则的**进程内**入口,供已经持有 (chandler) 的脚本/REPL 使用。
 
 (library (chandler activate)
@@ -30,17 +30,8 @@
       [() (activate ".")]
       [(root)
        (gate-runtime! root)
-       (set-app-root! root)
        (library-directories (append (resolved-libdirs root) (library-directories)))
        (activate-natives root)]))
-
-  ;; APP_ROOT = 项目库前缀 <root>/lib(与 `chandler run`、pack 启动器同一约定,
-  ;; 2026-07-24 起只服务 native-loader —— 资源定位已改为扫 library-directories,
-  ;; designs/09、11)。已有值不覆盖:外层启动器先到且权威。
-  (define (set-app-root! root)
-    (let ([cur (getenv "APP_ROOT")])
-      (when (or (not cur) (string=? cur ""))
-        (putenv "APP_ROOT" (join-paths root (native-root))))))
 
   ;; 仅载 native —— 统一加载**兜底**:有 native-loader 的库自加载,不在此列
   (define activate-natives
