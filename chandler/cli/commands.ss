@@ -333,8 +333,11 @@
           (install-global root libdir meta version opts entry))
         ;; 2. 合并依赖源码 + 编译产物 + 资源(从 _vendor → 全局前缀)
         (merge-lib-to-global! root libdir)
-        ;; 3. 安装项目自身 resources(manifest 声明的)
-        (install-project-resources! root mf libdir)
+        ;; 3. 安装项目自身 resources(manifest 声明的)—— 落在 version-root 的
+        ;; src/resources/<ns>/ 下,与 pack 的 copy-resources! 同构,run.sps 的
+        ;; scan-libdirs 才能扫到(prefix-resource-dir 全局层的写法是 pre-C0 残留,
+        ;; 当时还没 version 嵌套,运行时找不到应用自己的资源)。
+        (install-project-resources! root mf libdir name version)
         ;; 4. 安装 manifest 到 <name>/<version>/.chandler/chandler-manifest.ss
         (let ([manifest-dir (join-paths (version-root libdir name version) ".chandler")])
           (ensure-dir manifest-dir)
@@ -376,10 +379,12 @@
     (let ([lpath (project-lock-path root)])
       (if (file-exists? lpath) (lock-deps (read-lock lpath)) '())))
 
-  ;; 安装项目自身的 resources(manifest 的 (resources ...) 声明)
-  (define (install-project-resources! root mf libdir)
-    (let ([resources (manifest-resources mf)]
-          [name (manifest-name mf)])
+  ;; 安装项目自身的 resources(manifest 的 (resources ...) 声明)。
+  ;; 落在 <libdir>/<name>/<version>/src/resources/<libpath>/ —— 与 pack 的
+  ;; copy-resources! 同构(nested layout):run.sps 的 scan-libdirs 只扫
+  ;; <root>/<name>/<version>/{src,<mt>},不扫全局 <libdir>/src/,故必须嵌套。
+  (define (install-project-resources! root mf libdir name version)
+    (let ([resources (manifest-resources mf)])
       (when resources
         (for-each
           (lambda (entry)
@@ -387,7 +392,9 @@
                    [rel-path (cdr entry)]
                    [src-dir (join-paths root rel-path)]
                    [libpath (string-join (map symbol->string libref) "/")]
-                   [dst-dir (prefix-resource-dir libdir libpath)])
+                   [dst-dir (src-resource-dir
+                              (join-paths (version-root libdir name version) "src")
+                              libpath)])
               (when (file-directory? src-dir)
                 (ensure-dir dst-dir)
                 (let ([pre (string-append src-dir "/")])
