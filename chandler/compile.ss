@@ -177,7 +177,7 @@
   ;;   —— 这正是 mtime 抓不到的。
   ;;
   ;;   名字:bake 里叫 `manifest`,但 chandler 的 "manifest" 是包清单
-  ;;   (chandler-manifest.ss / manifest.lock),同名两义会害人,故一律 fp- 前缀。
+  ;;   (chandler-manifest.ss / chandler-manifest.lock),同名两义会害人,故一律 fp- 前缀。
   ;;   磁盘文件名保持 `.bake-manifest` 不变 —— 过渡期 bake 子进程仍可能写它,
   ;;   改名只会让双方各自重编一遍。
   ;; ====================================================================

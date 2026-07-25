@@ -71,7 +71,7 @@
           (write-file (string-append app "/main.ss")
             "(import (chandler)) (activate) (import (b)) (display b-ok)")
           ;; 从 app 目录跑;--libdirs 指向 chandler 仓库根,(chandler) 可解析;
-          ;; activate 读 ./manifest.lock 把 lib/b prepend,(import (b)) 随后解析成功
+          ;; activate 读 ./chandler-manifest.lock 把 lib/b prepend,(import (b)) 随后解析成功
           (let ([r (run-capture "scheme"
                      (list "-q" "--libdirs" repo-root "--script" "main.ss")
                      (list (cons 'cwd app)))])

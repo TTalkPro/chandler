@@ -106,4 +106,64 @@
     (resources-accessor
       (let ([rs (list (cons '(http) "resources"))])
         (assert-equal rs (locked-dep-resources
-                          (ldr 'http '() '() rs)))))))
+                          (ldr 'http '() '() rs)))))
+
+    ;; ── v3 files 字段(D15)──
+
+    (files-default-empty
+      ;; 4-arg make-lock → files 缺省为 '()
+      (let ([lk (make-lock 1 "x" "0.1.0" '())])
+        (assert-equal '() (lock-files lk))))
+
+    (files-explicit
+      (let* ([fls (list (cons "src/a.ss" "h1") (cons "ta6le/a.so" "h2"))]
+             [lk (make-lock 1 "x" "0.1.0" '() fls)])
+        (assert-equal 2 (length (lock-files lk)))
+        (assert-equal fls (lock-files lk))))
+
+    (files-with-files
+      (let* ([lk0 (make-lock 1 "x" "0.1.0" '())]
+             [fls (list (cons "src/a.ss" "h1"))]
+             [lk1 (with-files lk0 fls)])
+        (assert-equal fls (lock-files lk1))))
+
+    (files-sha256-lookup
+      (let* ([fls (list (cons "src/a.ss" "h1") (cons "ta6le/a.so" "h2"))]
+             [lk (make-lock 1 "x" "0.1.0" '() fls)])
+        (assert-string= "h1" (lock-file-sha256 lk "src/a.ss"))
+        (assert-string= "h2" (lock-file-sha256 lk "ta6le/a.so"))
+        (assert-false (lock-file-sha256 lk "missing"))))
+
+    (files-roundtrip
+      (let* ([fls (list (cons "src/myapp.ss" "deadbeef")
+                          (cons "ta6le/myapp.so" "cafebabe")
+                          (cons "src/myapp/resources/hello.txt" "1234abcd"))]
+             [lk0 (make-lock 1 "abcdef" ">=0.1.4" '() fls)]
+             [d (lock->datum lk0)]
+             [lk1 (datum->lock d)])
+        (assert-equal fls (lock-files lk1))))
+
+    (files-empty-not-in-datum
+      ;; 空 files → datum 里不写 (files ...)
+      (let* ([lk (make-lock 1 "x" "0.1.0" '())]
+             [d (lock->datum lk)])
+        (assert-false (and (pair? d) (memq 'files (map car (cdr d)))))))
+
+    (files-v2-backcompat
+      ;; v2 lock 无 files 字段 → 读回 '()
+      (let* ([v2-datum '(lock (format 1) (manifest-sha256 "abc") (chandler ">=0.1")
+                              (resolved (mylib (source (git "https://x"))
+                                               (pin (tag "v1")) (rev "abc")
+                                               (deps) (natives))))]
+             [lk (datum->lock v2-datum)])
+        (assert-equal '() (lock-files lk))))
+
+    (files-bad-entry
+      (let ([bad-datum '(lock (format 1) (manifest-sha256 "x") (chandler "x")
+                              (resolved)
+                              (files (not-a-string (sha256 "x"))))])
+        (assert-raises (lambda () (datum->lock bad-datum))))
+      (let ([bad-datum '(lock (format 1) (manifest-sha256 "x") (chandler "x")
+                              (resolved)
+                              (files ("a.ss" (not-sha256 "x"))))])
+        (assert-raises (lambda () (datum->lock bad-datum)))))))

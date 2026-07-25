@@ -1,9 +1,10 @@
 #!chezscheme
-;;; chandler/lock.ss --- 读写 manifest.lock + 拓扑序(designs/02 §2, 03 §3-4)
+;;; chandler/lock.ss --- 读写 chandler-manifest.lock + 拓扑序(designs/06 §6)
 ;;;
 ;;; lock 是机器生成的可复现之源:每依赖记确切 rev + 来源 + pin + deps + natives。
+;;; v3 起新增 (files ...) 字段(D15):此 version 自身的文件清单 + sha256,取代
+;;; v2 的 per-version `.chandler/registry/<name>.ss`。
 ;;; canonical 写(字典序 + 固定缩进,来自 (chandler sexp))保证「同输入 → 同字节」。
-;;; bake 反向依赖本库读 lock 排 native/编译序(designs/07 §5)。
 
 (library (chandler lock)
   (export make-locked-dep locked-dep? locked-dep-name
@@ -12,6 +13,7 @@
           locked-dep-rev locked-dep-deps locked-dep-natives
           locked-dep-scope locked-dep-resources
           make-lock lock? lock-format lock-manifest-sha256 lock-chandler lock-deps
+          lock-files with-files lock-file-sha256
           lock->datum datum->lock write-lock read-lock
           manifest-content-sha256 lock-fresh?
           topo-order lock-ref)
@@ -29,19 +31,46 @@
             deps natives scope resources
             provenance))   ; v2:记录来源详情(git rev 字符串 | prebuilt 列表 | #f)
 
-  (define-record-type lock
-    (fields format manifest-sha256 chandler deps))   ; deps = (locked-dep ...)
+  ;; 用 3-arg 形:lock 是类型名,make-lock-rec 是自动构造,lock? 是谓词。
+  ;; make-lock 留给我们 case-lambda(支持 files 缺省)。
+  (define-record-type (lock make-lock-rec lock?)
+    (fields format manifest-sha256 chandler deps files))   ; v3:files = (rel . sha256) list;() 表空
+
+  (define make-lock
+    (case-lambda
+      [(fmt sha ch deps)            (make-lock-rec fmt sha ch deps '())]
+      [(fmt sha ch deps files)      (make-lock-rec fmt sha ch deps files)]))
+
+  ;; ── files 字段访问(辅助) ──
+  (define (with-files lk files)
+    (make-lock-rec (lock-format lk) (lock-manifest-sha256 lk) (lock-chandler lk)
+                   (lock-deps lk) files))
+
+  (define (lock-file-sha256 lk rel)
+    (let loop ([fs (lock-files lk)])
+      (cond
+        [(null? fs) #f]
+        [(string=? (caar fs) rel) (cdar fs)]
+        [else (loop (cdr fs))])))
 
   ;; ── 序列化 ──
   (define (lock->datum lk)
-    `(lock
-       (format ,(lock-format lk))
-       (manifest-sha256 ,(lock-manifest-sha256 lk))
-       (chandler ,(lock-chandler lk))
-       (resolved
-         ,@(map locked-dep->datum
-                (list-sort (lambda (a b) (string<? (name-str a) (name-str b)))
-                           (lock-deps lk))))))
+    (let ([base `(lock
+                   (format ,(lock-format lk))
+                   (manifest-sha256 ,(lock-manifest-sha256 lk))
+                   (chandler ,(lock-chandler lk))
+                   (resolved
+                     ,@(map locked-dep->datum
+                            (list-sort (lambda (a b) (string<? (name-str a) (name-str b)))
+                                       (lock-deps lk)))))]
+          [files (lock-files lk)])
+      (if (null? files)
+          base
+          (append base
+                  (list `(files
+                           ,@(map (lambda (f)
+                                    `(,(car f) (sha256 ,(cdr f))))
+                                  files)))))))
 
   (define (name-str d) (symbol->string (locked-dep-name d)))
 
@@ -64,11 +93,22 @@
 
   (define (datum->lock datum)
     (let ([body (expect-tag datum 'lock 'datum->lock)])
-      (make-lock
+      (make-lock-rec
         (or (field-ref body 'format) 1)
         (field-ref body 'manifest-sha256)
         (field-ref body 'chandler)
-        (map datum->locked-dep (field-ref* body 'resolved)))))
+        (map datum->locked-dep (field-ref* body 'resolved))
+        ;; v3:files 字段缺省为 '()(向后兼容 v2 lock)
+        (map datum->file-entry (field-ref* body 'files)))))
+
+  ;; file entry datum 形:("<rel>" (sha256 "<hex>"))
+  (define (datum->file-entry d)
+    (unless (and (pair? d) (string? (car d))
+                 (pair? (cdr d)) (pair? (cadr d)) (eq? (caadr d) 'sha256)
+                 (pair? (cdadr d)) (string? (cadadr d)))
+      (error 'datum->file-entry
+             "file entry must be (\"<rel>\" (sha256 \"<hex>\"))" d))
+    (cons (car d) (cadadr d)))
 
   (define (datum->locked-dep item)
     (let* ([name (car item)]

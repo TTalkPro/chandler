@@ -309,7 +309,7 @@
             [version (or (manifest-version mf) "0.0.0")])
         ;; 前置:deps + build 必须已完成
         (unless (file-exists? (project-lock-path root))
-          (error 'install "manifest.lock not found; run `chandler deps` first"))
+          (error 'install "chandler-manifest.lock not found; run `chandler deps` first"))
         ;; 1. 安装项目自身(经 registry:冲突检测 + hash 追踪 + 清卸)
         (let* ([mapp (manifest-app mf)]
                [entry (and mapp (app-entry mapp))]

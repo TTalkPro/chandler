@@ -31,7 +31,7 @@
           (chandler fetch))
 
   (define (project-manifest-path root) (join-paths root "chandler-manifest.ss"))
-  (define (project-lock-path root) (join-paths root "manifest.lock"))
+  (define (project-lock-path root) (join-paths root "chandler-manifest.lock"))
   (define (vendor-dir root name) (join-paths (join-paths root "_vendor") (symbol->string name)))
   (define (lib-dir root name) (vendor-dir root name))   ; 兼容:依赖源码树现居 _vendor/
 
@@ -262,7 +262,7 @@
   (define (verify root)
     (let ([lpath (project-lock-path root)])
       (unless (file-exists? lpath)
-        (error 'verify "no manifest.lock; run `chandler deps` first" root))
+        (error 'verify "no chandler-manifest.lock; run `chandler deps` first" root))
       (let ([lk (read-lock lpath)] [ok #t])
         (for-each
           (lambda (d)
