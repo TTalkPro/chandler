@@ -790,9 +790,13 @@
              [root (if (and (> (string-length out) 0) (char=? (string-ref out 0) #\/))
                        (join-paths out (pack-dir-name name version))
                        (join-paths project out (pack-dir-name name version)))]
-             [libdir (pack-libdir root)])
+             ;; temp sibling + rename(2026-07-26):全程在 <out>.tmp.<pid>/ 兄弟目录
+             ;; 里组装(与 <out> 同文件系统,rename 才原子),完工才换到 <out>/。
+             ;; 中途崩溃/失败只留 temp,最终位置绝不留半截包;pid 后缀防并发撞名。
+             [tmp-root (string-append root ".tmp." (number->string (get-process-id)))]
+             [libdir (pack-libdir tmp-root)])
         (preflight project mt locked)
-        (rm-rf root)
+        (guard (e [#t (rm-rf tmp-root) (raise e)])
         (printf "pack ~a~%" root)
         ;; ── 阶段 1:载荷(与 install 同一管线,I2 by construction)──
         ;; app 自身 + 各 dep 装到 share/chez/<name>/<version>/{src,<mt>}/,
@@ -809,11 +813,10 @@
         (write-app-manifest! project libdir name version entry mainp)
         ;; 入口库必须真的在包里 —— 否则打出的包一路正常,到启动 import 才报
         ;; "library (x) not found"。这一步把那个失败提前到打包期。
-        ;; lib pack 跳过 entry 检查(无 entry)
+        ;; lib pack 跳过 entry 检查(无 entry);失败由外层 guard 清掉 temp。
         (unless lib?
           (let ([e (join-paths (version-root libdir name version) mt (entry-so-rel entry))])
             (unless (file-exists? e)
-              (rm-rf root)
               (error 'pack
                      (format "entry library ~a has no compiled object at ~a~%  (pass --entry '(<lib>)', or run `chandler build` if it is simply not built)"
                              entry e)))))
@@ -829,24 +832,43 @@
             (let* ([exe (skiff-exe-path)]
                    [bd  (skiff-boot-dir exe)]
                    [sv  (probe-skiff-version exe)])
-              (copy-exe! exe (join-paths (pack-bin-dir root) (exe-name "skiff")))
-              (for-each (lambda (b) (copy-file (join-paths bd b) (join-paths (pack-boot-dir root) b)))
+              (copy-exe! exe (join-paths (pack-bin-dir tmp-root) (exe-name "skiff")))
+              (for-each (lambda (b) (copy-file (join-paths bd b) (join-paths (pack-boot-dir tmp-root) b)))
                         '("petite.boot" "scheme.boot" "skiff.boot"))
-              (write-launcher! root name (launcher-sh-skiff name version) (launcher-ps1-skiff name version))
-              (write-pack-manifest! root name version rt entry mainp
+              (write-launcher! tmp-root name (launcher-sh-skiff name version) (launcher-ps1-skiff name version))
+              (write-pack-manifest! tmp-root name version rt entry mainp
                                     (probe-chez-version exe) mt sv))
             (let* ([exe (chez-exe-path)]
                    [ver (probe-chez-version exe)]
                    [csv (chez-csv-dir exe ver)])
-              (copy-exe! exe (join-paths (pack-bin-dir root) (exe-name "scheme")))
-              (copy-file (join-paths csv "petite.boot") (join-paths (pack-boot-dir root) "petite.boot"))
+              (copy-exe! exe (join-paths (pack-bin-dir tmp-root) (exe-name "scheme")))
+              (copy-file (join-paths csv "petite.boot") (join-paths (pack-boot-dir tmp-root) "petite.boot"))
               (when (eq? rt 'scheme)
-                (copy-file (join-paths csv "scheme.boot") (join-paths (pack-boot-dir root) "scheme.boot")))
-              (write-launcher! root name (launcher-sh-stock rt name version) (launcher-ps1-stock rt name version))
-              (write-pack-manifest! root name version rt entry mainp ver mt #f)))
+                (copy-file (join-paths csv "scheme.boot") (join-paths (pack-boot-dir tmp-root) "scheme.boot")))
+              (write-launcher! tmp-root name (launcher-sh-stock rt name version) (launcher-ps1-stock rt name version))
+              (write-pack-manifest! tmp-root name version rt entry mainp ver mt #f)))
             ) ;; close unless lib?
-          (printf "packed ~a ~a -> ~a~%" name version root)
+          ;; ── 阶段 3:原子替换 —— temp 完工,换到最终位置 ──
+          (commit-pack-output! tmp-root root))
+        (printf "packed ~a ~a -> ~a~%" name version root)
         0)))
+
+  ;; 原子替换:tmp-root → root。root 已存在则先 rename 到 <root>.old.<pid> 再删
+  ;; (同文件系统内 rename 原子:消费者要么看到旧包要么看到新包,没有半截)。
+  ;; Windows 兼容:rename 目标已存在会失败,故 old 先清(带 guard)。
+  ;; 回滚:tmp→root 失败则把 old 挪回 root(旧包保住);temp 留给外层 guard 清。
+  (define (commit-pack-output! tmp-root root)
+    (let ([old (string-append root ".old." (number->string (get-process-id)))])
+      (guard (e [#t (void)]) (rm-rf old))
+      (if (or (file-exists? root) (file-directory? root))
+          (begin
+            (rename-file root old)
+            (guard (e [#t
+                       (guard (e2 [#t (void)]) (rename-file old root))
+                       (raise e)])
+              (rename-file tmp-root root))
+            (rm-rf old))
+          (rename-file tmp-root root))))
 
   ;; _vendor/chandler/_build/<mt>/chandler/<sub>.so → <libdir>/chandler/<version>/<mt>/chandler/<sub>.so。
   ;; **来源 = _vendor/chandler/_build/<mt>/**(BUG-1,2026-07-24):与 build-chandler-runtime!
@@ -919,11 +941,17 @@
 
   ;; ═══════════════════════════════════════════════════════════════════
   ;; §9 verify-pack:完整性 + (可选)format/target 校验(designs/09 §9, 10 §7)
-  ;;   完整性:重算清单里每个文件的 sha256 + size 并比对;MISSING/CHANGED 致命,
-  ;;   EXTRA 只报告。L1 加两块(designs/10 §7):
+  ;;   完整性(2026-07-26 严格化):顶层必须 (pack …)(expect-tag,受控错);
+  ;;   (files …) 缺失/为空即 65 —— 没有文件清单的包无法证明完整性(旧行为把
+  ;;   缺失当空表 → 所有文件 EXTRA 却不计 bad → 对任何包开绿灯)。每个 entry 必须
+  ;;   ("<rel>" (sha256 "<hex>") (size <n>)),缺 hash/size 即 fatal(旧行为是
+  ;;   (and want-h …) 条件检查:没声明 hash 的 entry 只要文件在就过)。
+  ;;   MISSING/CHANGED/INVALID/EXTRA 全部计入 bad —— EXTRA 曾只报告,但不在
+  ;;   清单里的文件可能是注入载荷,必须致命。
+  ;;   L1 加两块(designs/10 §7):
   ;;     verify-format!       (format N) > pack-format-supported(=1)→ 70;
   ;;     --target             对当前 runtime 跑 designs/10 §4 全矩阵 → 78。
-  ;;   退出码(sysexits):0 全过;65 完整性错(EX_DATAERR,对齐 skiff/app.ss);
+  ;;   退出码(sysexits):0 全过;65 完整性/schema 错(EX_DATAERR,对齐 skiff/app.ss);
   ;;   70 format 超出(EX_SOFTWARE);78 --target 不符(EX_CONFIG)。
   ;;   与 bootstrap 共用措辞与单行 s-expr 诊断(那边是自含生成码,这边直调
   ;;   (chandler runtime)/(chandler version);决策表是同一份)。
@@ -957,31 +985,49 @@
                                          (list 'supported pack-format-supported))))
              70))))
 
-  ;; 完整性:MISSING/CHANGED 记 bad,EXTRA 只报告。返回 bad 计数。
+  ;; entry schema:必须 ("<rel>" (sha256 "<hex>") (size <n>))。返回 #f(合法)
+  ;; 或缺失原因 symbol。缺任一项 → 该 entry 计 bad(严格化:不再「文件在就过」)。
+  (define (verify-entry-schema e)
+    (cond
+      [(not (and (pair? e) (string? (car e)))) 'malformed-entry]
+      [(not (string? (attr 'sha256 e))) 'missing-sha256]
+      ;; integer? 是全类型安全谓词(#f/"x" → #f),exact? 不是(非 number 即抛)
+      [(let ([s (attr 'size e)]) (not (and (integer? s) (exact? s)))) 'missing-size]
+      [else #f]))
+
+  ;; 完整性:MISSING/CHANGED/INVALID(schema)/EXTRA 全部记 bad(致命)。返回 bad 计数。
   (define (verify-pack-integrity! root files)
     (let ([declared '()] [ok 0] [bad 0] [extra 0])
       (for-each
         (lambda (e)
-          (let* ([rel (car e)]
-                 [want-h (attr 'sha256 e)]
-                 [want-s (attr 'size e)]
-                 [abs (join-paths root rel)])
-            (set! declared (cons rel declared))
-            (cond
-              [(not (file-exists? abs))
-               (set! bad (+ bad 1)) (fprintf (current-error-port) "  MISSING ~a~%" rel)]
-              [(and want-h (not (string=? want-h (sha256-file abs))))
-               (set! bad (+ bad 1)) (fprintf (current-error-port) "  CHANGED ~a (sha256 mismatch)~%" rel)]
-              [(and want-s (not (= want-s (file-size abs))))
-               (set! bad (+ bad 1)) (fprintf (current-error-port) "  CHANGED ~a (size mismatch)~%" rel)]
-              [else (set! ok (+ ok 1))])))
+          ;; rel 可辨即先登记:schema 不合格的 entry 不该再让同名文件被二次计 EXTRA
+          (when (and (pair? e) (string? (car e)))
+            (set! declared (cons (car e) declared)))
+          (let ([schema-bad (verify-entry-schema e)])
+            (if schema-bad
+                (begin
+                  (set! bad (+ bad 1))
+                  (fprintf (current-error-port) "  INVALID ~s (~a)~%" e schema-bad))
+                (let* ([rel (car e)]
+                       [want-h (attr 'sha256 e)]
+                       [want-s (attr 'size e)]
+                       [abs (join-paths root rel)])
+                  (cond
+                    [(not (file-exists? abs))
+                     (set! bad (+ bad 1)) (fprintf (current-error-port) "  MISSING ~a~%" rel)]
+                    [(not (string=? want-h (sha256-file abs)))
+                     (set! bad (+ bad 1)) (fprintf (current-error-port) "  CHANGED ~a (sha256 mismatch)~%" rel)]
+                    [(not (= want-s (file-size abs)))
+                     (set! bad (+ bad 1)) (fprintf (current-error-port) "  CHANGED ~a (size mismatch)~%" rel)]
+                    [else (set! ok (+ ok 1))])))))
         files)
-      ;; pack.manifest 自己从不被声明(最后写),排除掉
+      ;; pack.manifest 自己从不被声明(最后写),排除掉;其余未声明文件 = EXTRA,致命
       (for-each
         (lambda (abs)
           (let ([rel (strip-prefix abs (string-append root "/"))])
             (unless (or (string=? rel "pack.manifest") (member rel declared))
               (set! extra (+ extra 1))
+              (set! bad (+ bad 1))
               (fprintf (current-error-port) "  EXTRA ~a (not in manifest)~%" rel))))
         (files-under root))
       (printf "verify ~a: ~a ok, ~a bad, ~a extra~%" root ok bad extra)
@@ -1067,9 +1113,19 @@
                                           (reverse bad))))))
                  78)))])))
 
-  ;; verify-pack path [target?] → 退出码。顺序:format → 完整性 → --target
-  ;; (format 太新时清单结构不可信,先于一切;--target 是「这包能不能在本机跑」
-  ;; 的附加检查,只在完整性过关后有意义)。
+  ;; (files …) 缺失/为空/非列表 → 65 EX_DATAERR:没有文件清单的包无法证明完整性。
+  ;; 旧行为把缺失当空表 → 所有文件成 EXTRA 却不计 bad → 对任何包都开绿灯。
+  (define (verify-pack-files-field! files)
+    (and (or (not files) (null? files) (not (list? files)))
+         (begin
+           (%pack-err "manifest missing or empty (files ...)")
+           (%pack-err-sexp '(chandler-pack-error (manifest-invalid (files-missing))))
+           65)))
+
+  ;; verify-pack path [target?] → 退出码。顺序:format → files 清单在否 → 完整性 →
+  ;; --target(format 太新时清单结构不可信,先于一切;没有 (files …) 则完整性无从
+  ;; 谈起;--target 是「这包能不能在本机跑」的附加检查,只在完整性过关后有意义)。
+  ;; 顶层 datum 经 expect-tag:不是 (pack …) → 受控错(不再是低级 cdr 错)。
   (define (verify-pack path . maybe-target?)
     (let ([target? (and (pair? maybe-target?) (car maybe-target?))])
       (let* ([is-mf (string-suffix? "pack.manifest" path)]
@@ -1077,15 +1133,17 @@
              [mf    (if is-mf path (join-paths path "pack.manifest"))])
         (unless (file-exists? mf)
           (error 'verify-pack (format "pack.manifest not found at ~a" mf)))
-        (let* ([form  (call-with-input-file mf read)]
-               [fields (cdr form)]
-               [files (let ([c (assq 'files fields)]) (if c (cdr c) '()))])
+        (let* ([form   (read-datum-file mf)]
+               [fields (expect-tag form 'pack 'verify-pack)]
+               [files  (let ([c (assq 'files fields)]) (and c (cdr c)))])
           (or (verify-pack-format! fields)
+              (verify-pack-files-field! files)
               (let ([bad (verify-pack-integrity! root files)])
                 (cond
                   [(> bad 0) 65]
                   [target? (or (verify-pack-target! fields) 0)]
                   [else 0])))))))
 
+  ;; (cdr e) 里找 (key val);项缺 val(如 (sha256) 裸项)→ #f,不崩
   (define (attr key e)
-    (let ([c (assq key (cdr e))]) (and c (cadr c)))))
+    (let ([c (assq key (cdr e))]) (and c (pair? (cdr c)) (cadr c)))))

@@ -281,7 +281,9 @@
 
     ;; 缺 (format …) 视为 0(designs/10 §7a:与 bootstrap 缺省一致)→ 不拦
     (verify-pack-format-default-0
-      (let ([d (make-verify-pack-fixture! "(pack (files))")])
+      (let ([d (make-verify-pack-fixture!
+                 (string-append "(pack (files " fixture-file-entry "))"))])
+        (put-fixture-file! d)
         (let-values ([(rc err) (run-verify-pack d)])
           (assert-equal 0 rc))))
 
@@ -297,8 +299,9 @@
     ;; --target:machine-type 不符 → 78 EX_CONFIG + target-mismatch s-expr
     (verify-pack-target-machine-type-mismatch
       (let ([d (make-verify-pack-fixture!
-                 (format "(pack (format 1) (target (machine-type bogus-mt) (chez-version \"~a\") (skiff-compat \">=0.0.0\")) (files))"
-                         (chez-version-string)))])
+                 (format "(pack (format 1) (target (machine-type bogus-mt) (chez-version \"~a\") (skiff-compat \">=0.0.0\")) (files ~a))"
+                         (chez-version-string) fixture-file-entry))])
+        (put-fixture-file! d)
         (let-values ([(rc err) (run-verify-pack d #t)])
           (assert-equal 78 rc)
           (assert-true (has? err "machine-type"))
@@ -307,8 +310,9 @@
     ;; --target:chez-version 不符 → 78(fasl ABI 绑版本,永不放宽)
     (verify-pack-target-chez-version-mismatch
       (let ([d (make-verify-pack-fixture!
-                 (format "(pack (format 1) (target (machine-type ~a) (chez-version \"0.0.0-bogus\") (skiff-compat \">=0.0.0\")) (files))"
-                         (machine-type)))])
+                 (format "(pack (format 1) (target (machine-type ~a) (chez-version \"0.0.0-bogus\") (skiff-compat \">=0.0.0\")) (files ~a))"
+                         (machine-type) fixture-file-entry))])
+        (put-fixture-file! d)
         (let-values ([(rc err) (run-verify-pack d #t)])
           (assert-equal 78 rc)
           (assert-true (has? err "chez-version"))
@@ -318,8 +322,9 @@
     ;; (designs/10 §4 第 3 行);若恰好在 skiff 0.4.1 上跑则合法通过
     (verify-pack-target-skiff-required-on-stock
       (let ([d (make-verify-pack-fixture!
-                 (format "(pack (format 1) (target (machine-type ~a) (chez-version \"~a\") (skiff-version \"0.4.1\")) (files))"
-                         (machine-type) (chez-version-string)))])
+                 (format "(pack (format 1) (target (machine-type ~a) (chez-version \"~a\") (skiff-version \"0.4.1\")) (files ~a))"
+                         (machine-type) (chez-version-string) fixture-file-entry))])
+        (put-fixture-file! d)
         (let-values ([(rc err) (run-verify-pack d #t)])
           (if (and (eq? (current-runtime) 'skiff) (equal? (runtime-version) "0.4.1"))
               (assert-equal 0 rc)
@@ -332,18 +337,121 @@
     ;; --target:(skiff-compat ">=0.0.0") 全开 → stock / skiff 两种 runtime 都过
     (verify-pack-target-skiff-compat-wildcard-passes
       (let ([d (make-verify-pack-fixture!
-                 (format "(pack (format 1) (target (machine-type ~a) (chez-version \"~a\") (skiff-compat \">=0.0.0\")) (files))"
-                         (machine-type) (chez-version-string)))])
-        (let-values ([(rc err) (run-verify-pack d #t)])
+                 (format "(pack (format 1) (target (machine-type ~a) (chez-version \"~a\") (skiff-compat \">=0.0.0\")) (files ~a))"
+                         (machine-type) (chez-version-string) fixture-file-entry))])
+        (put-fixture-file! d)
+        (let-values ([(rc err) (run-verify-pack d)])
           (assert-equal 0 rc))))
+
+    ;; ── verify-pack 严格化(2026-07-26):expect-tag / files 强制 / entry hash+size /
+    ;; EXTRA 致命。旧行为:顶层直接 cdr(非 pair 崩低级错)、(files …) 缺失当空表、
+    ;; entry 无 hash 只要文件在就过、EXTRA 不计 bad —— 四条都等于对坏包开绿灯。──
+
+    ;; 顶层 datum 必须是 (pack …):别的 tag / 非 pair → 受控 error(非低级 cdr 错)。
+    ;; 不用 assert-raises —— 它对「没抛」是假绿;这里显式钉 error 的措辞,
+    ;; 顺便区分受控错(expect-tag)与低级错(cdr of 42)。
+    (verify-pack-rejects-non-pack-toplevel
+      (for-each
+        (lambda (manifest-str)
+          (let ([d (make-verify-pack-fixture! manifest-str)])
+            (guard (e [#t (assert-true (has? (condition-message e) "expected (pack"))])
+              (verify-pack d)
+              (assert-true #f))))
+        '("(manifest (format 1) (name \"x\"))" "42")))
+
+    ;; (files …) 整个缺失 → 65(旧:当空表 → 所有文件 EXTRA → 不计 bad → 绿)
+    (verify-pack-missing-files-section-is-fatal
+      (let ([d (make-verify-pack-fixture! "(pack (format 1))")])
+        (let-values ([(rc err) (run-verify-pack d)])
+          (assert-equal 65 rc)
+          (assert-true (has? err "(files-missing)")))))
+
+    ;; (files) 为空 → 65:真实包不可能零文件,空清单无法证明完整性
+    (verify-pack-empty-files-section-is-fatal
+      (let ([d (make-verify-pack-fixture! "(pack (format 1) (files))")])
+        (let-values ([(rc err) (run-verify-pack d)])
+          (assert-equal 65 rc)
+          (assert-true (has? err "missing or empty (files")))))
+
+    ;; entry 缺 (sha256 …) → 致命(旧:文件在就过);文件内容完全匹配也救不回来
+    (verify-pack-entry-missing-sha256-is-fatal
+      (let* ([d (make-verify-pack-fixture!
+                  "(pack (format 1) (files (\"a.txt\" (size 3))))")]
+             [_ (put! (join-paths d "a.txt") "xyz")])
+        (let-values ([(rc err) (run-verify-pack d)])
+          (assert-equal 65 rc)
+          (assert-true (has? err "INVALID"))
+          (assert-true (has? err "a.txt"))
+          (assert-true (has? err "missing-sha256")))))
+
+    ;; entry 缺 (size …) → 致命
+    (verify-pack-entry-missing-size-is-fatal
+      (let* ([d (make-verify-pack-fixture!
+                  (string-append "(pack (format 1) (files (\"a.txt\" (sha256 \"" fixture-file-sha256 "\"))))"))]
+             [_ (put! (join-paths d "a.txt") "hello")])
+        (let-values ([(rc err) (run-verify-pack d)])
+          (assert-equal 65 rc)
+          (assert-true (has? err "INVALID"))
+          (assert-true (has? err "missing-size")))))
+
+    ;; EXTRA 文件计入 bad(致命):不在清单里的文件可能是注入载荷(旧:只报告不拦)
+    (verify-pack-extra-file-is-fatal
+      (let* ([d (make-verify-pack-fixture!
+                  (string-append "(pack (format 1) (files " fixture-file-entry "))"))]
+             [_ (put-fixture-file! d)]
+             [_ (put! (join-paths d "evil.txt") "payload")])
+        (let-values ([(rc err) (run-verify-pack d)])
+          (assert-equal 65 rc)
+          (assert-true (has? err "EXTRA evil.txt")))))
+
+    ;; ── pack 输出原子化(2026-07-26):temp sibling + rename ──
+
+    ;; 成功后不留 temp / backup 目录(dist/ 里只有最终包目录)
+    (pack-temp-dir-cleaned-up-on-success
+      (let* ([app (make-app '())]
+             [_ (fake-build! app "myapp")])
+        (pack-until-runtime app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . petite)))
+        (for-each
+          (lambda (e)
+            (assert-false (has? e ".tmp."))
+            (assert-false (has? e ".old.")))
+          (dir-entries (join-paths app "dist")))))
+
+    ;; 失败(入口库无编译产物)→ 已存在的旧包原样保留,temp 清掉
+    ;; (旧行为:开局 rm-rf root —— 失败时旧包也没了,原位只剩半截)
+    (pack-failure-keeps-existing-output-and-cleans-temp
+      (let* ([app (make-app '())]
+             [_ (fake-build! app "myapp")]
+             [out (pack-out app "myapp" "1.0")])
+        (put! (join-paths out "sentinel.txt") "old-pack")
+        (assert-raises
+          (lambda () (pack app '((name . "myapp") (version . "1.0") (runtime . petite) (entry . (nosuch))))))
+        (assert-string= "old-pack" (read-file (join-paths out "sentinel.txt")))
+        (for-each
+          (lambda (e)
+            (assert-false (has? e ".tmp."))
+            (assert-false (has? e ".old.")))
+          (dir-entries (join-paths app "dist")))))
+
+    ;; 成功重打包 = 原子替换:旧内容不残留,新内容齐
+    (pack-success-replaces-existing-output
+      (let* ([app (make-app '())]
+             [_ (fake-build! app "myapp")]
+             [out (pack-out app "myapp" "1.0")])
+        (put! (join-paths out "stale.txt") "stale")
+        (pack-until-runtime app '((name . "myapp") (version . "1.0") (entry . (myapp)) (runtime . petite)))
+        (assert-false (file-exists? (join-paths out "stale.txt")))
+        (assert-true (file-exists? (join-paths out "share" "chez" "myapp" "1.0" mt "myapp.so")))))
+
 
     ;; --target + SKIFF_ALLOW_VERSION_SKEW=1:只放宽 skiff 维(designs/10 §4
     ;; 逃生阀行)。skiff runtime 上版本不符 → WARNING + 通过;stock runtime 上
     ;; 「要求 skiff」不放宽 → 仍 78。
     (verify-pack-target-skew-escape-relaxes-only-skiff-version
       (let ([d (make-verify-pack-fixture!
-                 (format "(pack (format 1) (target (machine-type ~a) (chez-version \"~a\") (skiff-version \"0.0.0-nonexistent\")) (files))"
-                         (machine-type) (chez-version-string)))])
+                 (format "(pack (format 1) (target (machine-type ~a) (chez-version \"~a\") (skiff-version \"0.0.0-nonexistent\")) (files ~a))"
+                         (machine-type) (chez-version-string) fixture-file-entry))])
+        (put-fixture-file! d)
         (let-values ([(rc err) (with-env-var "SKIFF_ALLOW_VERSION_SKEW" "1"
                                  (lambda () (run-verify-pack d #t)))])
           (if (eq? (current-runtime) 'skiff)
@@ -355,7 +463,10 @@
     ;; 不带 --target:target 三元组再离谱也不查(opt-in;只查完整性)
     (verify-pack-no-target-skips-target-check
       (let ([d (make-verify-pack-fixture!
-                 "(pack (format 1) (target (machine-type bogus-mt) (chez-version \"0.0.0-bogus\") (skiff-version \"0.0.0-nonexistent\")) (files))")])
+                 (string-append
+                   "(pack (format 1) (target (machine-type bogus-mt) (chez-version \"0.0.0-bogus\") (skiff-version \"0.0.0-nonexistent\")) (files "
+                   fixture-file-entry "))"))])
+        (put-fixture-file! d)
         (let-values ([(rc err) (run-verify-pack d)])
           (assert-equal 0 rc))))
 
@@ -490,12 +601,21 @@
 
   (define (has? hay needle) (and (index-of hay needle) #t))
 
-  ;; 造一个最小 pack 目录:只有 pack.manifest;声明 (files ()) → 完整性恒过,
-  ;; 把变数全部留给 format / --target 两条新路径。
+  ;; 造一个最小 pack 目录:只有 pack.manifest;完整性路径另需 (files …)
+  ;; 声明 + 落盘真文件(严格化后空 (files) 即 65),见下面的 fixture-file-*。
   (define (make-verify-pack-fixture! manifest-str)
     (let ([d (mktmp)])
       (put! (join-paths d "pack.manifest") manifest-str)
       d))
+
+  ;; ── 严格 schema 夹具(2026-07-26 严格化):(files) 为空即致命,故凡需
+  ;; 「完整性通过」的 fixture 都必须声明一个真实落盘的文件。统一用 hello.txt。──
+  (define fixture-file-name "hello.txt")
+  (define fixture-file-content "hello")
+  (define fixture-file-sha256 "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824")
+  (define fixture-file-entry
+    (string-append "(\"" fixture-file-name "\" (sha256 \"" fixture-file-sha256 "\") (size 5))"))
+  (define (put-fixture-file! d) (put! (join-paths d fixture-file-name) fixture-file-content))
 
   ;; 跑 verify-pack 并捕获 stderr,返回 (values 退出码 stderr文本)
   (define (run-verify-pack path . target?)
