@@ -28,33 +28,46 @@
                   (let ([root (or (flag flags 'C) (current-directory))])
                     (dispatch sub pos flags rest root)))))))))
 
+  ;; 命令表:dispatch 与 list-tasks 的**唯一事实源** —— 加命令只动这里,
+  ;; `chandler -T` 就不会再列出不存在(或漏列已存在)的命令。
+  ;; make 在 main 里先于解析被拦截转交子 CLI,不在此表;version 走旗标/特例。
+  (define (command-table root flags pos rest)
+    (list
+      (cons 'init      (lambda () (cmd-init root flags)))
+      (cons 'deps      (lambda () (cmd-deps root flags)))
+      (cons 'install   (lambda () (cmd-install root flags)))
+      (cons 'add       (lambda () (cmd-add root flags pos)))
+      (cons 'remove    (lambda () (cmd-remove root flags pos)))
+      (cons 'build     (lambda () (cmd-build root flags)))
+      (cons 'run       (lambda () (cmd-run root flags pos rest)))
+      (cons 'env       (lambda () (cmd-env root flags)))
+      (cons 'exec      (lambda () (cmd-exec root flags rest)))
+      (cons 'repl      (lambda () (cmd-repl root flags)))
+      (cons 'list      (lambda () (cmd-list root flags)))
+      (cons 'tree      (lambda () (cmd-deps-tree root flags)))
+      (cons 'pack      (lambda () (cmd-pack root flags)))
+      (cons 'verify    (lambda () (cmd-verify root flags)))
+      (cons 'verify-pack (lambda () (cmd-verify-pack root flags pos)))
+      (cons 'uninstall (lambda () (cmd-uninstall-global root flags)))
+      (cons 'doctor    (lambda () (cmd-doctor root flags)))
+      (cons 'switch    (lambda () (cmd-switch root flags pos)))))
+
   (define (dispatch sub pos flags rest root)
     (cond
       [(eq? (flag flags 'version) #t) (print-version) 0]
+      ;; `chandler -T`:-T 被 parse-args 收成布尔旗标(不是子命令),须在这里接住
+      [(flag? flags 'T) (list-tasks) 0]
       [(or (not sub) (flag? flags 'help) (equal? sub "help")) (usage) 0]
       [else
-       (case (string->symbol sub)
-         [(version) (print-version) 0]
-         [(init)    (cmd-init root flags)]
-         [(deps)    (cmd-deps root flags)]
-         [(install) (cmd-install root flags)]
-         [(add)     (cmd-add root flags pos)]
-         [(remove)  (cmd-remove root flags pos)]
-         [(build)   (cmd-build root flags)]
-         [(run)     (cmd-run root flags pos rest)]
-         [(env)     (cmd-env root flags)]
-         [(repl)    (cmd-repl root flags)]
-         [(pack)    (cmd-pack root flags)]
-         [(verify-pack) (cmd-verify-pack root flags pos)]
-          [(uninstall) (cmd-uninstall-global root flags)]
-          [(list)    (cmd-list root flags)]
-          [(doctor)  (cmd-doctor root flags)]
-          [(switch)  (cmd-switch root flags pos)]
-         [(-T)      (list-tasks) 0]
-         [else
-          (fprintf (current-error-port)
-                   "unknown command: ~a (run `chandler help` for usage)~%" sub)
-          64])]))
+       (let ([sym (string->symbol sub)])
+         (cond
+           [(eq? sym 'version) (print-version) 0]
+           [(assq sym (command-table root flags pos rest)) => (lambda (h) ((cdr h)))]
+           [else
+            (fprintf (current-error-port)
+                     "unknown command: ~a (run `chandler help` for usage)~%" sub)
+            64
+            ]))]))
 
   ;; Chez 自带的条件(尤其 I/O)把格式指令写在 message 里、值放 irritants ——
   ;; 例如 open-file 失败是 message "failed for ~a: ~(~a~)" + irritants (路径 原因)。
@@ -88,8 +101,15 @@
       (printf " (skiff ~a)" (runtime-version)))
     (printf " (chez ~a)~%" (chez-version-string)))
 
+  ;; 从命令表派生(再补上表外的 make / version),保证只列真实存在的命令
   (define (list-tasks)
-    (printf "commands: init add remove install update build make pack verify verify-pack list tree run exec repl switch version~%"))
+    (printf "commands: ~a~%"
+            (string-join
+              (list-sort string<?
+                         (append '("make" "version")
+                                 (map (lambda (p) (symbol->string (car p)))
+                                      (command-table #f #f #f #f))))
+              " ")))
 
   (define (usage)
     (printf "chandler -- git-first library manager for Chez Scheme (Skiff ecosystem)~%~%")
@@ -108,8 +128,11 @@
     (printf "                               `chandler make --help` for its own options)~%")
     (printf "  run --script <s.ss> [args]   run a script with the dependency environment~%")
     (printf "                               (loads <root>/.env; --env-file <p> overrides it)~%")
+    (printf "  exec -- <cmd> [args]         run a command with CHEZSCHEMELIBDIRS + .env set~%")
     (printf "  env                          export CHEZSCHEMELIBDIRS + .env (eval it)~%")
     (printf "  repl [--runtime skiff|chez]  interactive shell with library paths mounted~%")
+    (printf "  verify                       check _vendor/ matches the lock (CI; read-only)~%")
+    (printf "  tree                         show the locked dependency tree (deps --tree)~%")
     (printf "  list                         list installed packages in the global prefix~%")
     (printf "                               (active version marked [active])~%")
     (printf "  pack [--runtime r] [--lib]   assemble a self-contained distribution (app pack);~%")

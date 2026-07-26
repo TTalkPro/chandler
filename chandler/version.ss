@@ -7,7 +7,8 @@
 
 (library (chandler version)
   (export parse-version version-compare version<? version=?
-          version-match? select-highest strip-v)
+          version-match? select-highest strip-v
+          parse-semver semver>?)
   (import (chezscheme)
           (chandler util))
 
@@ -103,6 +104,34 @@
       (if (>= arity 2)
           (cons v (list a (+ b 1) 0))       ; ~1.2 / ~1.2.3 → >=… <1.3.0
           (cons v (list (+ a 1) 0 0)))))    ; ~1 → >=1.0.0 <2.0.0
+
+  ;; ── semver>?:switch --latest 的降序排序谓词(语义 = "a 应排在 b 前")──
+  ;; 数值比 major/minor/patch;核心相同则 release 先于 prerelease(降序表里
+  ;; prerelease 排在 release 后);两侧都带 prerelease → 退字符串序(完整 semver
+  ;; 标识符比较超出需要);任一侧无法解析 → 整体退化为字符串序。
+  (define (semver>? a b)
+    (let ([pa (ignore-errors (parse-semver a))]
+          [pb (ignore-errors (parse-semver b))])
+      (if (and pa pb)
+          (let ([c (version-compare (car pa) (car pb))])
+            (cond
+              [(> c 0) #t]
+              [(< c 0) #f]
+              [(and (not (cdr pa)) (cdr pb)) #t]      ; release > prerelease
+              [(and (cdr pa) (not (cdr pb))) #f]
+              [(and (cdr pa) (cdr pb)) (string>? (cdr pa) (cdr pb))]
+              [else #f]))
+          (string>? a b))))
+
+  ;; "1.2.3-alpha.1" → ((1 2 3) . "alpha.1");无 prerelease → ((1 2 3) . #f)。
+  ;; build metadata(+…)丢弃;核心非法则 parse-version 抛(由 semver>? 兜成字符串序)。
+  (define (parse-semver s0)
+    (let* ([s (strip-v s0)]
+           [no-build (car (string-split s '(#\+)))]
+           [parts (string-split no-build '(#\-))])
+      (cons (parse-version (car parts))
+            (and (pair? (cdr parts))
+                 (string-join (cdr parts) "-")))))
 
   ;; ── 从 tag 列表选满足约束的最高者(返回原始 tag 串,或 #f)──
   (define (select-highest constraint tags)

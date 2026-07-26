@@ -6,7 +6,7 @@
 
 (library (chandler cli commands)
   (export cmd-init cmd-deps cmd-install cmd-add cmd-remove cmd-run cmd-env cmd-repl
-          cmd-build cmd-pack cmd-verify-pack
+          cmd-build cmd-pack cmd-verify-pack cmd-deps-tree cmd-verify cmd-exec
           cmd-uninstall-global cmd-doctor cmd-list cmd-switch)
   (import (chezscheme)
           (chandler util)
@@ -16,6 +16,8 @@
           (chandler layout)
           (chandler manifest)
           (chandler lock)
+          (chandler hash)
+          (chandler version)
           (chandler install)
           (chandler registry)
           (chandler runtime-detector)
@@ -53,6 +55,50 @@
       (unless target (error 'verify-pack "usage: chandler verify-pack [--target] <dir|pack.manifest>"))
       (verify-pack (if (string-prefix? "/" target) target (join-paths root target))
                    (flag? flags 'target))))
+
+  ;; ── verify:校验 _vendor/ 与 lock 的 (files ...) 一致(CI;纯只读,不写任何文件)──
+  ;; lock 的 files 是 (rel . sha256) 列表,rel 相对项目根(如 "_vendor/greet/greet.ss")。
+  ;; 双向比对:MISSING(声明了但盘上没有)/ CHANGED(sha256 不符)/ EXTRA(盘上有但
+  ;; lock 未声明,扫 _vendor/ 得)任一即 65;全干净 → 0。hash 算法与 verify-pack 同一份
+  ;; ((chandler hash) sha256-file);文件枚举同 pack.ss 的 files-under 模式。
+  (define (cmd-verify root flags)
+    (let ([lpath (project-lock-path root)])
+      (unless (file-exists? lpath)
+        (error 'verify "lock not found; run `chandler deps` first"))
+      (let* ([lk (read-lock lpath)]
+             [declared (lock-files lk)]
+             [bad 0])
+        (for-each
+          (lambda (f)
+            (let* ([rel (car f)]
+                   [abs (join-paths root rel)])
+              (cond
+                [(not (file-exists? abs))
+                 (set! bad (+ bad 1))
+                 (fprintf (current-error-port) "  MISSING ~a~%" rel)]
+                [(not (string=? (cdr f) (sha256-file abs)))
+                 (set! bad (+ bad 1))
+                 (fprintf (current-error-port) "  CHANGED ~a (sha256 mismatch)~%" rel)])))
+          declared)
+        (let ([vdir (join-paths root "_vendor")])
+          (when (file-directory? vdir)
+            (for-each
+              (lambda (abs)
+                (let ([rel (strip-prefix abs (string-append root "/"))])
+                  (unless (assoc rel declared)
+                    (set! bad (+ bad 1))
+                    (fprintf (current-error-port) "  EXTRA ~a (not in lock)~%" rel))))
+              (files-under vdir))))
+        (if (> bad 0)
+            (begin
+              (fprintf (current-error-port)
+                       "verify: ~a ~a out of sync with lock; run `chandler deps`~%"
+                       bad (plural bad "file" "files"))
+              65)
+            (begin
+              (printf "verify: _vendor/ matches lock (~a ~a checked)~%"
+                      (length declared) (plural (length declared) "file" "files"))
+              0)))))
 
   ;; ── init ──
   ;; ── init ──
@@ -389,19 +435,21 @@
              [libdir (target-libdir flags)])
          (unless name
            (error 'switch "usage: chandler switch <name> <version> | --latest | --list"))
-         (let ([version
-                (cond
-                  [(string=? ver-or-flag "--latest")
-                   ;; 选该 name 的最高 version
-                   (let ([reg (or (read-registered libdir name)
-                                  (error 'switch "name not registered" name))])
-                     (let* ([versions (map car (registered-versions reg))]
-                            [sorted (list-sort string>? versions)])
-                       (when (null? sorted)
-                         (error 'switch "no versions installed" name))
-                       (car sorted)))]
-                  [(string? ver-or-flag) ver-or-flag]
-                  [else (error 'switch "specify <version> or --latest")])])
+          (let ([version
+                 (cond
+                   ;; --latest 是布尔旗标(parse-args 不把它放位置参数);兼容旧写法位置参数形
+                   [(or (flag? flags 'latest) (equal? ver-or-flag "--latest"))
+                    ;; 选该 name 的最高 version:semver 数值序(9.9.0 < 10.0.0),
+                    ;; 不是字符串序;无法解析的版本串在 semver>? 内退化为字符串序
+                    (let ([reg (or (read-registered libdir name)
+                                   (error 'switch "name not registered" name))])
+                      (let* ([versions (map car (registered-versions reg))]
+                             [sorted (list-sort semver>? versions)])
+                        (when (null? sorted)
+                          (error 'switch "no versions installed" name))
+                        (car sorted)))]
+                   [(string? ver-or-flag) ver-or-flag]
+                   [else (error 'switch "specify <version> or --latest")])])
            (switch-active libdir name version)
            (printf "switched ~a to ~a~%" name version)
            0))]))
@@ -577,6 +625,18 @@
                                       "--script" preamble)
                                 script-args)
                         (list (cons 'env (env-with-dotenv root flags '())))))))
+
+  ;; ── exec:设 CHEZSCHEMELIBDIRS(+ .env)后透传任意命令 ──
+  ;;   chandler exec -- <cmd> [args...]
+  ;; 与 cmd-run 同一套库搜索规则(resolved-libdirs → "src::obj" 串)与 .env 叠加
+  ;; (env-with-dotenv);退出码 = 子进程退出码(run-foreground 原样返回)。
+  (define (cmd-exec root flags rest)
+    (when (or (not rest) (null? rest))
+      (error 'exec "usage: chandler exec -- <cmd> [args...]"))
+    (let ([dirs (resolved-libdirs root)])
+      (run-foreground (car rest) (cdr rest)
+                      (list (cons 'env (env-with-dotenv root flags
+                                         (list (cons "CHEZSCHEMELIBDIRS" (path-list dirs)))))))))
 
   ;; ── repl:交互式 shell,自动挂库搜索路径(与 run/exec 同规则)──
   ;;   项目模式(lock 存在且有依赖):lib/ + path 源目录 + 项目库根 + 全局(项目最高优先)
