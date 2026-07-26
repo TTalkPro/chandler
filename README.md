@@ -2,7 +2,7 @@
 
 > git-first 的 Chez Scheme 包管理器 + 构建器,**Skiff** 运行时生态里的包供应商(船具商)。读 `chandler-manifest.ss`,把 git 仓库里的 R6RS 库装进项目,一行 `chandler run` 挂载整个依赖环境并运行。标准 Chez 与 Skiff **双运行时**皆可用。
 
-**中文 | [English](README.en.md)** — 设计文档见 [designs/](designs/);实现任务与进度见 [TASK.md](TASK.md)。
+**中文 | [English](README.en.md)** — 设计文档见 [designs/](designs/)。
 
 ## 定位
 

@@ -2,7 +2,7 @@
 
 > A git-first Chez Scheme library manager — the **purveyor** of the **Skiff** runtime ecosystem. Reads `manifest.ss`, vendoring R6RS libraries from git repositories into a project's `lib/`, and a single `(activate)` mounts the whole dependency environment. Works with **both** stock Chez and Skiff runtimes.
 
-**[中文](README.md) | English** — Design docs in [designs/](designs/) (in Chinese); implementation status in [TASK.md](TASK.md).
+**[中文](README.md) | English** — Design docs in [designs/](designs/) (in Chinese).
 
 > **Note:** the design documents under [`designs/`](designs/) are written in Chinese — they are dense, internal design reasoning. This README is the English mirror of the user-facing [README.md](README.md); the Chinese version is the canonical source.
 
