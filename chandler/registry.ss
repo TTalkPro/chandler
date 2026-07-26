@@ -17,9 +17,10 @@
     version-entry-installed-at version-entry-source version-entry-installer
     registry-dir registry-file
     read-registered write-registered! remove-registered! registered-exists?
-    list-registered-names
+    list-registered-names list-registry-files
+    with-registry-lock!
     staging-dir staging-path with-staging! clear-staging!
-    clear-stale-staging stale-staging-list)
+    clear-stale-staging stale-staging-list promote-staging!)
   (import (chezscheme)
           (chandler util)
           (chandler fs)
@@ -29,6 +30,7 @@
           (chandler registered)
           (chandler registry data)
           (chandler registry io)
+          (chandler registry lock)
           (chandler registry staging))
 
   ;; ── 路径 ──
@@ -88,50 +90,56 @@
          (files-under (join-paths src sub))))
 
   ;; ── install-global ──
+  ;; 整段包在 per-prefix 锁里:staging promote + registry read-modify-write 是一个事务。
   (define install-global
     (case-lambda
       [(src libdir meta version opts)
        (install-global src libdir meta version opts #f)]
       [(src libdir meta version opts entry)
-       (let* ([name (car meta)]
-              [name-sym (if (symbol? name) name (string->symbol name))]
-              [src-name (and (pair? entry) (car entry))]
-              [src-name-str (if src-name (symbol->string src-name)
-                                (symbol->string name-sym))]
-              [vroot (version-root libdir name-sym version)]
-              [entries (enumerate-lib src src-name-str)]
-              [files (map car entries)])
-         (when (null? entries)
-           (error 'install-global
-                  "source directory has no installable library files" src name))
-         (with-staging! libdir name-sym version
-           (lambda ()
-             (let ([sp (staging-path libdir name-sym version)])
-               (for-each (lambda (e)
-                           (let ([s (cdr e)] [d (join-paths sp (car e))])
-                             (ensure-parent d) (copy-file s d)))
-                         entries)
-               (for-each (lambda (rel)
-                           (let ([s (join-paths sp rel)] [d (join-paths vroot rel)])
-                             (ensure-parent d)
-                             (when (file-exists? d) (delete-file d))
-                             (move-file s d)))
-                         files))))
-         (let* ([source-datum (list-ref meta 2)]
-                [installed-at (list-ref meta 3)]
-                [installer (list-ref meta 4)]
-                [entry-ve (make-version-entry version installed-at source-datum installer)]
-                [existing (or (read-registered libdir name-sym)
-                              (make-registered name-sym (if entry 'app 'lib)))]
-                [first-install? (not (registered-has-version? existing version))]
-                [with-new (registered-add-version existing entry-ve)]
-                [final-reg (if (and first-install?
-                                    (eq? 'app (registered-kind with-new))
-                                    (not (registered-active with-new))
-                                    (alist-ref opts 'set-active #t))
-                               (registered-set-active with-new version)
-                               with-new)])
-           (write-registered! libdir name-sym final-reg)))]))
+       (with-registry-lock! libdir
+         (lambda ()
+           (let* ([name (car meta)]
+                  [name-sym (if (symbol? name) name (string->symbol name))]
+                  [src-name (and (pair? entry) (car entry))]
+                  [src-name-str (if src-name (symbol->string src-name)
+                                    (symbol->string name-sym))]
+                  [vroot (version-root libdir name-sym version)]
+                  [entries (enumerate-lib src src-name-str)]
+                  [existing0 (read-registered libdir name-sym)]
+                  [incoming-kind (if entry 'app 'lib)])
+             (when (null? entries)
+               (error 'install-global
+                      "source directory has no installable library files" src name))
+             ;; kind 校验:registry 已存在时,incoming kind 必须与已登记的一致,
+             ;; 否则 app 记进 lib registry(或反之),永远无法 active
+             (when (and existing0 (not (eq? incoming-kind (registered-kind existing0))))
+               (error 'install-global
+                      (format "kind mismatch: registry has ~a, incoming is ~a"
+                              (registered-kind existing0) incoming-kind)
+                      name-sym))
+             (with-staging! libdir name-sym version
+               (lambda ()
+                 (let ([sp (staging-path libdir name-sym version)])
+                   (for-each (lambda (e)
+                               (let ([s (cdr e)] [d (join-paths sp (car e))])
+                                 (ensure-parent d) (copy-file s d)))
+                             entries)
+                   ;; 整目录单次 rename 落位(原子;覆盖装走 backup 回滚)
+                   (promote-staging! libdir name-sym version vroot))))
+             (let* ([source-datum (list-ref meta 2)]
+                    [installed-at (list-ref meta 3)]
+                    [installer (list-ref meta 4)]
+                    [entry-ve (make-version-entry version installed-at source-datum installer)]
+                    [existing (or existing0 (make-registered name-sym incoming-kind))]
+                    [first-install? (not (registered-has-version? existing version))]
+                    [with-new (registered-add-version existing entry-ve)]
+                    [final-reg (if (and first-install?
+                                        (eq? 'app (registered-kind with-new))
+                                        (not (registered-active with-new))
+                                        (alist-ref opts 'set-active #t))
+                                   (registered-set-active with-new version)
+                                   with-new)])
+               (write-registered! libdir name-sym final-reg)))))]))
 
   ;; ── install-payload-global:只铺文件,不写 .registry/、不走 staging ──
   ;; 用于可再分发前缀(pack 的 share/chez):注册表是安装机私有状态(且含构建机
@@ -160,52 +168,114 @@
       [(name libdir opts)
        (error 'uninstall-global "v3 requires --version" name)]
       [(name libdir opts version)
-       (let* ([name-sym (if (symbol? name) name (string->symbol name))]
-              [reg (or (read-registered libdir name-sym)
-                       (error 'uninstall-global "package not registered" name))]
-              [vroot (version-root libdir name-sym version)])
-         (rm-rf vroot)
-         (let* ([after-remove (registered-remove-version reg version)]
-                [remaining (registered-versions after-remove)])
-           (if (null? remaining)
-               (remove-registered! libdir name-sym)
-               (write-registered! libdir name-sym after-remove)))
-         (symbol->string name-sym))]))
+       (with-registry-lock! libdir
+         (lambda ()
+           (let* ([name-sym (if (symbol? name) name (string->symbol name))]
+                  [reg (or (read-registered libdir name-sym)
+                           (error 'uninstall-global "package not registered" name))]
+                  [vroot (version-root libdir name-sym version)])
+             (rm-rf vroot)
+             (let* ([after-remove (registered-remove-version reg version)]
+                    [remaining (registered-versions after-remove)])
+               (if (null? remaining)
+                   (remove-registered! libdir name-sym)
+                   (write-registered! libdir name-sym after-remove)))
+             (symbol->string name-sym))))]))
 
   ;; ── switch-active ──
+  ;; 锁内完成 read-modify-write;切前验证目标 version 真在盘上 ——
+  ;; 切到已删的 vroot / 缺 runner 的 app,switch 成功但启动即崩。
   (define (switch-active libdir name version)
-    (let ([name-sym (if (symbol? name) name (string->symbol name))])
-      (let ([reg (or (read-registered libdir name-sym)
-                     (error 'switch-active "name not registered" name))])
-        (let ([new-reg (registered-set-active reg version)])
-          (write-registered! libdir name-sym new-reg)))
-      (symbol->string name-sym)))
+    (with-registry-lock! libdir
+      (lambda ()
+        (let ([name-sym (if (symbol? name) name (string->symbol name))])
+          (let ([reg (or (read-registered libdir name-sym)
+                         (error 'switch-active "name not registered" name))])
+            (unless (registered-has-version? reg version)
+              (error 'switch-active "version not installed; install it first"
+                     name version))
+            (let ([vroot (version-root libdir name-sym version)])
+              (unless (file-directory? vroot)
+                (error 'missing-vroot "version root not on disk" name version))
+              (when (eq? 'app (registered-kind reg))
+                (unless (file-exists? (join-paths vroot ".chandler" "run.sps"))
+                  (error 'missing-runner "app runner not on disk (.chandler/run.sps)"
+                         name version))))
+            (write-registered! libdir name-sym (registered-set-active reg version)))
+          (symbol->string name-sym)))))
 
   ;; ── doctor-global ──
+  ;; 直扫 .registry/*.ss(list-registry-files,不解析不过滤),逐个自己解析 ——
+  ;; 坏文件必须变成 malformed-registry issue,不能被 list-registered-names 剔掉。
   (define (doctor-global libdir)
-    (let ([issues '()])
+    (let ([issues '()]
+          [parsed '()])   ; ((name-sym . registered) ...) 成功解析的,orphan 检测用
       (define (add! x) (set! issues (cons x issues)))
+      ;; ── 逐 registry 文件 ──
       (for-each
-        (lambda (name-sym)
-          (let ([reg (read-registered libdir name-sym)])
-            (when reg
-              (for-each
-                (lambda (p)
-                  (let* ([ver (car p)]
-                         [vroot (version-root libdir name-sym ver)])
-                    (unless (file-directory? vroot)
-                      (add! (list 'missing-vroot name-sym ver)))))
-                (registered-versions reg))
-              (let ([active (registered-active reg)])
-                (when active
-                  (let ([vroot (version-root libdir name-sym active)])
-                    (unless (file-directory? vroot)
-                      (add! (list 'missing-active name-sym active)))))))))
-        (map car (list-registered-names libdir)))
+        (lambda (nf)
+          (let ([file-name (car nf)] [path (cdr nf)])
+            (guard (e [else
+                       (add! (list 'malformed-registry path (condition-brief e)))])
+              (let ([reg (read-registered libdir file-name)])
+                (set! parsed (cons (cons file-name reg) parsed))
+                ;; name 与文件名必须一致(.registry/foo.ss ↔ (name foo))
+                (unless (eq? (registered-name reg) file-name)
+                  (add! (list 'name-filename-mismatch file-name (registered-name reg))))
+                ;; version 字符串无重复(本 Chez 的 member 无 comparator 参数,用 memp)
+                (let loop ([vs (map car (registered-versions reg))] [seen '()])
+                  (cond
+                    [(null? vs) (void)]
+                    [(memp (lambda (s) (string=? s (car vs))) seen)
+                     (add! (list 'duplicate-version file-name (car vs)))]
+                    [else (loop (cdr vs) (cons (car vs) seen))]))
+                ;; 每个 version:vroot 在盘上;app 还要有 runner
+                (for-each
+                  (lambda (p)
+                    (let* ([ver (car p)]
+                           [vroot (version-root libdir file-name ver)])
+                      (if (not (file-directory? vroot))
+                          (add! (list 'missing-vroot file-name ver))
+                          (when (eq? 'app (registered-kind reg))
+                            (unless (file-exists? (join-paths vroot ".chandler" "run.sps"))
+                              (add! (list 'missing-runner file-name ver)))))))
+                  (registered-versions reg))
+                ;; active 的 vroot 必须在
+                (let ([active (registered-active reg)])
+                  (when (and active
+                             (not (file-directory? (version-root libdir file-name active))))
+                    (add! (list 'missing-active file-name active))))))))
+        (list-registry-files libdir))
+      ;; ── orphan-vroot:盘上有 <libdir>/<name>/<version>/ 但 registry 未登记 ──
+      (for-each
+        (lambda (entry)
+          (let ([name-dir (join-paths libdir entry)])
+            (when (and (file-directory? name-dir)
+                       (not (string=? entry ".registry")))
+              (let ([hit (assoc (string->symbol entry) parsed)])
+                ;; registry 文件存在但 malformed → 不知道登记了啥,跳过(已报 malformed);
+                ;; 无 registry 文件 → 该 name 下所有 version 目录都是 orphan
+                (when (or hit (not (file-exists? (registry-file libdir entry))))
+                  (let ([registered-vers
+                         (if hit (map car (registered-versions (cdr hit))) '())])
+                    (for-each
+                      (lambda (vdir)
+                        (when (and (file-directory? (join-paths name-dir vdir))
+                                   (not (memp (lambda (s) (string=? s vdir))
+                                              registered-vers)))
+                          (add! (list 'orphan-vroot (string->symbol entry) vdir))))
+                      (dir-entries name-dir))))))))
+        (dir-entries libdir))
+      ;; ── stale staging ──
       (for-each
         (lambda (p) (add! (list 'stale-staging p)))
         (stale-staging-list libdir))
       (reverse issues)))
+
+  (define (condition-brief e)
+    (if (and (condition? e) (message-condition? e))
+        (condition-message e)
+        "unreadable registry file"))
 
   ;; ── list-global ──
   ;; 返回 list of (name-str version-str tag installer-symbol)

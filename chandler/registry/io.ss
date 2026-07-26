@@ -17,6 +17,7 @@
           write-registered!
           remove-registered!
           list-registered-names
+          list-registry-files
           registered-exists?)
   (import (chezscheme)
           (chandler util)
@@ -90,6 +91,25 @@
                          (let* ([reg (read-registered libdir name-sym)]
                                 [active (and reg (registered-active reg))])
                            (and reg (cons name-sym active))))))))
+            (dir-entries d)))))
+
+  ;; list-registry-files : libdir → list of (name-symbol . path)
+  ;; 只列 .registry/*.ss 文件,**不解析、不过滤坏文件** —— doctor 用它拿全量
+  ;; 列表后自己逐个解析,坏文件才能变成 malformed-registry issue
+  ;; (list-registered-names 会把坏文件从结果里剔除,doctor 绝不能走那条路)。
+  (define (list-registry-files libdir)
+    (let ([d (registry-dir libdir)])
+      (if (not (file-directory? d))
+          '()
+          (filter-map
+            (lambda (entry)
+              (let ([path (join-paths d entry)])
+                (and (string-suffix? ".ss" entry)
+                     (file-exists? path)
+                     (not (file-directory? path))
+                     (cons (string->symbol
+                             (substring entry 0 (- (string-length entry) 3)))
+                           path))))
             (dir-entries d)))))
 
   ;; filter-map:r6rs 没有原生,fold-right 实现

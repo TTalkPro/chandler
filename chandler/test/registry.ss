@@ -25,6 +25,12 @@
     (list (string->symbol name) version `(git ,(string-append "https://h/" name))
           "2026-07-21T00:00:00Z" 'chandler))
 
+  ;; app 的 runner 由 CLI 层(write-app-launcher!)在 install 后写;
+  ;; 测试直调 install-global,需补这个文件满足 switch/doctor 的 runner 验证。
+  (define (add-runner! libdir name version)
+    (write-text (join-paths libdir name version ".chandler" "run.sps")
+                "#!chezscheme\n"))
+
   (define-suite suite
 
     ;; ── install-global:文件落位 + .registry/<name>.ss 登记 ──
@@ -72,6 +78,7 @@
         ;; 装第二个版本并设 active
         (let ([v2 "2.0.0"])
           (install-global src libdir (list 'myapp v2 '(path "/x") "t" 'chandler) v2 '() '(myapp))
+          (add-runner! libdir "myapp" v2)
           ;; 手动切到 v2
           (switch-active libdir "myapp" v2)
           ;; 重装 v1 → active 不变(v2)
@@ -103,6 +110,7 @@
              [meta2 (list 'myapp v2 '(path "/x") "t" 'chandler)])
         (install-global src libdir meta1 v1 '() '(myapp))
         (install-global src libdir meta2 v2 '() '(myapp))
+        (add-runner! libdir "myapp" v1)
         (switch-active libdir "myapp" v1)
         ;; 删 v1(active)→ active 清空
         (uninstall-global "myapp" libdir '() v1)
@@ -121,6 +129,8 @@
              [meta2 (list 'myapp v2 '(path "/x") "t" 'chandler)])
         (install-global src libdir meta1 v1 '() '(myapp))
         (install-global src libdir meta2 v2 '() '(myapp))
+        (add-runner! libdir "myapp" v1)
+        (add-runner! libdir "myapp" v2)
         ;; 初始 active = v1(首次安装设的)
         (assert-string= v1 (registered-active (read-registered libdir "myapp")))
         ;; 切到 v2
@@ -175,6 +185,7 @@
              [v2 "2.0.0"])
         (install-global src libdir (list 'myapp v1 '(path "/x") "t" 'chandler) v1 '() '(myapp))
         (install-global src libdir (list 'myapp v2 '(path "/x") "t" 'chandler) v2 '() '(myapp))
+        (add-runner! libdir "myapp" v2)
         (switch-active libdir "myapp" v2)
         (let ([rows (list-global libdir)])
           (assert-equal 2 (length rows))
@@ -246,5 +257,164 @@
         (install-global src libdir (mk-meta "greet" version) version '())
         ;; staging 应该清干净
         (assert-equal '() (stale-staging-list libdir))))
+
+    ;; ── registry lock(per-prefix 进程锁)──
+
+    (lock-acquire-release
+      (let ([libdir (mktmp)])
+        (let ([r (with-registry-lock! libdir
+                   (lambda ()
+                     ;; 持锁期间锁目录在
+                     (assert-true (file-directory? (join-paths libdir ".registry" ".lock")))
+                     42))])
+          (assert-equal 42 r)
+          ;; 释放后锁目录清掉
+          (assert-false (file-exists? (join-paths libdir ".registry" ".lock"))))))
+
+    (lock-released-on-error
+      (let ([libdir (mktmp)])
+        (assert-raises
+          (lambda () (with-registry-lock! libdir (lambda () (error 'x "boom")))))
+        ;; thunk 抛错,锁也释放(dynamic-wind)
+        (assert-false (file-exists? (join-paths libdir ".registry" ".lock")))))
+
+    (lock-stale-force-acquire
+      (let ([libdir (mktmp)])
+        (let ([ld (join-paths libdir ".registry" ".lock")])
+          (ensure-dir ld)
+          ;; 死 pid(超出 /proc pid 范围)+ 20 分钟前的时间戳 → 残锁,应被强抢
+          (write-text (join-paths ld ".pid") "2000000000")
+          (write-text (join-paths ld ".started")
+                      (number->string (- (time-second (current-time)) 1200)))
+          (assert-equal 'acquired (with-registry-lock! libdir (lambda () 'acquired)))
+          (assert-false (file-exists? ld)))))
+
+    ;; ── staging:两段式路径 + 整目录 promote ──
+
+    (staging-path-dashes-no-collision
+      ;; name/version 含 "-" 时,旧 "<name>-<version>" 拼接会撞;两段式不撞
+      (let ([libdir "/tmp/x"])
+        (assert-false
+          (string=? (staging-path libdir "a-b" "c-d")
+                    (staging-path libdir "a" "b-c-d")))))
+
+    (promote-staging-basic
+      (let* ([libdir (mktmp)]
+             [vroot (version-root libdir "pkg" "1.0")]
+             [sp (staging-path libdir "pkg" "1.0")])
+        (write-text (join-paths sp "src" "pkg.ss") "CONTENT")
+        (promote-staging! libdir "pkg" "1.0" vroot)
+        (assert-true (file-exists? (join-paths vroot "src" "pkg.ss")))
+        (assert-string= "CONTENT" (read-file (join-paths vroot "src" "pkg.ss")))
+        (assert-false (file-exists? sp))))
+
+    (promote-staging-overwrites-existing-vroot
+      (let* ([libdir (mktmp)]
+             [vroot (version-root libdir "pkg" "1.0")]
+             [sp (staging-path libdir "pkg" "1.0")])
+        ;; 旧 vroot 已在(覆盖装)
+        (write-text (join-paths vroot "old.txt") "OLD")
+        (write-text (join-paths sp "new.txt") "NEW")
+        (promote-staging! libdir "pkg" "1.0" vroot)
+        (assert-true (file-exists? (join-paths vroot "new.txt")))
+        (assert-false (file-exists? (join-paths vroot "old.txt")))
+        (assert-false (file-exists? sp))
+        ;; backup 清干净(.old.<pid> 不残留)
+        (assert-false (file-exists? (string-append vroot ".old." (number->string (get-process-id)))))))
+
+    (promote-staging-failure-cleans-staging
+      (let* ([libdir (mktmp)]
+             [vroot (version-root libdir "blocker" "1.0")]
+             [sp (staging-path libdir "blocker" "1.0")])
+        ;; vroot 的父路径是普通文件 → rename staging → vroot 必失败(ENOTDIR)
+        (write-text (join-paths libdir "blocker") "I AM A FILE")
+        (write-text (join-paths sp "x.txt") "X")
+        (assert-raises (lambda () (promote-staging! libdir "blocker" "1.0" vroot)))
+        ;; staging 残留清掉
+        (assert-false (file-exists? sp))))
+
+    ;; ── install-global:kind 校验 + 锁下回归 ──
+
+    (install-kind-mismatch-errors
+      (let* ([libdir (mktmp)]
+             [src (make-lib-src "foo")]
+             [v1 "1.0.0"])
+        ;; 先装 lib foo(无 entry)
+        (install-global src libdir (mk-meta "foo" v1) v1 '())
+        ;; 再装 app foo(带 entry)→ kind 不一致,报错
+        (assert-raises
+          (lambda ()
+            (install-global src libdir
+                            (list 'foo "2.0.0" '(path "/x") "t" 'chandler)
+                            "2.0.0" '() '(foo))))
+        ;; registry 仍是 lib,未被破坏
+        (assert-equal 'lib (registered-kind (read-registered libdir "foo")))))
+
+    ;; ── switch-active:vroot / runner 验证 ──
+
+    (switch-missing-vroot-errors
+      (let* ([libdir (mktmp)]
+             [src (make-lib-src "myapp")]
+             [v1 "1.0.0"]
+             [v2 "2.0.0"])
+        (install-global src libdir (list 'myapp v1 '(path "/x") "t" 'chandler) v1 '() '(myapp))
+        (install-global src libdir (list 'myapp v2 '(path "/x") "t" 'chandler) v2 '() '(myapp))
+        (add-runner! libdir "myapp" v1)
+        (add-runner! libdir "myapp" v2)
+        ;; 盘上删掉 v2 的 vroot,registry 还登记着 → 切过去报错
+        (rm-rf (join-paths libdir "myapp" v2))
+        (assert-raises (lambda () (switch-active libdir "myapp" v2)))))
+
+    (switch-missing-runner-errors
+      (let* ([libdir (mktmp)]
+             [src (make-lib-src "myapp")]
+             [v1 "1.0.0"]
+             [v2 "2.0.0"])
+        (install-global src libdir (list 'myapp v1 '(path "/x") "t" 'chandler) v1 '() '(myapp))
+        (install-global src libdir (list 'myapp v2 '(path "/x") "t" 'chandler) v2 '() '(myapp))
+        (add-runner! libdir "myapp" v1)
+        ;; v2 有 vroot 但无 run.sps → 切过去报错
+        (assert-raises (lambda () (switch-active libdir "myapp" v2)))))
+
+    ;; ── doctor-global:新检测项 ──
+
+    (doctor-detects-malformed-registry
+      (let ([libdir (mktmp)])
+        ;; 坏 registry:不是单个 registered datum
+        (write-text (registry-file libdir "bad") "this is not a registry datum")
+        (let ([issues (doctor-global libdir)])
+          (assert-true (member 'malformed-registry (map car issues))))))
+
+    (doctor-detects-orphan-vroot
+      (let ([libdir (mktmp)])
+        ;; 盘上有 <name>/<version>/ 但 .registry/ 没登记
+        (ensure-dir (join-paths libdir "orphan" "1.0"))
+        (let ([issues (doctor-global libdir)])
+          (assert-true (member 'orphan-vroot (map car issues))))))
+
+    (doctor-detects-name-filename-mismatch
+      (let ([libdir (mktmp)])
+        ;; .registry/foo.ss 里写 (name bar)
+        (write-text (registry-file libdir "foo")
+                    "(registered (format 1) (name bar) (kind lib) (versions))")
+        (let ([issues (doctor-global libdir)])
+          (assert-true (member 'name-filename-mismatch (map car issues))))))
+
+    (doctor-detects-duplicate-version
+      (let ([libdir (mktmp)])
+        ;; 手写含重复 version 字符串的 registry
+        (write-text (registry-file libdir "dup")
+          "(registered (format 1) (name dup) (kind lib) (versions (\"1.0\" (installed-at \"t\") (source (path \"/x\")) (installer chandler)) (\"1.0\" (installed-at \"t\") (source (path \"/x\")) (installer chandler))))")
+        (let ([issues (doctor-global libdir)])
+          (assert-true (member 'duplicate-version (map car issues))))))
+
+    (doctor-detects-missing-runner
+      (let* ([libdir (mktmp)]
+             [src (make-lib-src "myapp")]
+             [version "1.0.0"])
+        ;; app 有 vroot 但缺 .chandler/run.sps
+        (install-global src libdir (list 'myapp version '(path "/x") "t" 'chandler) version '() '(myapp))
+        (let ([issues (doctor-global libdir)])
+          (assert-true (member 'missing-runner (map car issues))))))
 
     ))
