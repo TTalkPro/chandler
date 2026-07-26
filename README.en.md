@@ -35,7 +35,7 @@ git clone <this-repo> chandler && cd chandler
 ./install.sh --global             # install to /usr/local (needs root)
 
 export PATH="$HOME/.local/bin:$PATH"   # if not already on PATH (the script prints this hint)
-chandler --version                     # → chandler 0.1.4 (skiff 0.1.1) (chez 10.4.1)
+chandler --version                     # → chandler 0.1.5 (skiff 0.1.1) (chez 10.4.1)
 ```
 
 ### Windows (PowerShell)
@@ -206,9 +206,9 @@ $env:CHANDLER_RUNTIME='chez'; ./install.ps1       # Windows
 
 ```sh
 $ chandler --version
-chandler 0.1.4 (skiff 0.1.1) (chez 10.4.1)   # running on skiff
+chandler 0.1.5 (skiff 0.1.1) (chez 10.4.1)   # running on skiff
 $ CHANDLER_RUNTIME=chez chandler --version
-chandler 0.1.4 (chez 10.4.1)                 # running on stock Chez
+chandler 0.1.5 (chez 10.4.1)                 # running on stock Chez
 ```
 
 > **Explicit overrides are taken literally**: if you set `CHANDLER_SKIFF` / `CHANDLER_SCHEME`, only that one is used — if missing, it fails (exit code 127), **never** silently falling back to another runtime (silent fallback would defeat the override). Likewise, an explicitly chosen runtime skips capability probing.
