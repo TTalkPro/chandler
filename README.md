@@ -226,7 +226,7 @@ bash tests/powershell-run.sh                        # Windows 启动器验收(�
 
 `tests/powershell-run.sh` 把生成的 `chandler.ps1` **渲染后用 pwsh 真跑**(语法 / 运行时强制 / 覆盖 / 退出码 / 参数透传 / 端到端启动)——因为生成的脚本用正斜杠且分隔符取 `[System.IO.Path]::PathSeparator`,同一份脚本在 Linux 的 pwsh 下也成立。装 pwsh:`mise use powershell`。
 
-库布局遵循[库布局规范](chez-skiff-library-layout.md):umbrella `chandler.ss` + 同名子库树 `chandler/`,搜索根 = 仓库根。核心只 `import (chezscheme)`,限 Petite 可跑子集(双运行时可移植)。
+库布局遵循[库布局规范](designs/13-library-source-layout.md):umbrella `chandler.ss` + 同名子库树 `chandler/`,搜索根 = 仓库根。核心只 `import (chezscheme)`,限 Petite 可跑子集(双运行时可移植)。
 
 ### 语言约定
 

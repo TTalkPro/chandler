@@ -19,6 +19,7 @@
 | [10-dev-mode.md](10-dev-mode.md) | dev 模式:`_vendor/` + `chandler run` + live edit | 辅助 |
 | [11-cli.md](11-cli.md) | CLI 命令面 + 退出码 + 旗标(switch / verify / exec / env + doctor 9 项) | 辅助 |
 | [12-security.md](12-security.md) | 安全模型:纯数据 + prebuilt native + 签名 | 辅助 |
+| [13-library-source-layout.md](13-library-source-layout.md) | 单仓库**源码布局规范**(umbrella facade / 子库树镜像 / 搜索根=仓库根 / `#!chezscheme` 头);与 06(install 目标布局)正交 | 辅助 |
 
 ## v3 一句话定位
 

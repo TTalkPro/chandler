@@ -233,7 +233,7 @@ bash tests/powershell-run.sh                        # Windows launcher acceptanc
 
 `tests/powershell-run.sh` **renders the generated `chandler.ps1` and actually runs it under pwsh** (syntax / runtime enforcement / overrides / exit codes / arg passing / end-to-end launch) — because the generated script uses forward slashes and `[System.IO.Path]::PathSeparator` as the separator, the same script works under Linux's pwsh too. Install pwsh with `mise use powershell`.
 
-The library layout follows the [library layout spec](chez-skiff-library-layout.md): an umbrella `chandler.ss` + a same-named subtree `chandler/`, with the search root = the repo root. The core only `import (chezscheme)`, restricted to the Petite-runnable subset (portable across both runtimes).
+The library layout follows the [library layout spec](designs/13-library-source-layout.md): an umbrella `chandler.ss` + a same-named subtree `chandler/`, with the search root = the repo root. The core only `import (chezscheme)`, restricted to the Petite-runnable subset (portable across both runtimes).
 
 ### Language conventions
 
