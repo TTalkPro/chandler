@@ -1,6 +1,7 @@
 # 05 — pack = install --prefix + envelope
 
-> 状态: 已实现(v3,对齐 `chandler/pack.ss`)
+> 状态: 已实现(v3 + v4 健壮性),对齐 `chandler/pack.ss`。
+> v3 中心设计见 [06-installed-layout.md](06-installed-layout.md),决策记录见 [TASK.md](../TASK.md)。
 
 ## 1. 一句话目标
 
@@ -23,17 +24,18 @@ pack = install --prefix=<pack>/share/chez + envelope
 
 ## 3. 包布局(FHS 式)
 
-平台绑定物集中在两处:`lib/chez/*.boot` 与各 vroot 的 `<mt>/` 层。`<mt>` 已在
-包目录名里(`<name>-<version>-<mt>`),bin/boot 下**不再**嵌 `<mt>` 层。
+平台绑定物集中在两处:`boot/<mt>/*.boot` 与各 vroot 的 `<mt>/` 层。`<mt>` 已在
+包目录名里(`<name>-<version>-<mt>`),bin/boot 下**不再**嵌 `<mt>` 层——`boot/<mt>/`
+只走一次 mt 分类(同 `ta6le/`、`a6le/` 之类一份一份摆齐)。
 
 ```
 dist/<name>-<version>-<mt>/
   bin/
-    <app>                  ← POSIX 启动器(sh)
+    <app>                  ← POSIX 启动器(sh,稳定 shim 风格;指 bundled runtime)
     <app>.ps1              ← Windows 启动器(PowerShell)
-    skiff|scheme[.exe]     ← bundled runtime 可执行文件
-  lib/chez/
-    *.boot                 ← petite.boot [+ scheme.boot] [+ skiff.boot]
+    <runtime>[.exe]        ← bundled runtime 可执行文件(skiff / scheme / petite)
+  boot/<mt>/               ← 与各 vroot 的 <mt>/ 对齐
+    petite.boot [+ scheme.boot] [+ skiff.boot]
   share/chez/              ← payload 根(= install 的 libdir)
     <name>/<version>/
       src/                 ← 源码 + 资源(method B:资源随源码树自动落位)
@@ -48,7 +50,7 @@ dist/<name>-<version>-<mt>/
         run.sps                ← 入口 runner(pack 模式,见 §5)
     <dep>/<pin-val>/       ← 依赖闭包,版本目录名 = lock 的 pin val
       src/  <mt>/
-    chandler/<version>/    ← chandler runtime 子集(运行时门;非 lock 依赖,独立一份)
+    chandler/<chandler-ver>/ ← chandler runtime 子集(运行时门;独立 namespace)
   pack.manifest            ← 包元数据 + 目标三元组 + native 清单 + files+sha256
 ```
 
@@ -75,7 +77,7 @@ dist/<name>-<version>-<mt>/
 1. **根推导**:run.sps 恒在 `<libdir>/<name>/<version>/.chandler/run.sps`,
    4× path-parent = `%root`(install 模式 = libdir;pack 模式 = share/chez)。
    pack 模式再 +2 层得 `%pack-root`(pack.manifest 所在)。
-2. **lock 驱动(D18)**:读 `.chandler/chandler-manifest.lock` 的 `(resolved …)`,
+2. **lock 驱动(D18)**:读 `.chandler/chandler-manifest.lock` 的 `(deps ...)`,
    每 dep 取 `(pin (kind "val"))` 的 val 拼 `%root/<dep>/<val>/src::<mt>` 挂
    `library-directories`(版本目录名与 install 布局一致;lock 缺失 = 零依赖,不报错)。
 3. **pack 追加段**(顺序固定,校验先于一切状态变更):
@@ -92,14 +94,16 @@ dist/<name>-<version>-<mt>/
 4. **入口**:`(eval (list '<main> (list 'quote args)) env)`,env 含 `(chezscheme)`
    + 入口库;main 契约 argv → exit-code,`(exit rc)` 传给启动器。
 
-## 6. 启动器(bin/<app>)
+## 6. 启动器(`bin/<app>`)
 
 sh / ps1 双发,纯相对路径定位(`HERE=$(dirname $0)/..`),不设任何路径环境变量
-(D8:APP_ROOT 已去除):
+(D8:APP_ROOT 已去除)。pack 启动器指**bundled runtime**(在 `bin/` 下),与
+install 的稳定 shim(指**系统 runtime** + 运行时发现)不是同一份模板 —— 详见
+[08-launchers.md](08-launchers.md)。
 
-- **stock(scheme/petite)**:`scheme -b lib/chez/petite.boot [-b …/scheme.boot]
+- **stock(scheme/petite)**:`scheme -b boot/<mt>/petite.boot [-b …/scheme.boot]
   --program share/chez/<name>/<ver>/.chandler/run.sps`
-- **skiff**:`SKIFF_BOOT_DIR=$HERE/lib/chez exec bin/skiff --program <run.sps>`
+- **skiff**:`SKIFF_BOOT_DIR=$HERE/boot/<mt> exec bin/skiff --program <run.sps>`
   (skiff 按 exe 相对找 boot,包内布局对不上它的默认,必须显式指)
 
 启动器参数原样透传(`"$@"` / `$PackArgs`),退出码 = run.sps 的 `(exit rc)`。
@@ -113,7 +117,7 @@ sh / ps1 双发,纯相对路径定位(`HERE=$(dirname $0)/..`),不设任何路�
   (target (chez-version "<v>") (machine-type <mt>)
           (skiff-version "<v>"))            ; 仅 skiff 包;stock 包写 (skiff-compat ">=0.0.0")
   (runtime (kind skiff|scheme|petite) (exe "bin/skiff")
-           (boots "lib/chez/petite.boot" …))
+           (boots "boot/<mt>/petite.boot" …))
   (lib-dirs "<mt>")                          ; 各 vroot 下的对象层名(无 lib/ 前缀)
   (entry (library (<lib> …)) (main main))
   (native (<soname> "share/chez/<dep>/<pin>/<mt>/<libpath>/native/<file>") …)  ; 可省
@@ -125,20 +129,26 @@ sh / ps1 双发,纯相对路径定位(`HERE=$(dirname $0)/..`),不设任何路�
 - `(files …)` 按需校验(`verify-pack` / 打补丁前),不在每次启动跑 —— 启动只做廉价的
   目标三元组比对。
 
-## 8. pack 流水线(chandler/pack.ss `pack`)
+## 8. pack 流水线(`chandler/pack.ss` `pack`)
 
 ```
 preflight(缺 _build / 缺 dep 对象 / 缺声明的 native → 当场报错,指出该跑哪个命令)
-  → rm -rf <root>
-  → 阶段 1:install-project-payload!(register?=#f)
+  → 创建临时目录 <out>.tmp.<pid>/(D29 原子落地,失败时 rm -rf,不污染最终目录)
+  → 阶段 1:install-project-payload!(register?=#f,直拷,无 staging、无 .registry/)
            + copy-chandler-into-pack!(声明了运行时门时)
            + write-app-manifest!(清单快照 / 合成)
-           + 入口 .so 存在性检查(失败 rm -rf,不留半成品)
+           + 入口 .so 存在性检查(失败 rm -rf tmp,不污染最终目录)
   → 阶段 2(仅 app):写 pack 模式 run.sps
-           + 定位并拷 runtime exe → bin/,boot → lib/chez/
+           + 定位并拷 runtime exe → bin/,boot → boot/<mt>/
            + 写启动器 bin/<app>[.ps1]
            + 写 pack.manifest(最后写,故不自哈希)
+  → 完工:rename <out>.tmp.<pid>/ → <out>/(单次原子落地,覆盖时若 <out> 已存在
+    走 backup 回滚路径)
 ```
+
+> **v4 D29**:旧行为是 `rm -rf <root>` 后原地写,失败时留半成品目录或污染已存在的同名目录;v4 改**临时 sibling + rename**(temp 命名 `<out>.tmp.<pid>/`,与目标同目录保证 rename 原子),失败时直接删 temp,不动目标。
+>
+> pack 不走 per-prefix 进程锁(D21 的范围是 `install-global` / `uninstall-global` / `switch-active`):pack 创建的是新目录,与正在使用的全局前缀不冲突;临时目录里的写失败可由 D29 temp sibling 自管。
 
 - **pack 只组装,不编译**:编译由 `chandler build` 进程内完成;native 无法在消费方
   现编,缺件必须打包期就停。
@@ -148,13 +158,28 @@ preflight(缺 _build / 缺 dep 对象 / 缺声明的 native → 当场报错,指
 
 ## 9. pack verify(`chandler verify-pack <dir> [--target]`)
 
-1. pack.manifest 存在且为 `(pack …)`(否则 65)
-2. format ≤ supported(否则 70)
-3. `(files …)` 每项 sha256 + size 与磁盘比对(CHANGED/MISSING → 65;报告
-   `N ok, M bad, K extra`)
-4. `--target`(opt-in):machine-type / chez-version / skiff-version|skiff-compat
-   三维比对,不符 → 78;`SKIFF_ALLOW_VERSION_SKEW=1` 只放宽 skiff 维
-   (与 run.sps 启动期同一套规则,同一矩阵)
+v4 D24 严格化:完整性校验的本意是发现任何偏差,容差会变成注入窗口。
+
+1. **pack.manifest 顶层**:必须存在 + 必须为 `(pack …)`(用 `expect-tag`,
+   非 pair 抛受控错 → **65** EX_DATAERR)。旧行为把 datum 错当低级 cdr 错。
+2. **format**:`(format N)` > `pack-format-supported`(=1) → **70** EX_SOFTWARE
+3. **`(files …)` 字段**:**必须存在且非空**;缺失 / 空 / 非列表 → **65**
+   —— 没有文件清单的包无法证明完整性(旧行为把缺失当空表 → 所有文件成 EXTRA
+   却不计 bad → 对任何包都开绿灯)。
+4. **`(files …)` 每 entry 必须 `(rel sha256 size)` 三件套**:缺 `sha256` 或
+   缺 `size` → fatal(计入 bad,旧行为是默默当 INVALID 但不致命)。
+5. **完整性比对**(全部计入 bad,致命):
+   - `MISSING`:声明了但盘上没文件
+   - `CHANGED`:声明了但 sha256 不符
+   - `INVALID`:声明了但 rel 不可辨 / sha256 缺失 / size 缺失(schema 不合格
+     的 entry 不让同名文件被二次计 EXTRA)
+   - **`EXTRA`**:`(files-under root)` 中未被声明的文件 —— **致命**(v4 起计入 bad;
+     v2/v3 只报告不致命,EXTRA 可能是注入窗口)。report: `N ok, M bad, K extra`。
+6. **`--target`(opt-in)**:machine-type / chez-version / skiff-version|skiff-compat
+   三维比对,不符 → **78** EX_CONFIG;`SKIFF_ALLOW_VERSION_SKEW=1` 只放宽 skiff 维
+   (与 run.sps 启动期同一套规则,同一矩阵)。
+
+返回退出码:bad = 0 → 0;bad > 0 → 65;format 太新 → 70;target 不符 → 78。
 
 ## 10. pack vs install 差异
 
@@ -163,7 +188,7 @@ preflight(缺 _build / 缺 dep 对象 / 缺声明的 native → 当场报错,指
 | 前缀 | `dist/<name>-<ver>-<mt>/share/chez` | `~/.local/share/chez`(或 --prefix) |
 | 注册表 | **无**(register?=#f,可再分发) | 中心 `.registry/`(D16) |
 | 拷贝方式 | 直拷(install-payload-global) | staging 原子落位(install-global) |
-| runtime 来源 | bundled `bin/skiff|scheme` + `lib/chez/*.boot` | 系统 runtime(运行时发现,D17 shim) |
+| runtime 来源 | bundled `bin/<runtime>` + `boot/<mt>/*.boot` | 系统 runtime(运行时发现,D17 shim) |
 | 入口 | 启动器 → bundled runtime → run.sps(pack 模式) | 稳定 shim → 系统 runtime → run.sps |
 | run.sps | + pack.manifest 校验 + native 加载 | 仅 lock 驱动挂路径 |
 

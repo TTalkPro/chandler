@@ -89,7 +89,7 @@ chandler init --name=myapp                 # 生成骨架 chandler-manifest.ss +
 chandler add http https://github.com/x/http --tag v1.2.0
 chandler deps                              # 解析 → 写 lock → git 依赖整仓 checkout 到 _vendor/
 chandler build                             # 进程内编译依赖闭包 → 各 _vendor/<dep>/_build/<mt>/
-chandler list                              # 看已锁依赖
+chandler deps --list                      # 看已锁依赖(全局已装包用 `chandler list`)
 chandler verify                            # CI:校验 _vendor/ 与 lock 一致
 chandler repl                              # 交互 shell(自动挂库路径)
 ```
@@ -145,21 +145,22 @@ chandler run --script main.ss [args...]
 | `init [--lib\|--app] [--name=N]` | 生成骨架 `chandler-manifest.ss` + `chandler-tasks.ss`(默认 lib;`--app` 写 `(app …)` 使其可 pack) |
 | `add <name> <url> [--tag/--rev/--branch/--path]` | 添加依赖 |
 | `remove <name>` | 移除依赖 |
-| `deps [--production] [--offline] [--force] [--update]` | 解析 → 写 lock → git 依赖 checkout 到 `_vendor/` + chandler 运行时门就位 |
+| `deps [--production] [--offline] [--force] [--update]` | 解析 → 写 lock → git 依赖 checkout 到 `_vendor/` + chandler 运行时门就位;`--list` 显已锁依赖,`--tree` 树状显已锁依赖 |
 | `build [--allow-build[=a,b]]` | 进程内编译依赖闭包 + native → 各 `_vendor/<dep>/_build/<mt>/` |
-| `verify` | 校验 `_vendor/` 与 lock 一致(CI) |
-| `list` / `tree` | 显示已锁依赖 |
+| `verify` | 校验 `_vendor/` 与 `chandler-manifest.lock` 的 `(files …)` 一致(CI,只读);不一致/缺失/多余 → exit 65 |
+| `list` | 列全局已装包(多版本,active 版本标 `[active]`) |
+| `tree` | `deps --tree` 别名:树状显已锁依赖 |
 | `run <script.ss> [args…]` | 挂库搜索路径后跑脚本 |
-| `exec -- <cmd…>` | 设 `CHEZSCHEMELIBDIRS` 后跑命令 |
+| `exec -- <cmd…>` | 设 `CHEZSCHEMELIBDIRS` + 加载 `.env` 后透传跑命令;退出码 = 子进程退出码 |
+| `env` | 打印 `export CHEZSCHEMELIBDIRS=…` + `.env` 各键导出,供 `eval "$(chandler env)"` |
 | `repl [--runtime skiff\|chez]` | 交互 shell,自动挂库路径(项目优先 + 全局兜底) |
 | `make [task]` | 跑 `chandler-tasks.ss` 的任务(`build`/`test`/…);无任务文件时从 manifest 推导 |
 | `install [--user\|--system\|--prefix=DIR]` | 装项目库 + 依赖到全局前缀(中心 `.registry/` 登记)。**app 自动建命令行入口** `~/.local/bin/<app>`(POSIX,稳定 shim)/ `%LOCALAPPDATA%\chez\bin\<app>.ps1`(Windows)。首次 install 自动设 active;同 name 多 version 共存 |
 | `uninstall --name=<n> [--version=<v>]` | 干净卸载(`rm -rf <vroot>` + 更新 `.registry/`);删 active 自动清空 |
-| `list` | 列出全局已装包(active 版本标 `[active]`) |
-| `switch <name> <version>` | **切换 app 的 active version**(D19);`--latest` 选最高;`--list` 列所有 active |
-| `doctor` | 体检:missing-vroot / missing-active / stale-staging |
+| `switch <name> <version>` | **切换 app 的 active version**(D19);`--latest` 按 semver 数值序选最高;`--list` 列所有 active |
+| `doctor` | 体检全局前缀:`missing-vroot` / `missing-active` / `missing-runner` / `malformed-registry` / `orphan-vroot` / `kind-mismatch` / `name-filename-mismatch` / `duplicate-version` / `stale-staging` |
 | `pack [--runtime r] [--out dir] [--lib]` | 组装自包含分发包到 `dist/<name>-<ver>-<mt>/`(载荷与 install 同管线 → `share/chez/`;envelope 在 `bin/` + `lib/chez/`,自带运行时;`--lib` 只打载荷) |
-| `verify-pack [--target] <dir>` | 校验分发包(files sha256 完整性;`--target` 加目标三元组 mt/chez/skiff 比对) |
+| `verify-pack [--target] <dir>` | 校验分发包:强制 schema(`(format …)` 不得超 supported + `(files …)` 须存在且每项含 `sha256`/`size`)+ hash/size 完整比对 + 未声明文件 `EXTRA` 致命;`--target` 再核 machine-type / chez-version / skiff-version |
 
 全局旗标:`-C <dir>` `--offline` `--production` `--force` `--keep-extra` `--verbose`。
 

@@ -1,224 +1,231 @@
 # 04 — install 操作流水线
 
-> 状态: 设计中
+> 状态:已实现(v3 + v4 健壮性),对齐 `chandler/install.ss` + `chandler/registry.ss`。
+> v3 中心设计见 [06-installed-layout.md](06-installed-layout.md),决策记录见 [TASK.md](../TASK.md)。
 
 ## 1. 一句话目标
 
-把 `manifest.lock` 里的依赖闭包**物化**(materialize)为版本化中央仓库里的 `<name>/<version>/{src,<mt>,.chandler/}`子树,支持 git 和 prebuilt 两种 source,按 I2 不变量字节级统一产出。
+把 `chandler-manifest.lock` 里的依赖闭包**物化**到版本化中央仓库 `<libdir>/<name>/<version>/{src,<mt>,.chandler/}` 下,更新中心 `.registry/<name>.ss`,为 app 生成稳定 shim 启动器 + `.chandler/run.sps`。整段装在一个**中心注册表事务**里(per-prefix 进程锁 + staging 整目录单次 rename + registry 原子写),失败不留半成品。
 
-## 2. install 命令的两种形态
+## 2. install 命令的形态
 
-### 2.1 `chandler install`(项目根,从 manifest.lock 装到中央仓库)
+### 2.1 `chandler install`(项目根,从 lock 装到全局前缀)
 
-默认行为。从项目根的 `manifest.lock` 读取已解析的依赖闭包,将每个 versioned package 装入中央仓库(`~/.local/share/chez/<name>/<version>/`),并为 app 形态生成命令行入口。
+默认行为。从项目根的 `chandler-manifest.lock` 读取已解析的依赖闭包:
 
-### 2.2 `chandler install --prefix=<dir>`(装到任意目录,pack 用)
+- 装项目库自身到 `<libdir>/<name>/<version>/`
+- 装各 dep 到 `<libdir>/<dep>/<pin-val>/`(版本目录名 = lock 的 pin val)
+- 更新中心 `.registry/<name>.ss`(versions + active)
+- app 形态额外生成稳定 shim 启动器(`<bindir>/<app>` POSIX / `<bindir>/<app>.ps1` Windows)+ `<vroot>/.chandler/run.sps`
 
-不写中央仓库,而是写到指定前缀。常用于 pack 流水线的临时暂存阶段(`<tmp>`),pack 随后在该树基础上追加 envelope。
+### 2.2 `chandler install --prefix=<dir>`
 
-### 2.3 `chandler install <pack.tar.gz>`(从 pack 直接解包,prebuilt install)
+装到任意目录。pack 流水线用它作阶段 1(payload),后续追加 envelope。
 
-传入一个 tarball 路径,跳过 resolve 和 build 阶段,直接校验 sha256、 解包到中央仓库。prebuilt 源的标准消费方式。
+### 2.3 旗标
 
-## 3. git source 流水线
+| 旗标 | 作用 |
+|------|------|
+| `--user` | 默认;POSIX `~/.local/share/chez` / Windows `%LOCALAPPDATA%\chez` |
+| `--system` | POSIX `/usr/local/chez` / Windows `%ProgramData%\chez` |
+| `--prefix=<dir>` | 任意目录(`bin/<app>` 落在 `<dir>/bin`);与 pack 共用 |
+| `--force` | 覆盖已存在的同 version vroot(经 staging + promote 走 backup 回滚) |
+| `--adopt` | 复用盘上现有 version root(不走 staging,直接登记) |
 
-当 lock 里的 dep 是 `(source (git "<url>"))` 时:
+> v3 删了 `<pack.tar.gz>` 直接 install:prebuilt 仍是 schema-允许但实现暂缓的备选(D12/D27),resolve 阶段显式报错。当前不消费 tarball。
 
-### 3.1 resolve(已完成)
+## 3. 落地布局(v3,中心 `.registry/`)
 
-由 01/02 文档定义,输出 `manifest.lock`,含每个 dep 的 `source`、`rev`、`version`。
-
-### 3.2 fetch(git clone to _vendor)
-
-对每个 git dep:
-1. 若本地无 `_vendor/<name>/`,执行 `git clone -c core.hooksPath=/dev/null <url> _vendor/<name>/`
-2. `git fetch origin` 更新 remote ref
-3. `git checkout <rev>` 切到锁定 commit(detach 状态)
-4. 脏目录 → 报错,除非 `--force`
-
-### 3.3 build(in-process compile)
-
-git source 的编译产物不在 fetch 阶段产生,而是由后续的 `chandler build` 命令在 `_vendor/<name>/` 树内就地编译。install 本身不触发编译。
-
-### 3.4 materialize 到 `<name>/<version>/{src,<mt>}/`
-
-在目标前缀(如中央仓库根)里:
-
-1. 创建 `<name>/<version>/` 目录结构
-2. 从 `_vendor/<name>/` 复制源码(`src/`)到目标
-3. 从 `_vendor/<name>/_build/<mt>/` 复制编译产物(`<mt>/`)到目标
-4. 写 `.chandler/manifest.lock`(此 version 的闭包快照)
-5. 写 `.chandler/registry.ss`(name、version、exports、files+sha256)
-6. 写 `.chandler/source.ss` 记录 `(git "<rev>")`
-
-## 4. prebuilt source 流水线
-
-当 lock 里的 dep 是 `(source (prebuilt ...))` 时:
-
-### 4.1 resolve
-
-同 §3.1,输出含 prebuilt 条目的 lock。
-
-### 4.2 fetch(download + sha256 校验)
-
-1. 从 lock 读取本机 mt 对应的 `(url "<url>")` 和 `(sha256 "<hex>")`
-2. `curl` 下载 tarball 到临时文件
-3. 计算 sha256,比对 hex — 不等则报错
-4. 解包到 `<name>/<version>/`
-
-### 4.3 materialize
-
-prebuilt 的 materialize 比 git 简单(无 build 步骤):
-
-1. 解包 tarball 到 `<name>/<version>/`
-2. 校验 payload 结构符合 §4.1 布局
-3. 写 `.chandler/source.ss` 记录 `(prebuilt (mt <mt> (url ...) (sha256 ...)))`
-4. 写 `.chandler/registry.ss`
-
-## 5. materialize 阶段详解
-
-### 5.1 staging → atomic promote
-
-materialize 分两阶段:
-
-1. **staging**:所有文件先写进 `<root>/.chandler/staging/<name>-<version>-<mt>/`
-2. **promote**:staging 完成后,逐文件 move 到最终位置
-
-失败时逐文件反向删除 staging 目录,不留残留。
-
-### 5.2 写 per-version registry.ss
-
-每个 `<name>/<version>/.chandler/registry.ss` 包含:
-
-```scheme
-(registry
-  (format 1)
-  (name <name>)
-  (version "<version>")
-  (mt <mt>)
-  (exports <exposed-libraries>)
-  (files (<relpath> (sha256 <hex>)) ...))
+```
+<libdir>/                                    例:~/.local/share/chez/
+├── .registry/                               中心注册表(D16,NEW)
+│   ├── <name>.ss                            每 name 一份,管 versions + active
+│   └── staging/                             事务暂存(D15/D22)
+│       └── <name>/<version>/                install 期间的临时树,成功后整目录单次 rename 落位
+│
+└── <name>/                                  例:myapp
+    └── <version>/                           version root(I1:自包含)
+        ├── src/
+        │   ├── <name>.ss                    库入口源码
+        │   └── <name>/                      子库 + 资源同居(D13)
+        │       ├── <sub>.ss
+        │       └── resources/               method B:资源与库源码同居
+        │           └── <file>
+        ├── <mt>/                            例:ta6le
+        │   ├── <name>.so
+        │   └── <name>/*.so
+        └── .chandler/
+            ├── chandler-manifest.ss         清单快照(D14)
+            ├── chandler-manifest.lock       闭包 + files+sha256(D15,本 version 自有)
+            └── run.sps                      仅 app 有(D18 lock 驱动)
 ```
 
-### 5.3 update index.ss
+> v3 已删的 v2 残留:
+> - `<vroot>/.chandler/registry.ss` / `format.ss` / `source.ss` —— **删**,lock 取代
+> - `<vroot>/.chandler/index.ss` / `staging/` —— **删**,挪到 `<libdir>/.registry/staging/<name>/<version>/`
+> - `<libdir>/.chandler/` —— **删**,中心 `.registry/` 取代
 
-`<root>/.chandler/registry/index.ss` 是 derived 缓存,由所有 version 的 registry.ss 扫描得到。install 完成后触发增量更新(新增 entry)。
+## 4. 流水线
 
-## 6. build 何时介入
+### 4.1 resolve(已完成)
 
-| source | build 需要? | 说明 |
-|--------|-------------|------|
-| git | ✅ 需要 | 本地编译,产物从 `_vendor/<name>/_build/<mt>/` 来 |
-| prebuilt | ❌ 不需要 | 中央仓库已编译好,client 只解包 |
+由 `chandler deps` 负责:解析 → 写 `chandler-manifest.lock` → git 依赖 checkout 到 `_vendor/<name>/`。install 只消费 lock,不重新 resolve。
 
-**build 触发时机**:git install 的 materialize 在 `chandler build` 之后进行,install 命令本身只负责把已编译产物从 `_vendor/` 复制到目标前缀。
+### 4.2 build(已完成)
+
+`chandler build` 进程内编译 lock 闭包 → 各 `_vendor/<dep>/_build/<mt>/`。install 不触发编译,只搬运已编产物。
+
+### 4.3 materialize 到 `<libdir>/<name>/<version>/`
+
+整段包在 `with-registry-lock!` 里(D21,per-prefix 一把锁 `<libdir>/.registry/.lock`),保证并发 install 不丢版本条目;锁超时默认 30s,staleness 阈值 10 分钟。
+
+#### 4.3.1 enumerate + kind 校验(D26)
+
+- `enumerate-lib src <name>` 从源树枚举:`<name>.ss` + `<name>/**` → `src/`;`_build/<mt>/` 过滤 `.bake-manifest`/`.wpo` → `<mt>/`。**与 pack 完全同一函数**,保证 payload 字节级一致(I2)。
+- **kind 校验**:incoming kind(`entry` 存在 → `app`,否则 `lib`)与已登记的 `registered-kind` 必须一致,否则报错。防止把 lib 装到 app 的 registry(那个 name 永远无法 active)或反之。
+
+#### 4.3.2 staging + 整目录单次 promote(D22)
+
+```
+<libdir>/.registry/staging/<name>/<version>/
+  src/...
+  <mt>/...
+```
+
+- 所有文件先写到 staging(`copy-file`,不走 atomic write —— staging 本来就是私有的)
+- promote = **整目录单次 rename** 到 `<libdir>/<name>/<version>/`,原子;失败时 rename 回滚到 backup 位置,不留半成品
+
+> v2 的「逐文件 promote + 失败时逐文件反向删除」已被整目录 rename 取代(D22):一次系统调用即可完成,无「部分 promote」的中间态;POSIX rename + Windows MoveFileEx 都是原子的。
+
+#### 4.3.3 更新 `.registry/<name>.ss`(D20)
+
+`write-registered!` 经 `sexp.ss:write-canonical-file` 走**原子写**:`temp + fsync + rename`(temp 与目标同目录,保证 rename 原子)。命名 `.<basename>.tmp.<pid>`;rename 后清理 temp 残留。
+
+新增一条 `versions.<v>` 条目:
+
+```scheme
+(registered
+  (format 1)
+  (name myapp)
+  (kind app)                                  ;; app | lib(从 manifest 推导)
+  (versions
+    ("0.1.0" (installed-at "2026-07-25T19:11:27")
+             (source (path "/home/me/proj/myapp"))
+             (installer chandler)))
+  (active "0.1.0"))                           ;; 仅 app 有;lib 不带 (active ...)
+```
+
+- **首次 install**(无 active):若 kind=app 且 opts 没显式 `set-active: #f`,自动设 active = 此 version
+- **后续 install**:不改 active;新 version 只追加到 `versions`,active 留在原值
+
+### 4.4 app 形态:启动器 + run.sps
+
+app 才有的两步,装在 `cmd-install` 而非 `install-global` 内部(注册表事务解耦后):
+
+```
+<bindir>/<app>                                POSIX 稳定 shim,生成一次永不重写(D17)
+<bindir>/<app>.ps1                            Windows PowerShell 稳定 shim
+<vroot>/.chandler/run.sps                     锁驱动挂精确版本(D18)
+```
+
+详见 [08-launchers.md](08-launchers.md)。
+
+## 5. 锁与原子性(v4 健壮性)
+
+### 5.1 per-prefix 进程锁(D21)
+
+- 锁位置:`<libdir>/.registry/.lock`(一个目录;不污染用户的 `.registry/`)
+- 抢锁:`create-directory` 原子;失败则指数退避(100ms → 200 → ... → 5s)直到 30s 超时
+- staleness:锁目录里写 `pid` + `start-time`;若 pid 不活(平台探测)或 `now - start > 10min` 则强抢
+- 范围:`install-global` / `uninstall-global` / `switch-active` 全包进 `with-registry-lock!`,一次占锁包住 staging promote + registry read-modify-write
+
+### 5.2 registry 文件原子写(D20)
+
+`write-registered!` 走 `write-canonical-file`:temp 文件 `.<name>.ss.tmp.<pid>` → fsync → rename 覆盖;rename 后删 temp 残留。**temp 必须与目标同目录**(跨目录 rename 不保证原子)。
+
+### 5.3 staging 整目录 promote(D22)
+
+见 §4.3.2。失败回滚:rename 回 staging,staging 已存在但 promote 失败时 backup 回滚路径 = 原地 + 错误报告。
+
+### 5.4 并发不变量
+
+`install-global` 在锁内一次性完成「枚举 → kind 校验 → staging 写入 → 整目录 promote → registry read-modify-write」,中间不释放锁。两个并发 install 串行化执行 → 不会丢版本条目,后到者看到前者写下的完整状态。
+
+## 6. 错误模式
+
+| 触发 | 行为 |
+|------|------|
+| kind 不一致(incoming `app`,registry 已记 `lib`,或反之) | `install-global` 报错(install 退出码 65) |
+| registry 已存在但 malformed | install 失败;`chandler doctor` 报 `malformed-registry`(用户可手动删坏的 `<name>.ss` 后重装) |
+| 源树无 installable 文件(`enumerate-lib` 返回空) | 报错 |
+| staging promote 失败(rename 撞已有目录且非空,权限不足) | backup 回滚,退出码 70/77 |
+| 锁超时(30s 内抢不到) | 退出码 70;提示「another chandler process holds the libdir」 |
 
 ## 7. `--allow-build` 何时需要
 
-当依赖含 native 代码(Foreign Function Interface)时,Chez 编译器需要执行编译步骤,这是任意代码执行(I5 不变量)。默认拒绝。
+依赖含 native 代码(FFI)时,Chez 编译会执行任意代码(I5 不变量)。默认拒绝。
 
-- **git source**:native 构建需要 `--allow-build`(已编译产物里含 native)
-- **prebuilt source**:native 在 tarball 里 → 默认拒绝,需 `--allow-prebuilt-native`
+- **git source**:native 构建需 `--allow-build[=a,b]`(可指定库名列表);授权绑构建描述哈希写入 `.chandler-approvals`(详见 [12-security.md](12-security.md))
+- **prebuilt source**:schema 允许但实现暂缓(D12);`chandler deps` 解析时显式报错 `prebuilt source not yet supported; use git`(D27)
 
-两个 flag 都需要时,chandler 给出清晰错误提示。
+## 8. 与 v2 的差异
 
-## 8. I2 不变量:嵌套而非 flatten
+| 维度 | v2 | v3 + v4 |
+|------|----|---------|
+| 注册表 | per-version `<vroot>/.chandler/registry.ss` + index 缓存 | 中心 `<libdir>/.registry/<name>.ss` + `(versions ...)`(D16) |
+| staging 位置 | `<vroot>/.chandler/staging/`(撞 - 分隔路径) | `<libdir>/.registry/staging/<name>/<version>/`(D22) |
+| staging promote | 逐文件 move + 反向回滚 | **整目录单次 rename**(D22) |
+| registry 写 | 直接覆盖 | temp + fsync + rename(D20) |
+| 并发 | 无保护 | per-prefix 锁(D21) |
+| 启动器 | 生成式,embed VERSION | 稳定 shim,运行时读 `.registry/`(D17) |
+| run.sps | scan-libdirs 全扫 | lock 驱动精确挂(D18) |
+| `.bake-manifest` / `*.wpo` | install 过滤、pack 不过滤 | 都过滤 |
 
-install 不再"flatten 进单一 prefix",而是严格按 `<name>/<version>/` 嵌套:
-
-```
-# v2(正确)
-~/.local/share/chez/
-  http/1.2.0/src/http.ss
-  http/1.2.0/ta6le/http.so
-  http/1.2.0/.chandler/registry.ss
-  http/1.3.0/src/http.ss
-  http/1.3.0/ta6le/http.so
-  http/1.3.0/.chandler/registry.ss
-
-# v1(已废弃)
-~/.local/share/chez/src/http.ss   # flatten,单版本
-~/.local/share/chez/ta6le/http.so
-```
-
-每个 version 自包含(I1),卸载 `http/1.2.0` 即 `rm -rf`,不留孤儿文件。
-
-## 9. 跟 install-global 的差异
-
-| 维度 | v1 install-global | v2 install |
-|------|-------------------|------------|
-| 布局 | flat `<prefix>/{src,<mt>}/` | nested `<prefix>/<name>/<version>/{src,<mt>}/` |
-| registry | per-prefix 单文件 | per-version `.chandler/registry.ss` |
-| 入口 | 无 | app 自动生成 `~/.local/bin/<app>` launcher |
-| 事务 | 覆盖写 | staging + atomic promote + rollback |
-
-## 10. staging 目录与回滚
+## 9. 完整示例:git install(myapp 装 http 1.2.0)
 
 ```
-<root>/.chandler/staging/<name>-<version>-<mt>/
-  src/...
-  <mt>/...
-  .chandler/...
-```
-
-成功:staging 逐文件 promote 到最终位置后删除 staging 目录。
-失败:逐文件反向删除 staging 目录,已 promote 的部分按同法回滚。
-
-## 11. 完整示例:git install(myapp 装 http 1.2.0)
-
-```
-1. myapp/manifest.lock:
+1. myapp/chandler-manifest.lock:
    (deps
-     (http (source (git "https://github.com/x/http"))
-           (version "1.2.0")
-           (rev "abc123")
-           ...))
+     (http (version "1.2.0") (source (git "https://...")) (rev "abc123")
+           (src . "_vendor/http/src") (obj . "_vendor/http/_build/ta6le")))
 
-2. chandler install(myapp 项目根)
-   ├─ resolve: 读取 lock
-   ├─ fetch: git clone https://github.com/x/http → _vendor/http/
-   │          git checkout abc123
-   ├─ (chandler build): 编译 _vendor/http/_build/ta6le/http.so
-   └─ materialize:
-       ~/.local/share/chez/http/1.2.0/
-         src/http.ss
-         ta6le/http.so
-         .chandler/
-           manifest.lock    ← 此 version 的闭包
-           registry.ss     ← (name http)(version 1.2.0)...
-           source.ss      ← (git "abc123")
+2. chandler install(myapp 项目根,默认 --user)
+   ├─ deps + build 已完成(前提)
+   ├─ target-libdir = ~/.local/share/chez,target-bindir = ~/.local/bin
+   └─ install-project-payload!(register?=#t):
+       with-registry-lock!(~/.local/share/chez)        ; D21
+         ├─ enumerate-lib + kind 校验                   ; D26
+         ├─ with-staging! ~/.local/share/chez/myapp/0.1.0:
+         │    copy-file ... → staging/...               ; D22
+         │    promote-staging! → ~/.local/share/chez/myapp/0.1.0  ; 单次 rename
+         └─ write-registered! .registry/myapp.ss        ; D20 temp+fsync+rename
+              (active "0.1.0")                          ; 首次 install
+
+   └─ write-app-launcher! myapp 0.1.0 (myapp) main:
+        ~/.local/bin/myapp                             ; 稳定 shim
+        ~/.local/share/chez/myapp/0.1.0/.chandler/run.sps  ; lock 驱动
 ```
 
-## 12. 完整示例:prebuilt install
+## 10. 完整示例:重装覆盖(同 name 同 version)
 
 ```
-1. myapp/manifest.lock:
-   (deps
-     (http (source (prebuilt
-                    (mt ta6le (url "https://mirror/http/1.2.0/ta6le.tar.gz")
-                           (sha256 "abc..."))
-                    (git-fallback "https://github.com/x/http")))
-           (version "1.2.0")))
-
-2. chandler install(myapp 项目根)
-   ├─ resolve: 读取 lock,选本机 mt=ta6le 条目
-   ├─ fetch: curl 下载 ta6le.tar.gz
-   │          sha256 校验
-   └─ materialize:
-       ~/.local/share/chez/http/1.2.0/
-         src/http.ss
-         ta6le/http.so
-         .chandler/
-           manifest.lock    ← 此 version 的闭包
-           registry.ss
-           source.ss      ← (prebuilt (mt ta6le (url ...) (sha256 ...)))
+chandler install --force
+  → with-registry-lock!:
+      kind 一致(已有 registry 仍是 app)
+      staging 拷新文件
+      promote-staging!:rename staging 到 vroot;
+                        旧 vroot 内容被替换(若 rename 撞已有目录,
+                        backup 回滚路径 = 原地 + 错误)
+      write-registered!:versions 已有 "0.1.0" 条目 → 替换 installed-at + source + installer
 ```
+
+`versions.<v>` 条目被替换,active 保持不变。
 
 ## 相关文档
 
-- [00-design-principles.md](00-design-principles.md) — 5 不变量、Unified Layout v2、术语表
-- [01-manifest-lock.md](01-manifest-lock.md) — manifest.lock schema、prebuilt source kind
-- [02-resolution.md](02-resolution.md) — resolve 过程
-- [03-central-repo.md](03-central-repo.md) — 中央仓库布局、registry 混合
-- [06-prebuilt.md](06-prebuilt.md) — prebuilt source 完整 BNF、mt-gate、native 安全
-- [05-pack.md](05-pack.md) — pack 流水线(install --prefix + envelope)
+- [06-installed-layout.md](06-installed-layout.md) — v3 中心设计(布局、registry、method B、lock 驱动)
+- [03-central-repo.md](03-central-repo.md) — 中央仓库布局(中心 `.registry/`)
+- [05-pack.md](05-pack.md) — pack 流水线(reuse install-project-payload!)
+- [08-launchers.md](08-launchers.md) — 稳定 shim + run.sps(D17 + D18)
+- [11-cli.md](11-cli.md) — `chandler install` 命令面 + 退出码
+- [12-security.md](12-security.md) — `--allow-build` 授权模型
