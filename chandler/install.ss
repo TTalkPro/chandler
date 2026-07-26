@@ -11,13 +11,12 @@
 
 (library (chandler install)
   (export install verify list-deps
-          vendor-dir lib-dir project-lock-path project-manifest-path
-          native-load-paths
-          chandler-runtime-sublibs chandler-dev-only-rel?
-          copy-tree!
-          global-prefix global-libdir
-          project-mode? resolved-libdirs
-          install-project-payload! merge-lib-to-global! project-locked-deps)
+           vendor-dir lib-dir project-lock-path project-manifest-path
+           native-load-paths
+           chandler-runtime-sublibs
+           global-prefix global-libdir
+           project-mode? resolved-libdirs
+           install-project-payload! project-locked-deps)
   (import (chezscheme)
           (chandler util)
           (chandler fs)

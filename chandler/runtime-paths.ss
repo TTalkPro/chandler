@@ -2,8 +2,7 @@
 ;;; chandler/runtime-paths.ss --- 应用 + 库资源定位 API(designs/11 §3-4,§7)
 
 (library (chandler runtime-paths)
-  (export resource-path find-resource-path
-          define-resource-path-resolver)
+  (export resource-path find-resource-path)
   (import (chezscheme)
           (chandler util)
           (chandler layout)

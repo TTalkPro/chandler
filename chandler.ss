@@ -5,7 +5,7 @@
 
 (library (chandler)
   (export chandler-version
-          activate activate-natives load-native native-path native-root
+          activate load-native native-path
           current-runtime runtime-version verify-runtime!)
   (import (chezscheme)
           (chandler activate)

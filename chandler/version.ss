@@ -7,8 +7,8 @@
 
 (library (chandler version)
   (export parse-version version-compare version<? version=?
-          version-match? select-highest strip-v
-          parse-semver semver>?)
+           version-match? select-highest strip-v
+           semver>?)
   (import (chezscheme)
           (chandler util))
 

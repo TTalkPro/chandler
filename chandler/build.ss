@@ -22,9 +22,6 @@
 
 (library (chandler build)
   (export build build-project tree-library-files
-          read-approvals write-approvals approval-hash
-          dep-native-spec
-          derive-library-tasks! derive-native-tasks! build-tree!
           build-chandler-runtime!)
   (import (chezscheme)
           (chandler util)
