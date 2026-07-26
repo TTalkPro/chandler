@@ -1,11 +1,11 @@
 #!chezscheme
-;;; chandler/test/install.ss --- (chandler install) 端到端集成:本地 git 仓,不依赖外网
+;;; tests/chandler/install.ss --- (chandler install) 端到端集成:本地 git 仓,不依赖外网
 
-(library (chandler test install)
+(library (tests chandler install)
   (export suite)
   (import (chezscheme)
-          (chandler test harness)
-          (chandler test fixtures)
+          (tests chandler harness)
+          (tests chandler fixtures)
           (chandler proc)
           (chandler fs)
           (chandler layout)

@@ -1,10 +1,10 @@
 #!chezscheme
-;;; chandler/test/layout.ss --- (chandler layout) 测试
+;;; tests/chandler/layout.ss --- (chandler layout) 测试
 
-(library (chandler test layout)
+(library (tests chandler layout)
   (export suite)
   (import (chezscheme)
-          (chandler test harness)
+          (tests chandler harness)
           (chandler util)          ; string-suffix?(判平台)
           (chandler layout))
 

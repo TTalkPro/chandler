@@ -1,5 +1,5 @@
 #!chezscheme
-;;; chandler/test/build.ss --- (chandler build) 排单/授权/**进程内编译**测试
+;;; tests/chandler/build.ss --- (chandler build) 排单/授权/**进程内编译**测试
 ;;;
 ;;; 2026-07-24(P6 阶段 B6):bake 子进程没了,mock bake 与 `CHANDLER_BAKE` 随之作废。
 ;;; 断言从「生成的 recipe 文本里有没有 library-task」改成看**真产物**:
@@ -7,11 +7,11 @@
 ;;; 授权那几条不变 —— 它们本来就不依赖谁来执行构建,而吸收之后反而更要紧:
 ;;; 依赖的构建不再隔在子进程里,而是在本进程执行。
 
-(library (chandler test build)
+(library (tests chandler build)
   (export suite)
   (import (chezscheme)
-          (chandler test harness)
-          (chandler test fixtures)
+          (tests chandler harness)
+          (tests chandler fixtures)
           (chandler fetch)
           (chandler fs)
           (chandler layout)

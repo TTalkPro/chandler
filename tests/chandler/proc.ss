@@ -1,10 +1,10 @@
 #!chezscheme
-;;; chandler/test/proc.ss --- (chandler proc) 测试(POSIX 命令)
+;;; tests/chandler/proc.ss --- (chandler proc) 测试(POSIX 命令)
 
-(library (chandler test proc)
+(library (tests chandler proc)
   (export suite)
   (import (chezscheme)
-          (chandler test harness)
+          (tests chandler harness)
           (chandler proc))
 
   (define-suite suite

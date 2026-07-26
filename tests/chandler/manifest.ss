@@ -1,10 +1,10 @@
 #!chezscheme
-;;; chandler/test/manifest.ss --- (chandler manifest) 测试
+;;; tests/chandler/manifest.ss --- (chandler manifest) 测试
 
-(library (chandler test manifest)
+(library (tests chandler manifest)
   (export suite)
   (import (chezscheme)
-          (chandler test harness)
+          (tests chandler harness)
           (chandler manifest))
 
   (define (m datum) (validate-manifest (parse-manifest datum)))

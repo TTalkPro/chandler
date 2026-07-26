@@ -1,11 +1,11 @@
 #!chezscheme
-;;; chandler/test/env.ss --- (chandler env) .env 读取测试(C3)
+;;; tests/chandler/env.ss --- (chandler env) .env 读取测试(C3)
 
-(library (chandler test env)
+(library (tests chandler env)
   (export suite)
   (import (chezscheme)
-          (chandler test harness)
-          (chandler test fixtures)
+          (tests chandler harness)
+          (tests chandler fixtures)
           (chandler fs)
           (chandler layout)
           (chandler env))

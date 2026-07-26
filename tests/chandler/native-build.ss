@@ -1,5 +1,5 @@
 #!chezscheme
-;;; chandler/test/native-build.ss --- (chandler native-build) 测试
+;;; tests/chandler/native-build.ss --- (chandler native-build) 测试
 ;;;
 ;;; 覆盖:clause 解析(所属库/soname)、指纹输入、loader 代码生成的两条硬约束
 ;;; (library-directories 扫描 + native-loaded 引用边)、预扫、落点不变量,以及 script 后端
@@ -7,11 +7,11 @@
 ;;;
 ;;; 环境门:没有 `cc` 就跳过真编 C 的用例;没有 Chez 编译器(Petite)跳过要编库的。
 
-(library (chandler test native-build)
+(library (tests chandler native-build)
   (export suite)
   (import (chezscheme)
-          (chandler test harness)
-          (chandler test fixtures)
+          (tests chandler harness)
+          (tests chandler fixtures)
           (chandler base)
           (chandler task-engine)
           (chandler recipe)

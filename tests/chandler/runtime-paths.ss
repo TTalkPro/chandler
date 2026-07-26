@@ -1,14 +1,14 @@
 #!chezscheme
-;;; chandler/test/runtime-paths.ss --- (chandler runtime-paths) 测试
+;;; tests/chandler/runtime-paths.ss --- (chandler runtime-paths) 测试
 ;;;
 ;;; 2026-07-24:资源定位**扫 (library-directories) 的 src/obj 两侧**。
 ;;; D8:APP_ROOT 环境变量与 app-root/app-name API 已完全去除。
 
-(library (chandler test runtime-paths)
+(library (tests chandler runtime-paths)
   (export suite)
   (import (chezscheme)
-          (chandler test harness)
-          (chandler test fixtures)
+          (tests chandler harness)
+          (tests chandler fixtures)
           (chandler runtime-paths)
           (chandler layout)
           (chandler util)

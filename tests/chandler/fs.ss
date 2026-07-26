@@ -1,14 +1,14 @@
 #!chezscheme
-;;; chandler/test/fs.ss --- (chandler fs) 测试
+;;; tests/chandler/fs.ss --- (chandler fs) 测试
 
-(library (chandler test fs)
+(library (tests chandler fs)
   (export suite)
   (import (chezscheme)
-          (chandler test harness)
+          (tests chandler harness)
           (chandler proc)
           (chandler fs))
 
-  ;; 登记进 harness,由 run-suites 逐用例清(不用 (chandler test fixtures) 的 mktmp:
+  ;; 登记进 harness,由 run-suites 逐用例清(不用 (tests chandler fixtures) 的 mktmp:
   ;; fs 是最底层,fixtures 依赖它,引入会绕成环。这里直接登记即可)。
   (define (tmp)
     (register-test-tmp! (string-trim* (proc-result-out (run-capture "mktemp" '("-d"))))))

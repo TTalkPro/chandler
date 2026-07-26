@@ -1,16 +1,16 @@
 #!chezscheme
-;;; chandler/test/recipe.ss --- (chandler recipe) 测试
+;;; tests/chandler/recipe.ss --- (chandler recipe) 测试
 ;;;
 ;;; 覆盖 DSL 注册(task/file/rule/default-task)、recipe 加载(可变环境、
 ;;; 每次加载环境隔离、native 预扫钩子、失败即 config error)、目标选择与调用。
 ;;; 都在临时目录里造真 recipe 文件跑,不 mock —— load-recipe 的价值正是「读真文件、
 ;;; eval 在组好的环境里」,mock 掉就什么也没验。
 
-(library (chandler test recipe)
+(library (tests chandler recipe)
   (export suite)
   (import (chezscheme)
-          (chandler test harness)
-          (chandler test fixtures)
+          (tests chandler harness)
+          (tests chandler fixtures)
           (chandler base)
           (chandler task-engine)
           (chandler recipe))

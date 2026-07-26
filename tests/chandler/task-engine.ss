@@ -1,14 +1,14 @@
 #!chezscheme
-;;; chandler/test/task-engine.ss --- (chandler task-engine) 测试
+;;; tests/chandler/task-engine.ss --- (chandler task-engine) 测试
 ;;;
 ;;; 覆盖 record(task/rule/miniregex)+ parameter 钩子 + bail + join-chain。
 ;;; task-engine 的 engine 逻辑(execute/needed?)依赖外部注册的钩子(B4/B5
 ;;; 搬进来前由 bake 侧 miniregex/compile 注册),这里只测库本身可独立验证的部分。
 
-(library (chandler test task-engine)
+(library (tests chandler task-engine)
   (export suite)
   (import (chezscheme)
-          (chandler test harness)
+          (tests chandler harness)
           (chandler task-engine))
 
   (define-suite suite

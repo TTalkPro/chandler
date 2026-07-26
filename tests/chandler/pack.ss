@@ -1,5 +1,5 @@
 #!chezscheme
-;;; chandler/test/pack.ss --- (chandler pack) 组装/前置校验测试(designs/05)
+;;; tests/chandler/pack.ss --- (chandler pack) 组装/前置校验测试(designs/05)
 ;;;
 ;;; 包布局(FHS 式,dist/<name>-<version>-<mt>/):载荷与 install 同一管线 →
 ;;; share/chez/<name>/<version>/{src,<mt>}/;envelope 在 bin/(exe + 启动器)与
@@ -7,11 +7,11 @@
 ;;; 与「组装逻辑对不对」无关。这里钉的是 pack 自己负责的那几件事 —— 布局、依赖
 ;;; 挑选、resources 约定、清单、前置校验的报错路径 —— 运行时捆绑另由端到端覆盖。
 
-(library (chandler test pack)
+(library (tests chandler pack)
   (export suite)
   (import (chezscheme)
-          (chandler test harness)
-          (chandler test fixtures)
+          (tests chandler harness)
+          (tests chandler fixtures)
           (chandler util)
           (chandler fs)
           (chandler layout)

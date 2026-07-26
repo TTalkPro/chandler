@@ -1,10 +1,10 @@
 #!chezscheme
-;;; chandler/test/util.ss --- (chandler util) 测试
+;;; tests/chandler/util.ss --- (chandler util) 测试
 
-(library (chandler test util)
+(library (tests chandler util)
   (export suite)
   (import (chezscheme)
-          (chandler test harness)
+          (tests chandler harness)
           (chandler util))
 
   (define-suite suite

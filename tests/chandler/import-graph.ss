@@ -1,15 +1,15 @@
 #!chezscheme
-;;; chandler/test/import-graph.ss --- (chandler import-graph) 测试
+;;; tests/chandler/import-graph.ss --- (chandler import-graph) 测试
 ;;;
 ;;; 覆盖 bake tests/deps-run.sh 的 I1–I4/I9/I10(基础图 / 包装器 / phase /
 ;;; include / 环 / 解析不到),外加预构建根归类与 (chandler …) 不算 builtin。
 ;;; 夹具是临时目录里的真源文件,根用绝对路径(不动 cwd)。
 
-(library (chandler test import-graph)
+(library (tests chandler import-graph)
   (export suite)
   (import (chezscheme)
-          (chandler test harness)
-          (chandler test fixtures)
+          (tests chandler harness)
+          (tests chandler fixtures)
           (chandler base)
           (chandler import-graph))
 

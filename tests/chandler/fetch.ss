@@ -1,11 +1,11 @@
 #!chezscheme
-;;; chandler/test/fetch.ss --- (chandler fetch) 测试:对本地临时 git 仓,不依赖外网
+;;; tests/chandler/fetch.ss --- (chandler fetch) 测试:对本地临时 git 仓,不依赖外网
 
-(library (chandler test fetch)
+(library (tests chandler fetch)
   (export suite)
   (import (chezscheme)
-          (chandler test harness)
-          (chandler test fixtures)
+          (tests chandler harness)
+          (tests chandler fixtures)
           (chandler fetch))
 
   ;; 造一个本地 git 源仓:2 提交 + tag v1.0.0;返回 (path rev1 rev2)。git 原语来自 fixtures
@@ -81,4 +81,4 @@
       (parameterize ([cache-root (mktmp)] [offline? #t])
         (assert-raises (lambda () (ensure-mirror "https://never/cached"))))))
 
-  )   ; helpers(mktmp/write-file/read-file/trim/git-*)来自 (chandler test fixtures)
+  )   ; helpers(mktmp/write-file/read-file/trim/git-*)来自 (tests chandler fixtures)

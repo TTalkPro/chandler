@@ -1,10 +1,10 @@
 #!chezscheme
-;;; chandler/test/lock.ss --- (chandler lock) 与 (chandler hash) 测试
+;;; tests/chandler/lock.ss --- (chandler lock) 与 (chandler hash) 测试
 
-(library (chandler test lock)
+(library (tests chandler lock)
   (export suite)
   (import (chezscheme)
-          (chandler test harness)
+          (tests chandler harness)
           (chandler hash)
           (chandler lock))
 

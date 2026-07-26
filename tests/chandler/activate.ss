@@ -1,11 +1,11 @@
 #!chezscheme
-;;; chandler/test/activate.ss --- (chandler runtime) 单测 + (chandler activate) 端到端
+;;; tests/chandler/activate.ss --- (chandler runtime) 单测 + (chandler activate) 端到端
 
-(library (chandler test activate)
+(library (tests chandler activate)
   (export suite)
   (import (chezscheme)
-          (chandler test harness)
-          (chandler test fixtures)
+          (tests chandler harness)
+          (tests chandler fixtures)
           (chandler proc)
           (chandler fetch)
           (chandler install)

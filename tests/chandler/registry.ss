@@ -1,11 +1,11 @@
 #!chezscheme
-;;; chandler/test/registry.ss --- (chandler registry) v3 测试
+;;; tests/chandler/registry.ss --- (chandler registry) v3 测试
 
-(library (chandler test registry)
+(library (tests chandler registry)
   (export suite)
   (import (chezscheme)
-          (chandler test harness)
-          (chandler test fixtures)
+          (tests chandler harness)
+          (tests chandler fixtures)
           (chandler fs)
           (chandler layout)
           (chandler registry))

@@ -1,11 +1,11 @@
 #!chezscheme
-;;; chandler/test/cli.ss --- (chandler cli args) 单测 + CLI 端到端(经 main)
+;;; tests/chandler/cli.ss --- (chandler cli args) 单测 + CLI 端到端(经 main)
 
-(library (chandler test cli)
+(library (tests chandler cli)
   (export suite)
   (import (chezscheme)
-          (chandler test harness)
-          (chandler test fixtures)
+          (tests chandler harness)
+          (tests chandler fixtures)
           (chandler fetch)
           (chandler fs)
           (chandler layout)

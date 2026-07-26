@@ -1,10 +1,10 @@
 #!chezscheme
-;;; chandler/test/sexp.ss --- (chandler sexp) 测试
+;;; tests/chandler/sexp.ss --- (chandler sexp) 测试
 
-(library (chandler test sexp)
+(library (tests chandler sexp)
   (export suite)
   (import (chezscheme)
-          (chandler test harness)
+          (tests chandler harness)
           (chandler sexp))
 
   (define tmp "/tmp/chandler-test-sexp.tmp")

@@ -1,13 +1,13 @@
 #!chezscheme
-;;; chandler/test/miniregex.ss --- (chandler miniregex) 测试
+;;; tests/chandler/miniregex.ss --- (chandler miniregex) 测试
 ;;;
 ;;; 覆盖文法四件:字面量 / `.` 任意 / `^`-`$` 锚点 / `\X` 转义,以及
 ;;; 库实例化时把 regexp-match? 注册进 task-engine 钩子这件事。
 
-(library (chandler test miniregex)
+(library (tests chandler miniregex)
   (export suite)
   (import (chezscheme)
-          (chandler test harness)
+          (tests chandler harness)
           (chandler task-engine)
           (chandler miniregex))
 

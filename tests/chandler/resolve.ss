@@ -1,11 +1,11 @@
 #!chezscheme
-;;; chandler/test/resolve.ss --- (chandler resolve) 测试:mock provider 单测算法 + 真 git 集成
+;;; tests/chandler/resolve.ss --- (chandler resolve) 测试:mock provider 单测算法 + 真 git 集成
 
-(library (chandler test resolve)
+(library (tests chandler resolve)
   (export suite)
   (import (chezscheme)
-          (chandler test harness)
-          (chandler test fixtures)
+          (tests chandler harness)
+          (tests chandler fixtures)
           (chandler manifest)
           (chandler lock)
           (chandler fetch)
@@ -158,4 +158,4 @@
           ;; rev 是 40 位 hex
           (assert-equal 40 (string-length (locked-dep-rev (lock-ref lk 'a))))))))
 
-  )   ; suite 结束(git 集成 helpers 来自 (chandler test fixtures))
+  )   ; suite 结束(git 集成 helpers 来自 (tests chandler fixtures))

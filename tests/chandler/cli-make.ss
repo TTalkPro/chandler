@@ -1,14 +1,14 @@
 #!chezscheme
-;;; chandler/test/cli-make.ss --- `chandler make …` 子 CLI 测试(P6 阶段 B6c;原 cli-bake)
+;;; tests/chandler/cli-make.ss --- `chandler make …` 子 CLI 测试(P6 阶段 B6c;原 cli-bake)
 ;;;
 ;;; 覆盖 argv 语法(短旗标带值是它自带一套解析器的理由)、-T/-P/-n/-c、
 ;;; 退出码表,以及默认任务的端到端执行。
 
-(library (chandler test cli-make)
+(library (tests chandler cli-make)
   (export suite)
   (import (chezscheme)
-          (chandler test harness)
-          (chandler test fixtures)
+          (tests chandler harness)
+          (tests chandler fixtures)
           (chandler base)
           (chandler task-engine)
           (chandler compile)

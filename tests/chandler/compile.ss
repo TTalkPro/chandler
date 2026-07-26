@@ -1,5 +1,5 @@
 #!chezscheme
-;;; chandler/test/compile.ss --- (chandler compile) 测试
+;;; tests/chandler/compile.ss --- (chandler compile) 测试
 ;;;
 ;;; 覆盖:落点与库目录对、library-task 端到端(真编译真产 .so)、指纹失效
 ;;; (改内容重编 / 只 touch 不重编 / 换旗标重编)、清单读写与 GC、拓扑序、
@@ -9,11 +9,11 @@
 ;;; 都在临时目录里编**真**库 —— 编译层的价值就在于产出能被 Chez 加载的对象,
 ;;; mock 掉就什么也没验。
 
-(library (chandler test compile)
+(library (tests chandler compile)
   (export suite)
   (import (chezscheme)
-          (chandler test harness)
-          (chandler test fixtures)
+          (tests chandler harness)
+          (tests chandler fixtures)
           (chandler base)
           (chandler task-engine)
           (chandler recipe)

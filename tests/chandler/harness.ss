@@ -1,11 +1,11 @@
 #!chezscheme
-;;; chandler/test/harness.ss --- 极简测试框架:define-suite / assert-* / run-suites
+;;; tests/chandler/harness.ss --- 极简测试框架:define-suite / assert-* / run-suites
 ;;;
 ;;; 设计:每个测试库用 (define-suite name (test body ...) ...) 导出一份 suite(纯值,
 ;;; 不靠实例化副作用注册——空导出库不保证被实例化,故不用全局注册表)。
 ;;; run-tests.sps 以 prefix import 收齐各 suite,交 run-suites 运行。
 
-(library (chandler test harness)
+(library (tests chandler harness)
   (export define-suite run-suites
           assert-true assert-false assert-equal assert-raises assert-string=
           register-test-tmp!)

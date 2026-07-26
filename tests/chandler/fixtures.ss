@@ -1,16 +1,16 @@
 #!chezscheme
-;;; chandler/test/fixtures.ss --- 测试夹具:临时目录 / 文件 / 本地 git 仓构造
+;;; tests/chandler/fixtures.ss --- 测试夹具:临时目录 / 文件 / 本地 git 仓构造
 ;;;
 ;;; 消除各测试文件各写一份 mktmp/write-file/trim/git-repo-builder 的 boilerplate。
 ;;; 都基于本地临时 git 仓,不依赖外网。
 
-(library (chandler test fixtures)
+(library (tests chandler fixtures)
   (export mktmp write-file read-file trim substr?
           git-init! git-commit! git-in
           manifest-text lib-umbrella-text
           make-lib-repo make-native-lib make-app)
   (import (chezscheme)
-          (chandler test harness)
+          (tests chandler harness)
           (chandler util)
           (chandler fs)
           (chandler proc))

@@ -1,10 +1,10 @@
 #!chezscheme
-;;; chandler/test/base.ss --- (chandler base) umbrella 冒烟测试
+;;; tests/chandler/base.ss --- (chandler base) umbrella 冒烟测试
 
-(library (chandler test base)
+(library (tests chandler base)
   (export suite)
   (import (chezscheme)
-          (chandler test harness)
+          (tests chandler harness)
           (chandler base))
 
 (define-suite suite
