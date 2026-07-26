@@ -31,7 +31,8 @@
           (prefix (tests chandler native-build) native-build:)
           (prefix (tests chandler cli-make) cli-make:)
           (prefix (tests chandler env) env:)
-          (prefix (tests chandler registered) registered:))
+          (prefix (tests chandler registered) registered:)
+          (prefix (tests chandler cli-runtime-env) cli-runtime-env:))
 
 (define all-suites
   (list
@@ -61,6 +62,7 @@
     (cons 'native-build native-build:suite)
     (cons 'cli-make cli-make:suite)
     (cons 'env env:suite)
-    (cons 'registered registered:suite)))
+    (cons 'registered registered:suite)
+    (cons 'cli-runtime-env cli-runtime-env:suite)))
 
 (exit (if (run-suites all-suites) 0 1))

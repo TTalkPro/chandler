@@ -99,15 +99,19 @@
         (assert-equal 65 (main (list "-C" app "init" "--lib" "--app" "--name=foo")))))
 
     ;; init 也生成 chandler-tasks.ss(程序,与 manifest 数据配对),编译入口按 name/entry。
+    ;; v3:模板不再默认带 'test 任务 —— 跑测试走顶层 `chandler test`(挂全运行时环境)。
     (init-writes-tasks-file
       (let ([app (mktmp)])
         (main (list "-C" app "init" "--name=foo"))
         (let ([tp (string-append app "/chandler-tasks.ss")])
           (assert-true (file-exists? tp))
-          (let ([txt (read-file tp)])
-            (assert-true (substr? txt "(library-task 'build '(foo))"))
-            (assert-true (substr? txt "(default-task 'build)"))
-            (assert-true (substr? txt "(task 'test"))))))
+            (let ([txt (read-file tp)])
+              (assert-true (substr? txt "(library-task 'build '(foo))"))
+              (assert-true (substr? txt "(default-task 'build)"))
+              ;; v3:不再默认生成 'test 任务(用户走 `chandler test`)
+              (assert-false (substr? txt "(task 'test)"))
+              ;; 模板注释里指向 `chandler test`(可发现性)
+              (assert-true (substr? txt "chandler test"))))))
 
     ;; app 的 --entry 决定编译入口(可与 name 不同名)
     (init-tasks-uses-app-entry
@@ -299,7 +303,7 @@
                                     (string-append "--prefix=" libdir))))
         (assert-string= "10.0.0" (registered-active (read-registered libdir 'myapp)))))
 
-    ;; ── -T:列出的命令必须真实存在(不含 update;含 verify/exec/tree)──
+    ;; ── -T:列出的命令必须真实存在(不含 update;含 verify/exec/tree/test)──
     (list-tasks-honest
       (let ([op (open-output-string)])
         (let ([rc (parameterize ([current-output-port op])
@@ -309,7 +313,64 @@
             (assert-false (substr? out " update"))
             (assert-true (substr? out " verify"))
             (assert-true (substr? out " exec"))
-            (assert-true (substr? out " tree"))))))
+            (assert-true (substr? out " tree"))
+            (assert-true (substr? out " test"))))))    ; v3:顶层 chandler test 命令
+
+    ;; ── usage 含 test 行(可发现性)──
+    (usage-lists-test-command
+      (let ([op (open-output-string)])
+        (parameterize ([current-output-port op]) (main '("--help")))
+        (let ([out (get-output-string op)])
+          (assert-true (substr? out "test [args...]")))))
+
+    ;; ── chandler test ──
+    ;; 无 tests/run-tests.sps → 65(配置错误,经 main 顶层 handler 收成)
+    (test-missing-runner-is-config-error
+      (let ([app (mktmp)])
+        (assert-equal 65 (main (list "-C" app "test")))))
+
+    ;; 有 tests/run-tests.sps → 经 --program 跑,退出码透传
+    ;; runner 写一段最小 sps:exit N,验证 cmd-test 把 N 透传回来。
+    (test-runs-runner-and-propagates-exit-code
+      (let ([app (mktmp)])
+        (ensure-dir (string-append app "/tests"))
+        (write-file (string-append app "/tests/run-tests.sps")
+          (string-append
+            "#!chezscheme\n"
+            "(import (chezscheme))\n"
+            "(exit 0)\n"))
+        (assert-equal 0 (main (list "-C" app "test")))))
+
+    ;; 透传非零退出码(子进程失败 = cmd-test 失败)
+    (test-runner-nonzero-exit-propagates
+      (let ([app (mktmp)])
+        (ensure-dir (string-append app "/tests"))
+        (write-file (string-append app "/tests/run-tests.sps")
+          (string-append
+            "#!chezscheme\n"
+            "(import (chezscheme))\n"
+            "(exit 7)\n"))
+        (assert-equal 7 (main (list "-C" app "test")))))
+
+    ;; .env.tests 覆盖 .env:cmd-test 经 collect-dotenv 读两份,后者覆盖前者。
+    ;; runner 把 MODE 写到文件(子进程 stdout 走 OS FD 1,chez current-output-port
+    ;; 截不到;用文件这个最朴素的 IPC)。
+    (test-env-tests-overrides-env
+      (let* ([app (mktmp)]
+             [outf (string-append app "/mode-result.txt")]
+             [_ (ensure-dir (string-append app "/tests"))]
+             [_ (write-file (string-append app "/.env") "MODE=base\n")]
+             [_ (write-file (string-append app "/.env.tests") "MODE=override\n")]
+             [_ (write-file (string-append app "/tests/run-tests.sps")
+                  (string-append
+                    "#!chezscheme\n"
+                    "(import (chezscheme))\n"
+                    "(call-with-output-file \"" outf "\"\n"
+                    "  (lambda (p) (display (or (getenv \"MODE\") \"\") p)))\n"
+                    "(exit 0)\n"))]
+             [rc (main (list "-C" app "test"))])
+        (assert-equal 0 rc)
+        (assert-string= "override" (read-file outf))))
 
     ;; ── semver>?:--latest 排序谓词(数值比核心;release 先于 prerelease;不可解析退字符串序)──
     (semver-numeric-compare

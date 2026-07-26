@@ -7,7 +7,7 @@
 (library (chandler cli commands)
   (export cmd-init cmd-deps cmd-install cmd-add cmd-remove cmd-run cmd-env cmd-repl
           cmd-build cmd-pack cmd-verify-pack cmd-deps-tree cmd-verify cmd-exec
-          cmd-uninstall-global cmd-doctor cmd-list cmd-switch)
+          cmd-uninstall-global cmd-doctor cmd-list cmd-switch cmd-test)
   (import (chezscheme)
           (chandler util)
           (chandler fs)
@@ -26,7 +26,8 @@
           (chandler pack)
           (chandler env)
           (only (chandler recipe) default-tasks-file)   ; 只取文件名常量,避开 task/file/run 等宏
-          (chandler cli args))
+          (chandler cli args)
+          (chandler cli runtime-env))    ; choose-interp / make-preamble / collect-dotenv(共享于 cmd-run/cmd-test)
 
 ;; ── pack / verify-pack(designs/05)──
 ;; pack 只**组装**:应用编译树 + 依赖闭包(由 chandler build 进程内编译) + 随包运行时。
@@ -144,8 +145,11 @@
             "# Expansion: ${VAR} (earlier entries then process env then empty)\n")))))
 
   ;; 生成 chandler-tasks.ss(由 chandler make 消费)。它是**可选的**——chandler build
-  ;; 已能从 manifest 推导编译;留它是给你写 test / release 之类自定义任务的地儿。
+  ;; 已能从 manifest 推导编译;留它是给你写自定义任务的地儿(v3 起默认只装 'build)。
   ;; 已存在则不覆盖(除非 --force),免得抹掉你手写的任务。
+  ;; 注:跑测试用 `chandler test`(顶层命令,挂全运行时环境:.env + .env.tests +
+  ;; resolved libdirs + native preamble);若你仍想用 `chandler make test`,在本
+  ;; 文件里手写 (task 'test ...) 即可。
   (define (write-tasks-file! root name build-lib force?)
     (let ([tpath (join-paths root default-tasks-file)]
           [libref (string-append "(" (string-join (map symbol->string build-lib) " ") ")")])
@@ -156,19 +160,14 @@
             ";;; " default-tasks-file " --- " name " 的构建/任务描述(chandler make 消费)\n"
             ";;;\n"
             ";;; **可选**:chandler build 会从 chandler-manifest.ss 推导编译,不需要本文件。\n"
-            ";;; 留它是为了写自定义任务(如 test)。task/file/rule/default-task 是 DSL,\n"
-            ";;; 加载即求值——它是程序,与数据文件 chandler-manifest.ss 配对。\n"
+            ";;; 留它是为了写自定义任务(release / bench / ... )。task/file/rule/default-task\n"
+            ";;; 是 DSL,加载即求值——它是程序,与数据文件 chandler-manifest.ss 配对。\n"
+            ";;; 跑测试用顶层命令 `chandler test`(挂全运行时环境,见 chandler test --help)。\n"
             "\n"
             "(define-lib-roots \".\")\n"
             "\n"
             ";; build:编译 " libref " 及其 import 闭包(与 `chandler build` 等价,可删)\n"
             "(library-task 'build '" libref ")\n"
-            "\n"
-            ";; test:跑测试(改成你的测试命令)\n"
-            "(task 'test \"run the test suite\"\n"
-            "  '()\n"
-            "  (lambda ()\n"
-            "    (run \"scheme\" \"--libdirs\" \".\" \"--program\" \"tests/run-tests.sps\")))\n"
             "\n"
             "(default-task 'build)\n"))
         (printf "wrote ~a~%" tpath))))
@@ -489,16 +488,9 @@
       (build-project root verbose?))
     0)
 
-  ;; ── .env 收集(C3)──
-  ;; 项目根 <root>/.env,再叠加 --env-file <path>(显式指定,后到者同键覆盖)。
-  ;; 依赖树里的 .env 一概不读(见 (chandler env) 头注:信任模型)。返回有序 alist。
-  (define (collect-dotenv root flags)
-    (let* ([base (read-dotenv (dotenv-file-path root))]
-           [extra (let ([f (flag flags 'env-file)])
-                    (if (string? f)
-                        (read-dotenv (if (string-prefix? "/" f) f (join-paths root f)))
-                        '()))])
-      (append base extra)))
+  ;; ── .env 收集(C3 + v3 .env.tests 覆盖)──
+  ;; 实现已移到 (chandler cli runtime-env):.env → .env.tests(若存在)→ --env-file,
+  ;; 后者覆盖前者。这里仅保留 env-with-dotenv 这层包装(子进程 env 末位 = 覆盖式)。
 
   ;; .env 覆盖进程环境 —— 故在传给子进程的 env alist 里排在**最后**(env-prefix
   ;; 是 shell 变量前缀,同名后者胜)。
@@ -626,6 +618,39 @@
                                 script-args)
                         (list (cons 'env (env-with-dotenv root flags '())))))))
 
+  ;; ── test:跑 tests/run-tests.sps,环境装配同 run(库搜索 + native + .env + 运行时)──
+  ;;   chandler test [args...]                  → runner 经 --program 直跑
+  ;;                                            (有 native 时经 --script preamble 同 run)
+  ;; v3 取代了 `chandler make test` 默认任务 —— 那条只走裸 scheme,没挂库搜索/native/.env。
+  ;; 这里全经 resolved-libdirs / native-load-paths / collect-dotenv(.env + .env.tests 覆盖)/
+  ;; choose-interp,与 cmd-run 同源同构(.env.tests 是 cmd-test 的主要新增)。
+  ;; 退出码 = 子进程(run-foreground 原样返回),非 0 即失败。
+  (define (cmd-test root flags positionals rest)
+    (let ([runner (join-paths root "tests/run-tests.sps")])
+      (unless (file-exists? runner)
+        (errorf 'test
+                "no tests/run-tests.sps found in ~a; create one or define a 'test task in chandler-tasks.ss"
+                root))
+      (let* ([dirs (resolved-libdirs root)]
+             [natives (native-load-paths root)]
+             [interp (choose-interp root flags)]
+             ;; 测试参数:`--` 之后的一切 + 位置参数(若有);多数 sps runner 不取位置参数。
+             [test-args (append (or rest '()) (or positionals '()))]
+             [invocation
+               (if (null? natives)
+                   ;; 无 native → 直跑 runner(同 tests/run-tests.sps 约定的 --program)
+                   (append (list "-q" "--libdirs" (path-list dirs)
+                                 "--program" runner)
+                           test-args)
+                   ;; 有 native → 走 preamble(同 cmd-run 的 --script 模式:
+                   ;; preamble 先 load-shared-object 各 .so,再 (load runner))
+                   (let ([preamble (make-preamble root natives runner)])
+                     (append (list "-q" "--libdirs" (path-list dirs)
+                                   "--script" preamble)
+                             test-args)))])
+        (run-foreground interp invocation
+                        (list (cons 'env (env-with-dotenv root flags '())))))))
+
   ;; ── exec:设 CHEZSCHEMELIBDIRS(+ .env)后透传任意命令 ──
   ;;   chandler exec -- <cmd> [args...]
   ;; 与 cmd-run 同一套库搜索规则(resolved-libdirs → "src::obj" 串)与 .env 叠加
@@ -655,10 +680,12 @@
                         (list (cons 'env (env-with-dotenv root flags '())))))))
 
   ;; 运行时:--runtime > CHANDLER_RUNTIME > manifest 声明 skiff-only > 跟随 chandler 当前所在
-  ;; repl 与 run/exec 同一套(interp-kind 已把"跟随当前运行时"的兜底内置进默认分支)。
+  ;; repl 与 run/exec/test 同一套(interp-kind 已把"跟随当前运行时"的兜底内置进默认分支)。
   (define (repl-interp root flags) (choose-interp root flags))
 
   ;; native 预载 preamble(仅项目有 native 时):加载各 .so 后落入 REPL
+  ;; 注:run/test 用共享的 make-preamble(在 runtime-env.ss);repl 因落点不同
+  ;; (.chandler-repl.ss,无目标脚本)保留自己的版本。
   (define (make-repl-preamble root natives)
     (let ([tmp (join-paths root ".chandler-repl.ss")])
       (call-with-output-file tmp
@@ -669,53 +696,8 @@
         'truncate)
       tmp))
 
-  ;; 选解释器(designs/06 §3)。**优先级**(run/exec/repl/启动器一致):
-  ;;   --runtime 旗标 > CHANDLER_RUNTIME 环境变量 > manifest 声明 > 默认
-  ;; 「哪一种」由上式定;「哪个可执行文件」由 CHANDLER_SKIFF / CHANDLER_SCHEME 定(名或路径)。
-  (define (choose-interp root flags)
-    (case (interp-kind root flags)
-      [(skiff) (skiff-exe)]
-      [else    (chez-exe)]))
-
-  (define (skiff-exe) (or (getenv* "CHANDLER_SKIFF") "skiff"))
-  (define (chez-exe)  (or (getenv* "CHANDLER_SCHEME") "scheme"))
-
-  ;; 选运行时**种类**(designs/06 §3)。优先级(run/exec/repl/启动器一致):
-  ;;   --runtime > CHANDLER_RUNTIME > manifest(明确 chez-only→chez / skiff-only→skiff)
-  ;;   > 默认:跟随 chandler 当前所在运行时
-  ;;
-  ;; **默认 skiff 就落在最后一条**:chandler 的启动器已 skiff 优先、无 skiff 才回退
-  ;; chez,故"当前所在"天然就是"能用 skiff 就 skiff、否则 chez"——不用再单独探测
-  ;; 可用性,也就不会"默认成一个没装的 skiff 然后 127"。**显式**(--runtime /
-  ;; CHANDLER_RUNTIME / skiff-only manifest)则照单执行,找不到即 127,不回退。
-  (define (interp-kind root flags)
-    (let ([rt (flag flags 'runtime)])
-      (cond
-        [(equal? rt "skiff") 'skiff]
-        [(equal? rt "chez") 'chez]
-        [(preferred-runtime)]                          ; CHANDLER_RUNTIME=skiff|chez
-        [else
-         (let ([mpath (join-paths root "chandler-manifest.ss")])
-           (if (file-exists? mpath)
-               (let ([mf (read-manifest mpath)])
-                 (cond
-                   [(and (manifest-chez mf) (not (manifest-skiff mf))) 'chez]   ; 明确 chez-only
-                   [(and (manifest-skiff mf) (not (manifest-chez mf))) 'skiff]  ; 明确 skiff-only
-                   [else (current-runtime)]))           ; 双跑 / 未声明 → 跟随当前(默认 skiff)
-               (current-runtime)))])))                  ; 无 manifest → 跟随当前
-
-  ;; 生成 preamble 临时脚本:先 load 各 native,再 load 目标脚本
-  (define (make-preamble root natives script-abs)
-    (let ([tmp (string-append root "/.chandler-run.ss")])
-      (call-with-output-file tmp
-        (lambda (p)
-          (for-each (lambda (so)
-                      (when (file-exists? so)
-                        (fprintf p "(load-shared-object ~s)~%" so)))
-                    natives)
-          (fprintf p "(load ~s)~%" script-abs))
-        'truncate)
-      tmp))
+  ;; choose-interp / interp-kind / make-preamble / collect-dotenv 自 v3 起抽到
+  ;; (chandler cli runtime-env),由 cmd-run / cmd-repl / cmd-exec / cmd-test 共享。
 
   ;; 库搜索条目 → --libdirs / CHEZSCHEMELIBDIRS 串(pair 条目 → "src::obj",见 layout)
   (define (path-list dirs) (libdirs->arg dirs))
