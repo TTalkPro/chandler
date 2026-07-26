@@ -6,27 +6,30 @@
 >
 > **历史**:本文前身是仓库根的 `chez-skiff-library-layout.md`,2026-07-26 迁入 designs/ 并对齐 v3/v4(bake 已并入 chandler、`manifest.ss` → `chandler-manifest.ss`、消费方由中心 `lib/` 改为 per-dep `(src . obj)` 对)。
 
-## 1. 核心约定(5 条)
+## 1. 核心约定(6 条)
 
 1. **umbrella facade**:仓库根放 `<name>.ss` = `(library (<name>) ...)`,re-export 公共 API,给使用者一个"一 import 即全"的门面。
 2. **子库树镜像库名**:`<name>/` 目录下,`<name>/a/b.ss` = `(library (<name> a b) ...)`。**目录名 = 库名前缀 = 仓库目录名,三者必须一致**。
-3. **搜索根 = 仓库根**:仓库根同时含 `<name>.ss` 与 `<name>/`,把**仓库根**加进 `library-directories`(或 `CHEZSCHEMELIBDIRS`),`(import (<name> ...))` 全部可解析。
+3. **搜索根 = 仓库根**:仓库根同时含 `<name>.ss`、`<name>/` 与 `tests/`,把**仓库根**加进 `library-directories`(或 `CHEZSCHEMELIBDIRS`),`(import (<name> ...))` 与 `(import (tests <name> ...))` 全部可解析。
 4. **`#!chezscheme` + 文件头**:每个 `.ss` 首行 `#!chezscheme`(启用 Chez 扩展),次行 `;;; <相对路径> --- <一句话>`。
 5. **核心零依赖**:核心只 `(import (chezscheme))`;可选功能(扩展 / FFI)隔离到子目录,按需引入。
+6. **测试独立 collection**:测试套件置于 `tests/<name>/`(namespace `(tests <name> *)`),与生产代码 `<name>/` 解耦——发布的库树不含测试代码,用户安装的是已通过测试的产物,而非开发期库。runner 入口 `tests/run-tests.sps` 同居 `tests/` 下。
 
 ## 2. 目录骨架
 
 ```
 myproj/                            ← 仓库根 = 搜索根(加进 CHEZSCHEMELIBDIRS)
   myproj.ss                        (library (myproj))              ← umbrella facade
-  myproj/                          ← Chez 库子树
+  myproj/                          ← Chez 库子树(仅生产代码)
     core/thing.ss                  (library (myproj core thing))
     helpers/util.ss                (library (myproj helpers util))
     ffi/sqlite.ss                  (library (myproj ffi sqlite))   ← Scheme 侧 FFI 绑定;用 chandler build 生成的 (myproj native-loader) 的 native-foreign-procedure(自加载),activate/run 仅兜底
-    test/thing.ss                  (library (myproj test thing))   ← 与被测库同名共置
   native/ta6le/sqlite.so           ← C/C++ 产物,置于仓库根(不在 myproj/ 子树内,避开 §4 的 .so 混淆)
-  tests/                           ← 顶层脚本入口(非库)
-    smoke.ss                       scheme --script tests/smoke.ss
+  tests/                           ← 测试集中区(各库测试 collection + 顶层脚本入口)
+    myproj/                        ← myproj 的测试套件,与生产 myproj/ 解耦
+      harness.ss                   (library (tests myproj harness))   ← 测试基础设施
+      thing.ss                     (library (tests myproj thing))     ← 对应 myproj/core/thing.ss
+    smoke.ss                       scheme --script tests/smoke.ss       ← 顶层脚本(非库)
     run-tests.sps                  scheme --program tests/run-tests.sps
     bench.sps
   tools/                           ← codegen 等一次性脚本(gen-*.ss)
@@ -46,7 +49,7 @@ myproj/                            ← 仓库根 = 搜索根(加进 CHEZSCHEMELI
 | 子库树 | `chez-markding/syntax/block.ss` = `(library (chez-markding syntax block) ...)` |
 | 搜索根=仓库根 | `Makefile` 里 `export CHEZSCHEMELIBDIRS := .` |
 | 文件头 | `#!chezscheme` + `;;; chez-markding/syntax/block.ss --- …` |
-| 共置测试 | `chez-markding/test/*.ss` 为库,顶层 `tests/{smoke.ss,run-tests.sps,bench.sps}` 为脚本 |
+| 独立测试 collection | `tests/<name>/*.ss` 为库 `(library (tests <name> *))`,与生产 `<name>/` 解耦;`tests/{smoke.ss,run-tests.sps,bench.sps}` 为顶层脚本入口 |
 | codegen | `tools/gen-unicode-tables.ss` 等 |
 | 核心零依赖 | 只用 `(chezscheme)`,无 SRFI/正则/外部库 |
 
