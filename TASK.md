@@ -119,13 +119,13 @@
 
 ---
 
-## Phase 8 — 其他(P3,可延后)
+## Phase 8 — 其他(P3)
 
 | # | 模块 | 状态 | 说明 |
 |---|------|------|------|
-| 8.1 | `chandler/registered.ss` | ⏳ | `(format N)` 版本号语义化 + 迁移路径(老格式 → 新格式的 upgrade 函数) |
-| 8.2 | `chandler/proc.ss` | ⏳ | Windows 子进程适配(`open-process-ports` 或 PowerShell 包装) |
-| 8.3 | prebuilt 实现 | ⏳ | 真正的 prebuilt 拉取(v5 范畴,这里只占位) |
+| 8.1 | `chandler/registered.ss` + `chandler/lock.ss` | ✅ | format 校验对齐 manifest 的友好模式:unknown-but-higher → "newer than supported; upgrade chandler";lock 此前完全不校验(format 99 静默通过)已修。无自动迁移函数(当前只有 format 1,无老格式要迁) |
+| 8.2 | `chandler/proc.ss` | ⏳ | Windows 子进程适配(`open-process-ports` 或 PowerShell 包装);需 Windows 环境验证 |
+| 8.3 | prebuilt 实现 | ⏳ | 真正的 prebuilt 拉取(v5 范畴) |
 
 ---
 

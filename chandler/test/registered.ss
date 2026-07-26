@@ -233,4 +233,17 @@
               (assert-true (registered? (datum->registered d))))))
         (list '(path "/x") '(git "https://x") '(pack "/tmp/p.tar.gz"))))
 
+    ;; ── format 校验(对齐 manifest 的友好模式)──
+
+    (datum-format-too-new-raises
+      ;; format > supported:仍拒绝(消息改为 "newer than ...; upgrade chandler",
+      ;; 对齐 manifest.ss:175;此前是低级的 "unsupported format; want 1")
+      (let ([bad-datum '(registered (format 99) (name myapp) (kind app) (versions))])
+        (assert-raises (lambda () (datum->registered bad-datum)))))
+
+    (datum-format-missing-raises
+      ;; format 缺失:拒绝(registered datum 必须有 format 字段,序列化总写)
+      (let ([bad-datum '(registered (name myapp) (kind app) (versions))])
+        (assert-raises (lambda () (datum->registered bad-datum)))))
+
     ))

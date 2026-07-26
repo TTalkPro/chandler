@@ -48,6 +48,11 @@
   (import (chezscheme)
           (chandler sexp))
 
+  ;; 当前 registry 文件格式版本(序列化总写 (format 1))。
+  ;; datum->registered 接受 ≤ 此版本的格式(前瞻性:允许老格式);更高则报
+  ;; "newer than supported; upgrade chandler"(对齐 manifest.ss:175 的模式)。
+  (define registered-format-version 1)
+
 ;; ══════════════════════════════════════════════════════════════════
 ;; record types(immutable,函数式更新靠重建)
 ;; ══════════════════════════════════════════════════════════════════
@@ -233,8 +238,12 @@
   (define (datum->registered d)
     (let* ([body (expect-tag d 'registered 'datum->registered)]
            [fmt (field-ref body 'format #f)]
-           [_ (unless (eqv? fmt 1)
-                (error 'datum->registered "unsupported format; want 1" fmt))]
+           [_ (unless (and (integer? fmt) (exact? fmt))
+                (error 'datum->registered "missing or non-integer (format N)" fmt))]
+           [_ (when (> fmt registered-format-version)
+                (error 'datum->registered
+                       (format "registered format ~a is newer than the supported ~a; upgrade chandler"
+                               fmt registered-format-version)))]
            [name (field-ref body 'name #f)]
            [_ (unless (symbol? name)
                 (error 'datum->registered "missing or invalid (name <symbol>)" name))]

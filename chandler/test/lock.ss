@@ -163,7 +163,23 @@
                               (resolved)
                               (files (not-a-string (sha256 "x"))))])
         (assert-raises (lambda () (datum->lock bad-datum))))
-      (let ([bad-datum '(lock (format 1) (manifest-sha256 "x") (chandler "x")
-                              (resolved)
-                              (files ("a.ss" (not-sha256 "x"))))])
-        (assert-raises (lambda () (datum->lock bad-datum)))))))
+       (let ([bad-datum '(lock (format 1) (manifest-sha256 "x") (chandler "x")
+                               (resolved)
+                               (files ("a.ss" (not-sha256 "x"))))])
+        (assert-raises (lambda () (datum->lock bad-datum)))))
+
+    ;; ── format 校验(对齐 manifest/registered 的友好模式)──
+
+    (lock-format-too-new-raises
+      ;; format > supported:拒绝(此前 datum->lock 完全不校验 —— format 99 静默通过,
+      ;; lock-format 返回 99,下游无感知。这是 bug fix)
+      (let ([bad-datum '(lock (format 99) (manifest-sha256 "x") (chandler "0.1.0") (resolved))])
+        (assert-raises (lambda () (datum->lock bad-datum)))))
+
+    (lock-format-missing-defaults-to-1
+      ;; format 缺失:向后兼容,回 1(老 lock 文件没有 format 字段)
+      (let ([d '(lock (manifest-sha256 "x") (chandler "0.1.0") (resolved))])
+        (let ([lk (datum->lock d)])
+          (assert-true (lock? lk))
+          (assert-equal 1 (lock-format lk)))))))
+

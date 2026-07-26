@@ -93,13 +93,20 @@
 
   (define (datum->lock datum)
     (let ([body (expect-tag datum 'lock 'datum->lock)])
-      (make-lock-rec
-        (or (field-ref body 'format) 1)
-        (field-ref body 'manifest-sha256)
-        (field-ref body 'chandler)
-        (map datum->locked-dep (field-ref* body 'resolved))
-        ;; v3:files 字段缺省为 '()(向后兼容 v2 lock)
-        (map datum->file-entry (field-ref* body 'files)))))
+      ;; format 校验(对齐 manifest/registered):缺省回 1(向后兼容老 lock);
+      ;; 高于支持版本 → 友好报错。此前完全不校验 —— format 99 静默通过。
+      (let ([fmt (or (field-ref body 'format) lock-format-version)])
+        (when (> fmt lock-format-version)
+          (error 'datum->lock
+                 (format "lock format ~a is newer than the supported ~a; upgrade chandler"
+                         fmt lock-format-version)))
+        (make-lock-rec
+          fmt
+          (field-ref body 'manifest-sha256)
+          (field-ref body 'chandler)
+          (map datum->locked-dep (field-ref* body 'resolved))
+          ;; v3:files 字段缺省为 '()(向后兼容 v2 lock)
+          (map datum->file-entry (field-ref* body 'files))))))
 
   ;; file entry datum 形:("<rel>" (sha256 "<hex>"))
   (define (datum->file-entry d)
