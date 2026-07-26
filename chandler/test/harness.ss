@@ -51,12 +51,17 @@
       (fail "assert-string= failed" 'expected expected 'actual actual)))
 
   ;; (assert-raises thunk) —— thunk 必须抛异常,否则失败
+  ;; 实现注:set! flag + call/cc 逃逸;flag 检查与 fail 必须在 handler 作用域**之外**,
+  ;; 否则 fail 自己 raise 的 condition 会被同一个 handler 捕获 → 不抛也 pass(假绿)。
   (define (assert-raises thunk)
-    (call/cc
-      (lambda (k)
-        (with-exception-handler
-          (lambda (e) (k #t))
-          (lambda () (thunk) (fail "assert-raises: expected exception, none raised"))))))
+    (let ([raised? #f])
+      (call/cc
+        (lambda (k)
+          (with-exception-handler
+            (lambda (e) (set! raised? #t) (k #t))
+            (lambda () (thunk) (k #f)))))
+      (unless raised?
+        (fail "assert-raises: expected exception, none raised"))))
 
   ;; suites = ((label . ((test-name . thunk) ...)) ...);返回是否全绿
   (define (run-suites suites)

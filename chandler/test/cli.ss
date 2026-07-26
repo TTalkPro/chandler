@@ -92,11 +92,11 @@
           (assert-equal '(bar baz) (app-entry (manifest-app mf)))
           (assert-equal 'start (app-main (manifest-app mf))))))
 
-    ;; --lib / --app 互斥:配置期就报
+    ;; --lib / --app 互斥:配置期就报(main 有顶层 error handler catch 后返回 65 不传播,
+    ;; 故检查 rc 而非 assert-raises)
     (init-lib-and-app-mutually-exclusive
       (let ([app (mktmp)])
-        (assert-raises
-          (lambda () (main (list "-C" app "init" "--lib" "--app" "--name=foo"))))))
+        (assert-equal 65 (main (list "-C" app "init" "--lib" "--app" "--name=foo")))))
 
     ;; init 也生成 chandler-tasks.ss(程序,与 manifest 数据配对),编译入口按 name/entry。
     (init-writes-tasks-file

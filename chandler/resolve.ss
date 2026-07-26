@@ -82,9 +82,15 @@
 
   ;; ── 解析单个 spec → rentry ──
   (define (resolve-one spec provider overrides warn!)
-    (let ([name (rspec-name spec)])
+    (let ([name (rspec-name spec)]
+          [sk (rspec-source-kind spec)])
+      ;; prebuilt 在 resolve 层就拒绝,不依赖 provider 实现(D27):
+      ;; git-provider 会再挡一次(双保险),但 mock provider / 测试注入的 provider
+      ;; 不会 —— 所以检查必须在调 provider 之前,否则 prebuilt 会被静默吞掉。
+      (when (eq? sk 'prebuilt)
+        (error 'resolve "prebuilt source not yet supported; use git" name))
       (let-values ([(rev child-deps natives path? resources)
-                    (provider name (rspec-source-kind spec) (rspec-source-loc spec)
+                    (provider name sk (rspec-source-loc spec)
                               (rspec-pin-kind spec) (rspec-pin-val spec))])
         ;; override 的 metadata(deps/natives)替换上游
         (let* ([ov (assq name overrides)]
