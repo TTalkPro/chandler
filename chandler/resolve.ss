@@ -184,10 +184,7 @@
                           (manifest-resources mf)))
                (values #f '() '() #t)))]
         [(prebuilt)
-         ;; v2 stub:prebuilt source 暂不真正 fetch(留给 v2.4 实现)。
-         ;; 返回空闭包 + 默认值,让 resolve 把它记进 chosen 但不 git clone。
-         ;; 多版本语义(designs/02 §多版本):每 app 的 lock 独立 resolve,跨 app 不冲突。
-         (values #f '() '() #f #f)]
+         (error 'git-provider "prebuilt source not yet supported; use git" sk)]
         [else (error 'git-provider "unknown source kind" sk)])))
 
   (define (resolve-rev url pk pv)

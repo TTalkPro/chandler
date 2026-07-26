@@ -136,6 +136,13 @@
         (assert-true (> (length (resolution-warnings r)) 0))
         (assert-equal 2 (length (lock-deps (resolution-lock r))))))
 
+    (prebuilt-raises
+      ;; prebuilt source is a v5 stub — must error explicitly
+      (assert-raises
+        (lambda ()
+          (resolve/provider (root-mf '((a (prebuilt "https://h/a"))))
+                            (make-provider '()) '()))))
+
     ;; ── 真实 git 集成:两级依赖 ──
     (git-integration
       (parameterize ([cache-root (mktmp)])
