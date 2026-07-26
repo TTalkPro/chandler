@@ -13,8 +13,8 @@
   (export
     ;; records(task/rule/miniregex + accessors)
     make-task task? task-name task-name-set!
-    task-kind task-kind-set! task-prereqs task-prereqs-set!
-    task-action task-action-set! task-description task-description-set!
+    task-kind task-kind-set! task-prereqs
+    task-action task-description
     task-invoked? task-invoked?-set! task-executed? task-executed?-set!
     task-failed? task-failed?-set!
     make-rule rule? rule-pattern rule-prereq-fn rule-action rule-description rule-order

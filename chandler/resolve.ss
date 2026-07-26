@@ -7,7 +7,7 @@
 
 (library (chandler resolve)
   (export resolve resolve/provider
-          resolution? resolution-lock resolution-warnings)
+           resolution-lock resolution-warnings)
   (import (chezscheme)
           (chandler util)
           (chandler layout)

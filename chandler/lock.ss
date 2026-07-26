@@ -7,7 +7,7 @@
 ;;; canonical 写(字典序 + 固定缩进,来自 (chandler sexp))保证「同输入 → 同字节」。
 
 (library (chandler lock)
-  (export make-locked-dep locked-dep? locked-dep-name
+  (export make-locked-dep locked-dep-name
           locked-dep-source-kind locked-dep-source-loc
           locked-dep-pin-kind locked-dep-pin-val
           locked-dep-rev locked-dep-deps locked-dep-natives

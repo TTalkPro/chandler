@@ -9,13 +9,13 @@
           manifest? manifest-format manifest-name manifest-version
           manifest-chez manifest-skiff manifest-chandler manifest-srcdir
           manifest-deps manifest-dev-deps manifest-native
-          manifest-overrides manifest-scripts
+          manifest-overrides
           manifest-resources manifest-runtime-subset
           manifest-app app? app-entry app-main
           dep? dep-name dep-source-kind dep-source-loc
           dep-pin-kind dep-pin-val
-          native? native-name native-source-kind native-source-loc
-          native-pin-kind native-pin-val native-build native-chez-api? native-produces
+          native-name native-source-kind native-source-loc
+          native-build native-chez-api?
           supported-format builtin-prefix?)
   (import (chezscheme)
           (chandler sexp)

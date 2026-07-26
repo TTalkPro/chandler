@@ -17,9 +17,9 @@
     ;; 搜索根(designs/25 §预构建对象根)
     lib-roots lib-exts root-src root-obj prebuilt-root?
     ;; records
-    make-lib-node lib-node? lib-node-name lib-node-path
+    make-lib-node lib-node-name lib-node-path
     lib-node-exports lib-node-edges lib-node-includes
-    make-dep-edge dep-edge? dep-edge-ref dep-edge-phase
+    make-dep-edge dep-edge-ref dep-edge-phase
     ;; 解析
     parse-source parse-library parse-program
     normalize-libref extract-edges dedupe-edges collect-export-names
