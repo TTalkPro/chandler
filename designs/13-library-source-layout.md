@@ -64,8 +64,8 @@ Chez 编译库产出的 `.so`(`compile-library` 的对象文件)与 C/C++ 编译
 bake 的编译引擎已整体并入 chandler,独立 `bake` 二进制作废。chandler 承担 chez-markding 里 `Makefile` 的角色并泛化,处理**本项目自身**的构建(依赖获取、安装是另一层,见 [04](04-install.md) / [06](06-installed-layout.md)):
 
 - **`chandler build`**:按 lock 拓扑序逐依赖**就地编译**(cwd = 该依赖 srcdir,产物留 `_vendor/<dep>/<srcdir>/_build/<mt>/`);本项目自身编译产物落 `_build/<mt>/`。编译时 `CHEZSCHEMELIBDIRS` 含仓库根,已编好的上游作为 `(prebuilt src obj)` 挂入。进程内编译,不 spawn 子进程。
-- **`chandler make [task]`**:跑 `chandler-tasks.ss` 里的任务(`build`/`test`/…);无任务文件时从 `chandler-manifest.ss` 的 `(app (entry …))` 推导要编什么。
-- **`chandler make test` / `chandler make clean`**:同 chez-markding Makefile(跑 `tests/`、删 `.so`)。
+- **`chandler make [task]`**:跑 `chandler-tasks.ss` 里的任务(默认 `build`);无任务文件时从 `chandler-manifest.ss` 的 `(app (entry …))` 推导要编什么。
+- **`chandler test` / `chandler make clean`**:同 chez-markding Makefile(跑 `tests/run-tests.sps`、删 `.so`)。测试入口已从 `chandler-tasks.ss` 自带的 `'test` 任务迁到独立 CLI 子命令 `chandler test`(挂项目库路径 + native 兜底 + 选择 runtime + 加载 `.env`/`.env.tests`)。
 
 ## 6. chandler:消费(与本规范咬合)
 

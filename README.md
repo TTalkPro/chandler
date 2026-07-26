@@ -73,14 +73,26 @@ bake 的编译引擎已整体吸收进 chandler,原来的独立 `bake` 二进制
 
 ```sh
 chandler make            # = build,编译 (chandler) 库树为 .so → _build/<mt>/
-chandler make test       # 跑全测试套件
-chandler make test-ps    # PowerShell 启动器验收(需 pwsh,缺则跳过)
+chandler make clean      # 删 .so 等构建产物
 chandler make -T         # 列任务
 ```
 
-> **多数项目不需要 `chandler-tasks.ss`**:`chandler build` 直接从 `chandler-manifest.ss` 的 `(app (entry …))` 推导要编什么。只有需要自定义任务(如上面的 `test`/`test-ps`)时才写。它是**程序**(加载即求值),与**数据**文件 `chandler-manifest.ss` 配对。
+> **多数项目不需要 `chandler-tasks.ss`**:`chandler build` 直接从 `chandler-manifest.ss` 的 `(app (entry …))` 推导要编什么。只有需要自定义任务(如自定义打包、清理等)时才写。它是**程序**(加载即求值),与**数据**文件 `chandler-manifest.ss` 配对。
 >
 > **安装**由自含的 `bootstrap.ss` 负责(装库树 + 生成 CLI 启动器),不经 `chandler make`。
+>
+> **跑测试用 `chandler test`**(见下),不再通过 `chandler-tasks.ss` 自带的 `'test` 任务。
+
+### 测试(`chandler test`)
+
+```sh
+chandler test            # 跑全测试套件(tests/run-tests.sps)
+chandler test --runtime=chez   # 强制用 Chez(默认跟随当前运行时)
+```
+
+`chandler test` 是跑测试的**规范入口**:挂项目库路径(`resolved-libdirs` 的 per-dep `(src . obj)` 对 + 项目库根 + 全局兜底)+ native 预加载兜底 + 选择 runtime + 加载 `.env`/`.env.tests`,然后以测试进程的退出码作为自己的退出码。额外参数透传给 `tests/run-tests.sps`。它取代了原先 `chandler-tasks.ss` 里的 `'test` 任务——后者已从默认模板移除,以免和 CLI 子命令重名造成混淆。
+
+`.env.tests`(项目根,**可选**)覆盖 `.env` 同名键,**仅在 `chandler test` 期间生效**(`run`/`repl`/`exec`/`env` 不读它),用来给测试套件切数据库 / API stub / 关掉副作用,而不污染开发环境。`.env.tests` 不存在则仅读 `.env`(与 `run`/`repl` 一致)。
 
 ## 快速上手
 
@@ -130,6 +142,8 @@ chandler run --script main.ss [args...]
 
 `.env`(项目根)由 `run`/`repl`/`env` 消费(`.env` 覆盖进程环境);刻意**不碰** `build`/`deps`/`install`,保住可复现。
 
+> 测试时(`chandler test`),若仓库根存在 `.env.tests`,会先读 `.env` 再用 `.env.tests` 覆盖同名键——用来给测试套件切数据库 / 关闭副作用,而不污染开发环境。`.env.tests` **仅**被 `chandler test` 消费,`run`/`repl`/`exec`/`env` 不读它。
+
 > 早期版本生成过 `chandler-setup.ss`(Bundler 的 `bundler/setup` 式)与 `APP_ROOT` 环境变量,均已取消:启动只留 `chandler run` 一条路,资源与库住在同一个前缀里。
 > 需要在别的进程里挂同一套路径,用 `eval "$(chandler env)"`;已持有 `(chandler)` 的脚本可直接 `(activate)`。
 
@@ -154,7 +168,8 @@ chandler run --script main.ss [args...]
 | `exec -- <cmd…>` | 设 `CHEZSCHEMELIBDIRS` + 加载 `.env` 后透传跑命令;退出码 = 子进程退出码 |
 | `env` | 打印 `export CHEZSCHEMELIBDIRS=…` + `.env` 各键导出,供 `eval "$(chandler env)"` |
 | `repl [--runtime skiff\|chez]` | 交互 shell,自动挂库路径(项目优先 + 全局兜底) |
-| `make [task]` | 跑 `chandler-tasks.ss` 的任务(`build`/`test`/…);无任务文件时从 manifest 推导 |
+| `make [task]` | 跑 `chandler-tasks.ss` 的任务(默认 `build`);无任务文件时从 manifest 推导 |
+| `test [args…]` | 跑 `tests/run-tests.sps`(挂项目库路径 + 加载 `.env`/`.env.tests` + 选择 runtime);退出码 = 测试进程退出码 |
 | `install [--user\|--system\|--prefix=DIR]` | 装项目库 + 依赖到全局前缀(中心 `.registry/` 登记)。**app 自动建命令行入口** `~/.local/bin/<app>`(POSIX,稳定 shim)/ `%LOCALAPPDATA%\chez\bin\<app>.ps1`(Windows)。首次 install 自动设 active;同 name 多 version 共存 |
 | `uninstall --name=<n> [--version=<v>]` | 干净卸载(`rm -rf <vroot>` + 更新 `.registry/`);删 active 自动清空 |
 | `switch <name> <version>` | **切换 app 的 active version**(D19);`--latest` 按 semver 数值序选最高;`--list` 列所有 active |
@@ -218,7 +233,8 @@ chandler 0.1.5 (chez 10.4.1)                 # 跑在标准 Chez 上
 ## 开发
 
 ```sh
-scheme --libdirs . --program tests/run-tests.sps    # 全量测试(纯 Chez,无外部依赖)
+chandler test                                      # 规范入口:挂库路径 + native 兜底 + runtime 选择 + .env/.env.tests
+scheme --libdirs . --program tests/run-tests.sps    # 同上,纯 Chez,无外部依赖(手写时:注意自己挂库路径,无 native 兜底)
 petite  --libdirs . --program tests/run-tests.sps   # 同上(Petite 子集校验)
 skiff   --libdirs . --program tests/run-tests.sps   # 同上(Skiff 运行时)
 bash tests/powershell-run.sh                        # Windows 启动器验收(需 pwsh,缺则跳过)

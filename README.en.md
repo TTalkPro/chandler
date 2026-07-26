@@ -70,13 +70,24 @@ chandler ships a `recipe.ss`, so the ecosystem build tool **bake** can build and
 
 ```sh
 bake            # = bake build, compile the (chandler) library tree to .so
-bake test       # run the full test suite
-bake test-ps    # PowerShell launcher acceptance (needs pwsh; skipped if absent)
 bake install    # install the (chandler) library tree → ~/.local/share/chez/{src,<mt>} (--global installs to /usr/local)
 bake uninstall  # clean uninstall using the file manifest
 ```
 
 > `bake install` installs **libraries** (for `import`, src/mt split, `(needs build)` always installs compiled content); the `chandler` **CLI launcher** is provided by `chandler install-self` / `install.sh`.
+>
+> **Run tests with `chandler test`** (see below), not via a baked-in `test` task — the default `'test` task has been removed from `recipe.ss` templates.
+
+### Testing (`chandler test`)
+
+```sh
+chandler test                       # run the full test suite (tests/run-tests.sps)
+chandler test --runtime=chez        # force Chez (default follows the current runtime)
+```
+
+`chandler test` is the **canonical entry point** for running tests: it mounts the project library paths (`resolved-libdirs`'s per-dep `(src . obj)` pairs + the project library root + a global fallback) + the native pre-load fallback + selects a runtime + loads `.env` / `.env.tests`, then exits with the test process's exit code. Extra arguments pass through to `tests/run-tests.sps`. It replaces the previous `'test` task in `recipe.ss` — that task has been removed from the default template to avoid confusion with a same-named CLI subcommand.
+
+`.env.tests` (project root, **optional**) overrides same-name keys in `.env`, but **only during `chandler test`** (it's **not** read by `run` / `repl` / `exec` / `env`). Use it to point tests at a stub database / mock API / disable side effects without polluting the development environment. If `.env.tests` is absent, only `.env` is read (same as `run` / `repl`).
 
 ## Quick start
 
@@ -160,6 +171,7 @@ The project's own `resources/` is synced into `lib/share/<name>/resources/` by `
 | `run <script.ss> [args…]` | Run a script with the dependency environment activated |
 | `exec -- <cmd…>` | Run a command with `CHEZSCHEMELIBDIRS` set |
 | `repl [--runtime skiff\|chez]` | Interactive shell with library paths auto-mounted: **project with lock+deps → project `lib/` (highest priority) + global fallback; otherwise → global only** |
+| `test [args…]` | Run `tests/run-tests.sps` (mounts project library paths + loads `.env` / `.env.tests` + selects a runtime); exit code = test process exit code |
 | `install --global[=dir]` | Install the current project's libraries into the global libdir (registry transaction) |
 | `uninstall --global --name=<n>` | Clean uninstall using the file manifest |
 | `list --global` / `doctor --global` | List / health-check globally installed packages |
@@ -225,7 +237,8 @@ chandler 0.1.5 (chez 10.4.1)                 # running on stock Chez
 ## Development
 
 ```sh
-scheme --libdirs . --program tests/run-tests.sps    # full test suite (pure Chez, no external deps)
+chandler test                                       # canonical entry: mounts library paths + native fallback + runtime + .env/.env.tests
+scheme --libdirs . --program tests/run-tests.sps    # same, pure Chez, no external deps (manual: you mount paths yourself, no native fallback)
 petite  --libdirs . --program tests/run-tests.sps   # same (Petite-subset check)
 skiff   --libdirs . --program tests/run-tests.sps   # same (Skiff runtime)
 bash tests/powershell-run.sh                        # Windows launcher acceptance (needs pwsh; skipped if absent)

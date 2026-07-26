@@ -30,7 +30,8 @@
 | `exec -- <cmd…>` | 设 `CHEZSCHEMELIBDIRS` + `.env` 后透传任意命令(D25 补实现) |
 | `env` | 输出 `eval "$(chandler env)"` 友好的 `export CHEZSCHEMELIBDIRS=…` + `.env` 导出 |
 | `repl [--runtime skiff\|chez]` | 交互 shell,自动挂库路径(项目优先 + 全局兜底) |
-| `make [task]` | 跑 `chandler-tasks.ss` 的任务(`build` / `test` / …);自带 argv 语法,在 main 里先于解析转交子 CLI |
+| `make [task]` | 跑 `chandler-tasks.ss` 的任务(默认 `build` / 自定义任务);自带 argv 语法,在 main 里先于解析转交子 CLI |
+| `test [args…]` | 跑 `tests/run-tests.sps`(挂项目库路径 + 加载 `.env`/`.env.tests` + 选择 runtime);退出码 = 测试进程退出码。**取代**原先 `chandler-tasks.ss` 自带的 `'test` 任务——后者已从默认模板移除 |
 | `switch <name> <version>` / `--latest` / `--list` | **切换 app 的 active version**(D19);`--latest` 选该 name 最高 version(semver 数值序,D26) |
 | `doctor` | 体检:见 §6 |
 | `pack [--runtime r] [--out dir] [--name N] [--version V] [--entry '(<lib>…)'] [--main N] [--lib]` | 组装自包含分发包(app pack:payload + envelope;`--lib` 只打 payload) |
