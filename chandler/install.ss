@@ -463,8 +463,6 @@
   ;; ── 工具 ──
   (define (opt opts k default) (alist-ref opts k default))
   (define (dot-entry? e) (and (> (string-length e) 0) (char=? #\. (string-ref e 0))))
-  (define (short-rev rev)
-    (if (and (string? rev) (>= (string-length rev) 10)) (substring rev 0 10) rev))
 
   ;; ═══════════════════════════════════════════════════════════════════
   ;; 安装载荷(cmd-install 步骤 1-4,不含 app launcher)

@@ -240,10 +240,7 @@
            [fmt (field-ref body 'format #f)]
            [_ (unless (and (integer? fmt) (exact? fmt))
                 (error 'datum->registered "missing or non-integer (format N)" fmt))]
-           [_ (when (> fmt registered-format-version)
-                (error 'datum->registered
-                       (format "registered format ~a is newer than the supported ~a; upgrade chandler"
-                               fmt registered-format-version)))]
+           [_ (check-format! 'datum->registered fmt registered-format-version)]
            [name (field-ref body 'name #f)]
            [_ (unless (symbol? name)
                 (error 'datum->registered "missing or invalid (name <symbol>)" name))]

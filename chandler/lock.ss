@@ -96,10 +96,7 @@
       ;; format 校验(对齐 manifest/registered):缺省回 1(向后兼容老 lock);
       ;; 高于支持版本 → 友好报错。此前完全不校验 —— format 99 静默通过。
       (let ([fmt (or (field-ref body 'format) lock-format-version)])
-        (when (> fmt lock-format-version)
-          (error 'datum->lock
-                 (format "lock format ~a is newer than the supported ~a; upgrade chandler"
-                         fmt lock-format-version)))
+        (check-format! 'datum->lock fmt lock-format-version)
         (make-lock-rec
           fmt
           (field-ref body 'manifest-sha256)

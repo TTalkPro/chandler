@@ -109,10 +109,6 @@
                      (not (file-directory? path))
                      (cons (string->symbol
                              (substring entry 0 (- (string-length entry) 3)))
-                           path))))
+                            path))))
             (dir-entries d)))))
-
-  ;; filter-map:r6rs 没有原生,fold-right 实现
-  (define (filter-map f xs)
-    (fold-right (lambda (x acc) (let ([r (f x)]) (if r (cons r acc) acc))) '() xs))
   )

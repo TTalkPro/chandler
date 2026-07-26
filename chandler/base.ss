@@ -19,6 +19,7 @@
     char-index strip-prefix strip-suffix string-join
     alist-ref getenv* ignore-errors plural chandler-version
     format-object eprintf datum->string string-subst strip-leading
+    filter-map short-rev
     ;; fs
     parent-dir base-name path-join*
     ensure-dir ensure-parent
@@ -28,11 +29,13 @@
     sweep-empty-parents home-dir
     write-text-if-changed file-byte-size mtime
     path-swap-ext
+    parent-dir-or-dot system-temp-dir
     ;; sexp
     read-datum-file read-datum-string write-canonical-file canonical-string
     tagged-list? expect-tag
     field field-ref field-ref*
     alist->sorted
+    check-format!
     ;; layout
     current-machine-type machine-type-string so-ext
     windows-mt?
@@ -47,7 +50,8 @@
     runtime-env-var preferred-runtime parse-runtime-kind
     ;; proc
     run-capture run-check run-status run-foreground shell-quote
-    proc-result-code proc-result-out proc-result-err)
+    proc-result-code proc-result-out proc-result-err
+    which real-path)
   (import (chezscheme)
           (chandler runtime-paths)
           (chandler hash)

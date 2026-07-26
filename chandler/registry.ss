@@ -78,9 +78,6 @@
                 (files-under bdir))
               '())))))
 
-  (define (filter-map f xs)
-    (fold-right (lambda (x acc) (let ([r (f x)]) (if r (cons r acc) acc))) '() xs))
-
   (define (deliverable? rel)
     (not (or (string=? (base-name rel) ".bake-manifest")
              (string-suffix? ".wpo" rel))))

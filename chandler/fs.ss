@@ -7,13 +7,14 @@
 
 (library (chandler fs)
   (export parent-dir base-name path-join*
-          ensure-dir ensure-parent
-          dir-entries files-under dir-empty?
-          rm-rf copy-file move-file
-          read-file-string read-lines write-text
-          sweep-empty-parents home-dir
-          write-text-if-changed file-byte-size mtime
-          path-swap-ext)
+           ensure-dir ensure-parent
+           dir-entries files-under dir-empty?
+           rm-rf copy-file move-file
+           read-file-string read-lines write-text
+           sweep-empty-parents home-dir
+           write-text-if-changed file-byte-size mtime
+           path-swap-ext
+           parent-dir-or-dot system-temp-dir)
   (import (chezscheme)
           (chandler util))
 
@@ -131,4 +132,12 @@
     (let ([root (path-root p)])
       (if (string=? root p)
           (string-append p new-ext)
-          (string-append root new-ext)))))
+          (string-append root new-ext))))
+
+  ;; parent-dir 但空串返回 "."(compile/import-graph 各写一份的统一出处)
+  (define (parent-dir-or-dot path)
+    (let ([d (parent-dir path)]) (if (string=? d "") "." d)))
+
+  ;; 系统临时目录(尊重 TMPDIR;修 compile/recipe 硬编码 /tmp 的可移植性 bug)
+  (define (system-temp-dir)
+    (or (getenv "TMPDIR") "/tmp")))

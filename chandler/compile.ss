@@ -18,7 +18,6 @@
   (export
     ;; 落点 / 路径 / 运行时能力
     build-dir ref->so node->so lib-dir-pairs root->dir-pair compiler-available?
-    parent-or-dot
     ;; 任务注册(recipe 面)
     define-lib-roots prebuilt library-task program-task boot-task
     entry->path register-compile-task! non-builtin-edges
@@ -112,8 +111,7 @@
         (ref->so (lib-node-name node))
         (string-append (build-dir) "/" (path-root (lib-node-path node)) ".so")))
 
-  (define (parent-or-dot p)
-    (let ((d (parent-dir p))) (if (string=? d "") "." d)))
+  ;; parent-dir-or-dot 已收入 (chandler fs),经 (chandler base) 复用。
 
   ;; 本运行时有没有编译器。**Petite 没有** —— 它把 compile-library 绑着,但一调
   ;; 就抛 "compile package is not loaded",错在很深的地方、话也难懂。探测一次
@@ -123,7 +121,7 @@
   (define (compiler-available?)
     (case (%compiler-known)
       ((unknown)
-       (let* ((stem (string-append "/tmp/chandler-compiler-probe-"
+       (let* ((stem (string-append (system-temp-dir) "/chandler-compiler-probe-"
                                    (number->string (get-process-id))))
               (src (string-append stem ".ss"))
               (obj (string-append stem ".so"))
@@ -147,7 +145,7 @@
     (unless (compiler-available?)
       (bail-config
         "this runtime has no compiler (Petite does not ship one) — build with `scheme` or `skiff`"))
-    (ensure-dir (parent-or-dot target))
+    (ensure-dir (parent-dir-or-dot target))
     (let ((kind (or (hashtable-ref compile-kinds target #f)
                     (if (lib-node-name node) 'library 'program))))
       (parameterize ((library-directories (lib-dir-pairs))
@@ -193,7 +191,7 @@
   ;; 并行构建的 sh 脚本用(§18e)。名字带 pid,并发进程不撞。
   (define (fp-tmp)
     (set! *fp-tmp-counter* (+ *fp-tmp-counter* 1))
-    (string-append "/tmp/chandler-fp-" (number->string (get-process-id))
+    (string-append (system-temp-dir) "/chandler-fp-" (number->string (get-process-id))
                    "-" (number->string *fp-tmp-counter*)))
 
   ;; 只清本轮的指纹缓存(编译旗标改变后要重算;整体复位见 reset-compile-state!)。
@@ -364,7 +362,7 @@
 
   ;; 把程序的 .wpo 与它全部库的 .wpo 链接成一个 .so。
   (define (link-whole-program prog-node target)
-    (ensure-dir (parent-or-dot target))
+    (ensure-dir (parent-dir-or-dot target))
     (let ((wpo (path-swap-ext (node->so prog-node) ".wpo")))
       (parameterize ((library-directories (lib-dir-pairs)))
         (compile-whole-program wpo target)))
@@ -432,7 +430,7 @@
 
   ;; 组装 .boot:基础 boot 在前,然后是拓扑排好的 .so 输入。
   (define (link-boot-file topo-sos target)
-    (ensure-dir (parent-or-dot target))
+    (ensure-dir (parent-dir-or-dot target))
     (apply make-boot-file (cons* target *boot-bases* topo-sos))
     (hashtable-set! fp-manifest target (fingerprint-of target)))
 
@@ -538,7 +536,7 @@
 
   (define (write-worker-script!)
     (let ((path (worker-script-path)))
-      (ensure-dir (parent-or-dot path))
+      (ensure-dir (parent-dir-or-dot path))
       (write-text-if-changed
         path
         (let ((p (open-output-string)))

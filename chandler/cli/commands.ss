@@ -536,7 +536,7 @@
             (printf "(root)~%")
             (for-each (lambda (d)
                         (printf "  ├─ ~a @~a~%" (locked-dep-name d)
-                                (short (locked-dep-rev d)))
+                                (short-rev (locked-dep-rev d)))
                         (for-each (lambda (child)
                                     (printf "  │    └─ ~a~%" child))
                                   (locked-dep-deps d)))
@@ -722,9 +722,6 @@
 
   (define (abspath root p)
     (if (string-prefix? "/" p) p (join-paths root p)))
-
-  (define (short rev)
-    (if (and (string? rev) (>= (string-length rev) 10)) (substring rev 0 10) rev))
 
 ;; ── .gitignore / scaffold / basename(init 用)──
 ;; 生成物:依赖 checkout(vendor/)、编译产物(_build/<mt>/)、各临时 recipe。

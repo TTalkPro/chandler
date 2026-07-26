@@ -55,8 +55,8 @@
          (when (string=? exe "")
            (bail-config "cannot locate `~a` on PATH to derive CHEZ_INCLUDE (set CHEZ_INCLUDE_DIR)" rt))
          ;; <...>/bin/scheme → <...>/lib/csv<ver>/<mt>/
-         (let* ((bin  (parent-or-dot exe))              ; <...>/bin
-                (root (parent-or-dot bin))              ; <...>
+          (let* ((bin  (parent-dir-or-dot exe))              ; <...>/bin
+                 (root (parent-dir-or-dot bin))              ; <...>
                 (dir  (string-append root "/lib/csv" (chez-version-string)
                                      "/" (machine-type-string))))
            (validated dir))))))

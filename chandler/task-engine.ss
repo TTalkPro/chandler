@@ -319,17 +319,6 @@
                                  (or needed? (time>? pmtime target-mtime)))))))
                      (else (loop (cdr ps) needed?)))))))))))))
 
-  (define (filter-map f lst)
-    ;; R6RS filter-map isn't in Chez Scheme's top-level (chezscheme) library.
-    ;; Map `f` over `lst`, keeping results that are not #f.
-    (let loop ((xs lst) (acc '()))
-      (cond
-        ((null? xs) (reverse acc))
-        (else
-         (let ((v (f (car xs))))
-           (loop (cdr xs)
-                 (if v (cons v acc) acc)))))))
-
   (define (task-deps t)
     (filter-map
       (lambda (p)

@@ -7,7 +7,8 @@
 
 (library (chandler proc)
   (export run-capture run-check run-status run-foreground shell-quote
-          proc-result-code proc-result-out proc-result-err)
+           proc-result-code proc-result-out proc-result-err
+           which real-path)
   (import (chezscheme)
           (chandler util)
           (chandler fs))
@@ -93,4 +94,16 @@
               [base (quote-command prog args)]
               [with-cd (if cwd (string-append "cd " (shell-quote cwd) " && " base) base)]
               [full (if env (string-append (env-prefix env) with-cd) with-cd)])
-         (system full))])))
+         (system full))]))
+
+  ;; ── which:在 PATH 上找程序,返回绝对路径或 #f(pack 原私有,统一出处)──
+  (define (which prog)
+    (let ([r (run-capture "sh" (list "-c" (string-append "command -v " (shell-quote prog))))])
+      (and (= 0 (proc-result-code r))
+           (let ([s (string-trim (proc-result-out r))])
+             (and (> (string-length s) 0) s)))))
+
+  ;; ── real-path:解引用符号链接(readlink -f);失败返回原路径 ──
+  (define (real-path p)
+    (let ([r (run-capture "sh" (list "-c" (string-append "readlink -f " (shell-quote p))))])
+      (if (= 0 (proc-result-code r)) (string-trim (proc-result-out r)) p))))

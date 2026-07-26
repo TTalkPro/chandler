@@ -172,15 +172,11 @@
                     (else '())))
                 specs)))
 
-  (define (dep-parent-or-dot p)
-    (let ((d (parent-dir p)))
-      (if (string=? d "") "." d)))
-
   (define (dep-path-join dir rel)
     (if (string=? dir ".") rel (string-append dir "/" rel)))
 
   (define (scan-includes body src-path)
-    (let ((dir (dep-parent-or-dot src-path)) (acc '()))
+    (let ((dir (parent-dir-or-dot src-path)) (acc '()))
       (let walk ((x body))
         (when (pair? x)
           (cond

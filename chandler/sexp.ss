@@ -7,9 +7,10 @@
 
 (library (chandler sexp)
   (export read-datum-file read-datum-string write-canonical-file canonical-string
-          tagged-list? expect-tag
-          field field-ref field-ref*
-          alist->sorted)
+           tagged-list? expect-tag
+           field field-ref field-ref*
+           alist->sorted
+           check-format!)
   (import (chezscheme)
           (chandler fs))
 
@@ -67,8 +68,16 @@
   ;; alist 按 car(symbol)字典序稳定排序 —— lock canonical 输出用
   (define (alist->sorted alist)
     (list-sort (lambda (a b)
-                 (string<? (symbol->string (car a)) (symbol->string (car b))))
-               alist))
+                  (string<? (symbol->string (car a)) (symbol->string (car b))))
+                alist))
+
+  ;; ── check-format!:清单 format-version 校验(manifest/lock/registered/pack 各写一份)──
+  ;;   格式比支持版本新 → 报错提示升级 chandler。who = 调用方符号(如 'validate-manifest)。
+  (define (check-format! who current supported)
+    (when (> current supported)
+      (error who
+             (format "format ~a is newer than the supported ~a; upgrade chandler"
+                     current supported))))
 
   ;; ── canonical 写:确定性缩进打印,同输入必出同字节 ──
   (define line-budget 72)              ; 叶子列表内联上限(字符)

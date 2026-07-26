@@ -170,10 +170,10 @@
   ;; ── 校验(designs/02 §4)──
   (define (validate-manifest m)
     ;; format 门
-    (unless (and (integer? (manifest-format m)) (<= (manifest-format m) supported-format))
-      (error 'validate-manifest
-             (format "manifest format ~a is newer than the supported ~a; upgrade chandler"
-                     (manifest-format m) supported-format)))
+    (let ([fmt (manifest-format m)])
+      (unless (integer? fmt)
+        (error 'validate-manifest "manifest has invalid (format N)" fmt))
+      (check-format! 'validate-manifest fmt supported-format))
     ;; 必选字段
     (unless (string? (manifest-name m))
       (error 'validate-manifest "manifest has no (name \"...\")"))

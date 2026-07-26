@@ -9,7 +9,8 @@
           char-index strip-prefix strip-suffix string-join
           alist-ref getenv* ignore-errors plural
           chandler-version
-          format-object eprintf datum->string string-subst strip-leading)
+          format-object eprintf datum->string string-subst strip-leading
+          filter-map short-rev)
   (import (chezscheme))
 
   ;; chandler 自身版本 —— 单一出处:umbrella (chandler)、CLI --version、lock 的
@@ -128,4 +129,14 @@
   (define (strip-leading s pre)
     (if (string-prefix? pre s)
         (substring s (string-length pre) (string-length s))
-        s)))
+        s))
+
+  ;; ── filter-map:map 并跳过 #f 结果(各模块自写一份的统一出处)──
+  (define (filter-map f lst)
+    (fold-right (lambda (x acc) (let ([r (f x)]) (if r (cons r acc) acc))) '() lst))
+
+  ;; ── short-rev:截 git rev/sha 到 10 字符(展示用;install/commands 各写一份)──
+  (define (short-rev rev)
+    (if (and (string? rev) (>= (string-length rev) 10))
+        (substring rev 0 10)
+        rev)))
