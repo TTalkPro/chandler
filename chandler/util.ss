@@ -14,7 +14,7 @@
 
   ;; chandler 自身版本 —— 单一出处:umbrella (chandler)、CLI --version、lock 的
   ;; (chandler …) 快照、以及 manifest 的 (chandler "<range>") 运行时门都读它。
-  (define chandler-version "0.1.4")
+  (define chandler-version "0.1.5")
 
   ;; 英文单复数选词(用户可见输出用;避免 "1 dependencies" 之类)
   (define (plural n one many) (if (= n 1) one many))
