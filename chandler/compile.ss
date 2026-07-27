@@ -159,13 +159,20 @@
 
   ;; 每个 lib-node 一个 file 任务:目标 = .so,前置 = 源文件 + 上游 .so +
   ;; include 文件(designs/06 §降解为 file 任务)。
-  (define (register-compile-task! node)
-    (let* ((target  (node->so node))
-           (up-sos  (map (lambda (e) (ref->so (dep-edge-ref e))) (non-builtin-edges node)))
-           (prereqs (append (list (lib-node-path node)) up-sos (lib-node-includes node)))
-           (action  (lambda (t deps) (compile-lib node t))))
-      (hashtable-set! compile-nodes target node)
-      (register-task! target 'file prereqs action #f)))
+  ;;
+  ;; 二参形给 kind:标成 'boot-entry 则 compile-lib(以及并行 worker)把它路由到
+  ;; compile-file。先前是两个函数,逐行相同、只多一句 compile-kinds 登记。
+  (define register-compile-task!
+    (case-lambda
+      [(node) (register-compile-task! node #f)]
+      [(node kind)
+       (let* ((target  (node->so node))
+              (up-sos  (map (lambda (e) (ref->so (dep-edge-ref e))) (non-builtin-edges node)))
+              (prereqs (append (list (lib-node-path node)) up-sos (lib-node-includes node)))
+              (action  (lambda (t deps) (compile-lib node t))))
+         (when kind (hashtable-set! compile-kinds target kind))
+         (hashtable-set! compile-nodes target node)
+         (register-task! target 'file prereqs action #f))]))
 
   ;; ====================================================================
   ;; §18b 指纹 + 清单 — designs/07 §Fingerprint / Manifest
@@ -394,17 +401,6 @@
 ;; (对分发友好)。
   (define *boot-bases* '("scheme" "petite"))
 
-  ;; 同 register-compile-task!,但把目标标成 'boot-entry,于是 compile-lib
-  ;; (以及并行 worker)把它路由到 compile-file。
-  (define (register-boot-entry-task! node)
-    (let* ((target  (node->so node))
-           (up-sos  (map (lambda (e) (ref->so (dep-edge-ref e))) (non-builtin-edges node)))
-           (prereqs (append (list (lib-node-path node)) up-sos (lib-node-includes node)))
-           (action  (lambda (t deps) (compile-lib node t))))
-      (hashtable-set! compile-kinds target 'boot-entry)
-      (hashtable-set! compile-nodes target node)
-      (register-task! target 'file prereqs action #f)))
-
   ;; .so 目标的拓扑序:依赖在前,入口在后。对非内建边做 DFS 后序;
   ;; 不认识的依赖(内建)跳过。
   ;; 后序结果**逆序累积、末尾一次 reverse** —— 原先每收一个目标就
@@ -443,9 +439,8 @@
            (nodes (entry-nodes entry-path)))
       (for-each
         (lambda (node)
-          (if (lib-node-name node)
-              (register-compile-task! node)        ; 库 → 'library(默认)
-              (register-boot-entry-task! node)))   ; 入口 → 'boot-entry
+          (register-compile-task! node
+            (and (not (lib-node-name node)) 'boot-entry)))   ; 库 → 默认;入口 → boot-entry
         nodes)
       (let* ((entry-node (find-entry-node nodes entry-path))
              (topo-sos  (topo-sort-sos nodes))
@@ -622,10 +617,18 @@
         (write-worker-script!)
         (let ((cache (make-hashtable string-hash string=?)))
           (for-each (lambda (u) (unit-level (car u) (cdr u) cache)) units)
-          (let ((maxlvl (apply max (map (lambda (u) (hashtable-ref cache (car u) 0)) needed))))
+          (let* ((maxlvl (apply max (map (lambda (u) (hashtable-ref cache (car u) 0)) needed)))
+                 ;; 先按层分桶,而不是每层把 needed 整个 filter 一遍:库链一深,层数
+                 ;; 就逼近单元数,那样是 O(层数 × |needed|)。逆序喂入,桶内即保持
+                 ;; needed 的原有顺序。
+                 (buckets (make-vector (+ maxlvl 1) '())))
+            (for-each (lambda (u)
+                        (let ((l (hashtable-ref cache (car u) 0)))
+                          (vector-set! buckets l (cons u (vector-ref buckets l)))))
+                      (reverse needed))
             (let loop ((lvl 0))
               (when (<= lvl maxlvl)
-                (let ((batch (filter (lambda (u) (= (hashtable-ref cache (car u) 0) lvl)) needed)))
+                (let ((batch (vector-ref buckets lvl)))
                   (unless (null? batch)
                     (unless (*quiet*)
                       (eprintf "chandler: -j~a level ~a: ~a unit(s)~%" n lvl (length batch)))
@@ -740,7 +743,7 @@
     (hashtable-clear! compile-kinds)
     (hashtable-clear! fp-cache)
     (hashtable-clear! fingerprint-providers)
-    (reset-classify-cache!)
+    (reset-import-caches!)
     (*generate-wpo* #f)
     (*gen-roots* '())
     (lib-roots (list ".")))

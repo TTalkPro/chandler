@@ -31,8 +31,6 @@
           (chandler registry)
           (chandler fetch))
 
-  (define (project-manifest-path root) (join-paths root "chandler-manifest.ss"))
-  (define (project-lock-path root) (join-paths root "chandler-manifest.lock"))
   (define (vendor-dir root name) (join-paths (join-paths root "_vendor") (symbol->string name)))
 
   ;; ── install:主命令 ──
@@ -44,15 +42,15 @@
       (unless (file-exists? mpath)
         (error 'deps "chandler-manifest.ss not found; run `chandler init` first" root))
       ;; --update:删旧 lock 触发重解析
-      (when (opt opts 'update #f)
+      (when (alist-ref opts 'update #f)
         (when (file-exists? lpath) (delete-file lpath)))
-      (parameterize ([offline? (opt opts 'offline #f)])
+      (parameterize ([offline? (alist-ref opts 'offline #f)])
         (let* ([mf (read-manifest mpath)]
                [lk (obtain-lock root mf mpath lpath opts)]
                ;; 所有需要 vendor 的依赖(git + path);path dep 从本地拷入 vendor/
                [deps-to-vendor (filter (lambda (d)
                                          (and (memq (locked-dep-source-kind d) '(git path))
-                                              (or (not (opt opts 'production #f))
+                                              (or (not (alist-ref opts 'production #f))
                                                   (not (eq? 'dev (locked-dep-scope d))))))
                                        (lock-deps lk))])
           ;; 1) 依赖 → vendor/<name>(git: clone;path: 本地拷贝)
@@ -107,17 +105,9 @@
             (filter-map
               (lambda (abs)
                 (let ([rel (strip-prefix abs pre)])
-                  (and (not (vendor-unmanaged-path? rel))
+                  (and (not (unmanaged-path? rel))
                        (cons rel (sha256-file abs)))))
               (files-under vd))))))
-
-  ;; 路径里含 .git / _build 段 → 不受 lock 文件清单管辖(与 cmd-verify 同一规则)
-  (define (vendor-unmanaged-path? rel)
-    (let loop ([segs (string-split rel #\/)])
-      (cond
-        [(null? segs) #f]
-        [(member (car segs) '(".git" "_build")) #t]
-        [else (loop (cdr segs))])))
 
   ;; 取 lock:新鲜则用旧;否则解析 + 写(填 manifest-sha256)
   (define (obtain-lock root mf mpath lpath opts)
@@ -125,10 +115,10 @@
              (let ([old (read-lock lpath)]) (and (lock-fresh? old mpath) old)))
         (read-lock lpath)
         (let* ([res (resolve mf (list (cons 'root-dir root)
-                                      (cons 'production (opt opts 'production #f))))]
+                                      (cons 'production (alist-ref opts 'production #f))))]
                [lk0 (resolution-lock res)]
                [lk  (with-manifest-sha lk0 (manifest-content-sha256 mpath))])
-          (for-each (lambda (w) (fprintf (current-error-port) "warning: ~a~%" w))
+          (for-each (lambda (w) (eprintf "warning: ~a~%" w))
                     (resolution-warnings res))
           (write-lock lpath lk)
           lk)))
@@ -150,7 +140,7 @@
       (cond
         [(not (file-directory? dir)) (materialize url rev dir)]
         [(dirty? dir)
-         (if (opt opts 'force #f)
+         (if (alist-ref opts 'force #f)
              (begin (rm-rf dir) (materialize url rev dir))
              (error 'deps
                     (format "~a has local changes; refusing to overwrite (use --force)~%  ~a"
@@ -166,7 +156,7 @@
       (unless (file-directory? src)
         (error 'deps (format "~a: source path ~a does not exist" (locked-dep-name ld) src)))
       (when (or (not (file-directory? dir))
-                (opt opts 'force #f))
+                (alist-ref opts 'force #f))
         (rm-rf dir)
         (ensure-dir dir)
         (for-each
@@ -286,7 +276,7 @@
                     (cond
                       [(and (eq? policy 'skip-existing) (file-exists? d))
                        (when warn?
-                         (fprintf (current-error-port)
+                         (eprintf
                                   "warning: skip existing file (name collision): ~a~%" d))]
                       [else (ensure-parent d) (copy-file abs d)]))))))
           (files-under src)))))
@@ -301,9 +291,9 @@
             (lambda (entry)
               (let ([full (join-paths vd entry)])
                 (when (and (file-directory? full) (not (member entry keep)) (not (dot-entry? entry)))
-                  (if (opt opts 'keep-extra #f)
-                      (fprintf (current-error-port) "note: keeping extra directory vendor/~a~%" entry)
-                      (begin (fprintf (current-error-port) "removing orphaned dependency vendor/~a~%" entry)
+                  (if (alist-ref opts 'keep-extra #f)
+                      (eprintf "note: keeping extra directory vendor/~a~%" entry)
+                      (begin (eprintf "removing orphaned dependency vendor/~a~%" entry)
                              (rm-rf full))))))
             (dir-entries vd))))))
 
@@ -320,14 +310,14 @@
                 (cond
                   [(not (file-directory? dir))
                    (set! ok #f)
-                   (fprintf (current-error-port) "missing: vendor/~a (run `chandler deps`)~%" (locked-dep-name d))]
+                   (eprintf "missing: vendor/~a (run `chandler deps`)~%" (locked-dep-name d))]
                   [(not (string=? (head-rev dir) (locked-dep-rev d)))
                    (set! ok #f)
-                   (fprintf (current-error-port) "rev mismatch: vendor/~a is at ~a, lock says ~a~%"
+                   (eprintf "rev mismatch: vendor/~a is at ~a, lock says ~a~%"
                             (locked-dep-name d) (head-rev dir) (locked-dep-rev d))]
                   [(dirty? dir)
                    (set! ok #f)
-                   (fprintf (current-error-port) "dirty: vendor/~a has local changes~%" (locked-dep-name d))]))))
+                   (eprintf "dirty: vendor/~a has local changes~%" (locked-dep-name d))]))))
           (lock-deps lk))
         ;; C0 之后没有 lib/ 可查:每个 git 依赖的 _vendor 树在不在,上面逐条已经查过
         ;; (rev / dirty),这里只补「一条都没 vendor 过」的情形。
@@ -427,9 +417,13 @@
       (cons src (join-paths src "_build" (current-machine-type)))))
 
   ;; 项目自身:源在 <root>/<srcdir>,对象在 <root>/_build/<mt>
+  ;; 对象侧单独拆出来:它不看 manifest,想拿 obj 目录的调用方不必为此读一次
+  ;; manifest(proj-srcdir 只是 src 侧要的)。
+  (define (project-obj-dir root)
+    (join-paths root "_build" (current-machine-type)))
+
   (define (project-pair root)
-    (cons (srcdir-join root (proj-srcdir root))
-          (join-paths root "_build" (current-machine-type))))
+    (cons (srcdir-join root (proj-srcdir root)) (project-obj-dir root)))
 
   (define (locked-deps-of root)
     (let ([lpath (project-lock-path root)])
@@ -476,14 +470,20 @@
   ;;   项目自己的 obj 目录**无条件**在扫描集里:resolved-libdirs 在非 project-mode
   ;;   (没有 lock)时只返回全局前缀,而一个刚 build 完、还没 deps 过的树照样可能有
   ;;   lib/<mt>/…/native/。取并集,严格是旧行为的超集,不会漏。
-  (define (native-load-paths root)
-    (let loop ([dirs (dedupe-strings
-                       (cons (cdr (project-pair root))
-                             (map entry-obj-side (resolved-libdirs root))))]
-               [acc '()])
-      (if (null? dirs)
-          (reverse acc)
-          (loop (cdr dirs) (append (reverse (native-sos-under (car dirs))) acc)))))
+  ;;   二参形供已经算过 resolved-libdirs 的调用方(run/test/repl/activate)传进来:
+  ;;   resolved-libdirs 要解析 lock、读 manifest、扫一遍 registry,重算一次纯属
+  ;;   起进程的白等。
+  (define native-load-paths
+    (case-lambda
+      [(root) (native-load-paths root (resolved-libdirs root))]
+      [(root libdirs)
+       (let loop ([dirs (dedupe-strings
+                          (cons (project-obj-dir root)
+                                (map entry-obj-side libdirs)))]
+                  [acc '()])
+         (if (null? dirs)
+             (reverse acc)
+             (loop (cdr dirs) (append (reverse (native-sos-under (car dirs))) acc))))]))
 
   ;; 库目录条目 → obj 侧(pair 取 cdr;字符串条目源=对象)
   (define (entry-obj-side e) (if (pair? e) (cdr e) e))
@@ -512,29 +512,18 @@
   ;; 目录吗」。对象树是 chandler 自己生成的格式(designs/06),编译产物的扩展名是封闭
   ;; 集合,故按扩展名先筛掉一定不是目录的项,只对余下的 stat。这个假设**只在这里**成立,
   ;; 不能下沉到 (chandler fs) 的通用 files-under —— 那个要走用户的任意源码树。
-  (define obj-tree-file-exts '(".so" ".wpo" ".boot"))
-
-  (define (obj-tree-file-name? e)
-    (exists (lambda (ext) (string-suffix? ext e)) obj-tree-file-exts))
-
   (define (native-sos-under obj-dir)
-    (reverse
-      (let walk ([d obj-dir] [acc '()])
-        (fold-left
-          (lambda (acc e)
-            (cond
-              [(obj-tree-file-name? e) acc]                ; 编译产物,不可能是目录:免 stat
-              [(not (file-directory? (join-paths d e))) acc]
-              [(not (string=? e "native")) (walk (join-paths d e) acc)]
-              [(self-loading-lib? d) acc]                  ; 有生成 loader → 惰性自加载,不预载
-              [else
-               (let ([nd (join-paths d e)])
-                 (fold-left
-                   (lambda (acc f)
-                     ;; native/ 下就是 .so/.dylib/.dll 本体,同样按名字判、不 stat
-                     (if (native-so? f) (cons (join-paths nd f) acc) acc))
-                   acc (dir-entries nd)))]))
-          acc (dir-entries d)))))
+    (let ([acc '()])
+      (walk-native-dirs obj-dir
+        (lambda (segs nd)
+          ;; 有生成 loader → 惰性自加载,不预载。loader 与 native/ 同级。
+          (unless (self-loading-lib? (parent-dir nd))
+            (for-each
+              (lambda (f)
+                ;; native/ 下就是 .so/.dylib/.dll 本体,按名字判、不 stat
+                (when (native-so? f) (set! acc (cons (join-paths nd f) acc))))
+              (dir-entries nd)))))
+      (reverse acc)))
 
   ;; 该库是否自带生成 loader:<lib>/native-loader.so 与 <lib>/native/ 同级
   (define (self-loading-lib? lib-dir)
@@ -548,7 +537,6 @@
   ;;    改成扫 library-directories 之后,那个理由消失了。)
 
   ;; ── 工具 ──
-  (define (opt opts k default) (alist-ref opts k default))
   (define (dot-entry? e) (and (> (string-length e) 0) (char=? #\. (string-ref e 0))))
 
   ;; ═══════════════════════════════════════════════════════════════════

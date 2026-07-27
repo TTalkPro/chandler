@@ -24,6 +24,7 @@
           promote-staging!
           stale-staging-list)
   (import (chezscheme)
+          (chandler util)          ; name->string
           (chandler fs)
           (chandler layout))
 
@@ -34,7 +35,7 @@
   ;; <libdir>/.registry/staging/<name>/<version>
   ;; name: symbol | string;version: string
   (define (staging-path libdir name version)
-    (let ([name-str (if (symbol? name) (symbol->string name) name)])
+    (let ([name-str (name->string name)])
       (join-paths (staging-dir libdir) name-str version)))
 
   ;; with-staging! : libdir name version thunk → thunk 结果

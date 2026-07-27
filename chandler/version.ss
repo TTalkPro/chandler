@@ -134,15 +134,19 @@
                  (string-join (cdr parts) "-")))))
 
   ;; ── 从 tag 列表选满足约束的最高者(返回原始 tag 串,或 #f)──
+  ;; 先把通过约束的 tag 各解析一次配成 (解析结果 . 原串) 再比,不在比较器里反复
+  ;; parse:原先每轮都要重解析当前最优者,而 parse-version 自己还要走两次
+  ;; string-split。tag 上千的仓库(resolve-rev 喂的就是 `git tag` 全量)看得出来。
   (define (select-highest constraint tags)
-    (let ([ok (filter (lambda (t)
-                        (ignore-errors (version-match? constraint t)))  ; 非版本样式 tag 跳过
-                      tags)])
+    (let ([ok (filter-map (lambda (t)
+                            ;; 非版本样式 tag 跳过
+                            (and (ignore-errors (version-match? constraint t))
+                                 (cons (parse-version t) t)))
+                          tags)])
       (if (null? ok) #f
-          (fold-left (lambda (best t)
-                       (if (> (version-compare (parse-version t) (parse-version best)) 0)
-                           t best))
-                     (car ok) (cdr ok)))))
+          (cdr (fold-left (lambda (best p)
+                            (if (> (version-compare (car p) (car best)) 0) p best))
+                          (car ok) (cdr ok))))))
 
   ;; ── 小工具(通用字符串来自 util:prefix? / split → string-prefix? / string-split)──
   (define (rest s) (substring s 1 (string-length s)))

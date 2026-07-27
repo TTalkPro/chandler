@@ -65,7 +65,7 @@
            [(eq? sym 'version) (print-version) 0]
            [(assq sym (command-table root flags pos rest)) => (lambda (h) ((cdr h)))]
            [else
-            (fprintf (current-error-port)
+            (eprintf
                      "unknown command: ~a (run `chandler help` for usage)~%" sub)
             64
             ]))]))
@@ -75,7 +75,7 @@
   ;; 直接 display 会把 `~a` 原样打给用户,故先按 format 试;chandler 自己 error 出来的
   ;; message 不含指令,那条路会失败(实参多余),再退回「消息 + 写出 irritants」。
   (define (report-error e)
-    (fprintf (current-error-port) "chandler: ")
+    (eprintf "chandler: ")
     (cond
       [(and (condition? e) (message-condition? e))
        (let* ([msg (condition-message e)]

@@ -219,9 +219,14 @@
                 (reverse lines)
                 (loop (cons l lines))))))))
 
-  ;; shell 引用:路径没有 shell 特殊字符,双引号足够(与 (chandler proc) 的
-  ;; shell-quote 单引号转义并存 —— 后者用于 exec 一族,这里用于拼 sh 命令串)。
-  (define (shq s) (string-append "\"" s "\""))
+  ;; shell 引用 = (chandler proc) 的 shell-quote。名字保留,recipe 面已有引用。
+  ;;
+  ;; 先前这里是 (string-append "\"" s "\"") 加注释「路径没有 shell 特殊字符,
+  ;; 双引号足够」—— 那是个假设,不是保证:双引号内 $ ` \ " 对 sh 仍然特殊,
+  ;; 而 shq 喂的全是真实路径(compile 的 worker 命令、native-build 的 cmake/make/
+  ;; script 三个后端)。仓库检出在含 $ 的目录下就会坏。单引号形在这些位置
+  ;; (cd / 环境变量前缀 / 命令参数,都过 /bin/sh)一律安全。
+  (define shq shell-quote)
 
   ;; Chez 的 `system` 只收一条命令串(交 /bin/sh),返回退出码;这里把 argv 用空格拼上。
   (define (%arg->string a) (if (string? a) a (format-object a)))

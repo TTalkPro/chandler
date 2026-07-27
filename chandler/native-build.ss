@@ -200,12 +200,8 @@
     (hashtable-set! fp-manifest target (fingerprint-of target)))
 
   ;; script 后端(designs/20 §script 后端:环境契约):在包源码目录里跑脚本,带上
-  ;; NATIVE_OUT/MACHINE_TYPE/SOEXT [+ CHEZ_INCLUDE]。Chez 的 `system` 交给 /bin/sh,
-  ;; 故用变量前缀注入环境。
-  (define (env-prefix pairs)
-    (apply string-append
-           (map (lambda (kv) (string-append (car kv) "=" (shq (cdr kv)) " "))
-                (filter (lambda (kv) (cdr kv)) pairs))))
+  ;; NATIVE_OUT/MACHINE_TYPE/SOEXT [+ CHEZ_INCLUDE]。环境前缀用 (chandler proc)
+  ;; 的 env-prefix(它跳过值为 #f 的项,正是 CHEZ_INCLUDE 可选所需)。
 
   (define (run-script-backend dir script landing inc)
     (let ((cmd (string-append

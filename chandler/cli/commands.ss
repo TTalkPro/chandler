@@ -54,7 +54,7 @@
   (define (cmd-verify-pack root flags pos)
     (let ([target (positional-ref pos 0 #f)])
       (unless target (error 'verify-pack "usage: chandler verify-pack [--target] <dir|pack.manifest>"))
-      (verify-pack (if (absolute-path? target) target (join-paths root target))
+      (verify-pack (abspath root target)
                    (flag? flags 'target))))
 
   ;; ── verify:校验 _vendor/ 与 lock 一致(CI;纯只读,不写任何文件)──
@@ -89,7 +89,7 @@
         (cond
           [(or (not git-ok?) (> files-bad 0))
            (when (> files-bad 0)
-             (fprintf (current-error-port)
+             (eprintf
                       "verify: ~a ~a out of sync with lock; run `chandler deps`~%"
                       files-bad (plural files-bad "file" "files")))
            65]
@@ -117,30 +117,22 @@
                 (cond
                   [(not (file-exists? abs))
                    (set! bad (+ bad 1))
-                   (fprintf (current-error-port) "  MISSING ~a~%" rel)]
+                   (eprintf "  MISSING ~a~%" rel)]
                   [(not (string=? (cdr f) (sha256-file abs)))
                    (set! bad (+ bad 1))
-                   (fprintf (current-error-port) "  CHANGED ~a (sha256 mismatch)~%" rel)])))
+                   (eprintf "  CHANGED ~a (sha256 mismatch)~%" rel)])))
             declared)
           (let ([vdir (join-paths root "_vendor")])
             (when (file-directory? vdir)
               (for-each
                 (lambda (abs)
-                  (let ([rel (strip-prefix abs (string-append root "/"))])
-                    (unless (or (generated-path? rel)
+                  (let ([rel (relativize root abs)])
+                    (unless (or (unmanaged-path? rel)
                                 (hashtable-ref declared-index rel #f))
                       (set! bad (+ bad 1))
-                      (fprintf (current-error-port) "  EXTRA ~a (not in lock)~%" rel))))
+                      (eprintf "  EXTRA ~a (not in lock)~%" rel))))
                 (files-under vdir))))
           bad)))
-
-  ;; 路径里含 .git / _build 段 → 生成物或仓库元数据,不受 lock 文件清单管辖
-  (define (generated-path? rel)
-    (let loop ([segs (string-split rel #\/)])
-      (cond
-        [(null? segs) #f]
-        [(member (car segs) '(".git" "_build")) #t]
-        [else (loop (cdr segs))])))
 
   ;; ── init ──
   ;; --lib:  显式声明这是 lib(顺带按[库布局规范]出目录骨架)
@@ -148,7 +140,7 @@
   ;; --lib / --app 互斥;都不传 = 默认 lib(无 (app …))
   (define (cmd-init root flags)
     (let* ([name (or (flag flags 'name) (basename root))]
-           [mpath (join-paths root "chandler-manifest.ss")]
+           [mpath (project-manifest-path root)]
            [lib?  (flag? flags 'lib)]
            [app?  (flag? flags 'app)]
            [entry (or (parse-entry (flag flags 'entry))
@@ -239,7 +231,7 @@
   ;; 声明形式是 (chandler ">=X"),**不是** (deps (chandler …)) —— 它没有来源可 fetch,
   ;; 实体来自全局前缀(designs/12 §5)。自举例外:项目名 = "chandler"。
   (define (check-chandler-dep root flags)
-    (let ([mpath (join-paths root "chandler-manifest.ss")])
+    (let ([mpath (project-manifest-path root)])
       (if (not (file-exists? mpath))
           #t
           (let ([mf (read-manifest mpath)])
@@ -247,12 +239,12 @@
               [(string=? (or (manifest-name mf) "") "chandler") #t]
               [(manifest-chandler mf) #t]
               [(flag? flags 'strict)
-               (fprintf (current-error-port)
+               (eprintf
                  "chandler: project does not declare a chandler runtime gate; add (chandler \">=~a\") to chandler-manifest.ss\n"
                  chandler-version)
                #f]
               [else
-               (fprintf (current-error-port)
+               (eprintf
                  "warning: project does not declare a chandler runtime gate; add (chandler \">=~a\") to chandler-manifest.ss\n"
                  chandler-version)
                #t])))))
@@ -282,10 +274,8 @@
 
   ;; manifest 是否声明了 (chandler …) 运行时门
   (define (project-has-chandler-gate? root)
-    (let ([mpath (join-paths root "chandler-manifest.ss")])
-      (and (file-exists? mpath)
-           (manifest-chandler (read-manifest mpath))
-           #t)))
+    (let ([mf (read-project-manifest root)])
+      (and mf (manifest-chandler mf) #t)))
 
   ;; ── P3:app install 生成命令行入口(本机运行时,不打包 binary/boot)──
   ;; runner: <libdir>/.chandler/<name>/run.sps — 极简程序(import entry + 调 main)。
@@ -380,7 +370,7 @@
   ;; ── install:安装 lib + 依赖 + resources + manifest 到全局前缀 ──
   (define (cmd-install root flags)
     (let* ([libdir (target-libdir flags)]
-           [mpath (join-paths root "chandler-manifest.ss")]
+           [mpath (project-manifest-path root)]
            [mf (and (file-exists? mpath) (read-manifest mpath))])
       (unless mf (error 'install "chandler-manifest.ss not found; run `chandler init` first"))
       (let ([name (or (manifest-name mf) (basename root))]
@@ -430,8 +420,8 @@
       (if (null? issues)
           (begin (printf "doctor: no issues in global library prefix ~a~%" libdir) 0)
           (begin
-            (for-each (lambda (i) (fprintf (current-error-port) "  ~a~%" i)) issues)
-            (fprintf (current-error-port) "doctor: ~a issue(s) found~%" (length issues))
+            (for-each (lambda (i) (eprintf "  ~a~%" i)) issues)
+            (eprintf "doctor: ~a issue(s) found~%" (length issues))
             65))))
 
   ;; v3: chandler list — 列出全局已装包(多版本,active 标记)
@@ -584,7 +574,7 @@
     (let ([name (and (pair? positionals) (car positionals))]
           [url  (and (pair? positionals) (pair? (cdr positionals)) (cadr positionals))])
       (unless name (error 'add "usage: chandler add <name> <git-url> [--tag/--rev/--branch]"))
-      (let* ([mpath (join-paths root "chandler-manifest.ss")]
+      (let* ([mpath (project-manifest-path root)]
              [datum (read-datum-file mpath)]
              [dep (build-dep-sexpr (string->symbol name) url flags)]
              [datum* (add-dep datum dep)])
@@ -624,7 +614,7 @@
   (define (cmd-remove root flags positionals)
     (let ([name (and (pair? positionals) (string->symbol (car positionals)))])
       (unless name (error 'remove "usage: chandler remove <name>"))
-      (let* ([mpath (join-paths root "chandler-manifest.ss")]
+      (let* ([mpath (project-manifest-path root)]
              [datum (read-datum-file mpath)]
              [datum* (cons 'manifest (remove-dep (cdr datum) name))])
         (write-canonical-file mpath datum*)
@@ -646,7 +636,7 @@
                       (and (pair? positionals) (car positionals)))])
       (unless script (error 'run "usage: chandler run --script <script.ss> [args...]"))
       (let* ([dirs (resolved-libdirs root)]
-             [natives (native-load-paths root)]
+             [natives (native-load-paths root dirs)]
              [preamble (make-preamble root natives (abspath root script))]
              [interp (choose-interp root flags)]
              ;; 脚本参数 = `--` 之后的一切 + 剩余位置参数(脚本名若来自位置参数则剥掉它)。
@@ -676,7 +666,7 @@
                 "no tests/run-tests.sps found in ~a; create one or define a 'test task in chandler-tasks.ss"
                 root))
       (let* ([dirs (resolved-libdirs root)]
-             [natives (native-load-paths root)]
+             [natives (native-load-paths root dirs)]
              [interp (choose-interp root flags)]
              ;; 测试参数:`--` 之后的一切 + 位置参数(若有);多数 sps runner 不取位置参数。
              [test-args (append (or rest '()) (or positionals '()))]
@@ -714,9 +704,9 @@
   (define (cmd-repl root flags)
     (let* ([project? (project-mode? root)]
            [dirs     (resolved-libdirs root)]
-           [natives  (if project? (native-load-paths root) '())]
+           [natives  (if project? (native-load-paths root dirs) '())]
            [interp   (repl-interp root flags)])
-      (fprintf (current-error-port)
+      (eprintf
                "chandler repl: ~a mode, ~a library search entries, runtime ~a~%"
                (if project? "project" "global") (length dirs) interp)
       (let ([args (append (list "--libdirs" (path-list dirs))
@@ -737,9 +727,6 @@
 
   ;; 库搜索条目 → --libdirs / CHEZSCHEMELIBDIRS 串(pair 条目 → "src::obj",见 layout)
   (define (path-list dirs) (libdirs->arg dirs))
-
-  (define (abspath root p)
-    (if (absolute-path? p) p (join-paths root p)))
 
 ;; ── .gitignore / scaffold / basename(init 用)──
 ;; 生成物:依赖 checkout(_vendor/)、编译产物(_build/<mt>/)、各临时 recipe。

@@ -134,6 +134,27 @@
             (assert-false (external-libref? '(app util)))
             (assert-false (classify-libref '(app nope)))))))
 
+    (classify-cache-invalidates-on-roots-change
+      ;; classify-cache 的键只有 ref,roots 变更靠「代」作废(比 roots 列表的
+      ;; eq?)。交替查询同一个 ref:两个根下各有一份同名库,结论必须各归各的,
+      ;; 且反复查询保持稳定 —— 若代际判断失效,第二个根会读到第一个的结论。
+      (with-src-tree
+        '(("r1/foo/bar.sls" . "(library (foo bar) (export x) (import (rnrs)) (define x 1))")
+          ("r2/foo/bar.sls" . "(library (foo bar) (export x) (import (rnrs)) (define x 2))"))
+        (lambda (d)
+          (define (under sub)
+            (parameterize ((lib-roots (list (join-paths d sub))))
+              (classify-libref '(foo bar))))
+          (let ((a1 (under "r1")) (b1 (under "r2"))
+                (a2 (under "r1")) (b2 (under "r2")))
+            (assert-string= (join-paths d "r1/foo/bar.sls") a1)
+            (assert-string= (join-paths d "r2/foo/bar.sls") b1)
+            (assert-string= a1 a2)
+            (assert-string= b1 b2))
+          ;; 「解析不到」这一侧同样要按代作废,不能被上面的命中结论盖住。
+          (parameterize ((lib-roots (list (join-paths d "empty"))))
+            (assert-false (classify-libref '(foo bar)))))))
+
     (classify-prebuilt-root
       ;; ("src" . "obj") 对:obj 侧有 .so → 'prebuilt(原样消费,不重编);
       ;; 只有 src 侧没 .so → 回落成源码路径(自己编)。

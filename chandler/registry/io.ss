@@ -35,7 +35,7 @@
   ;; <libdir>/.registry/<name>.ss
   ;; name: symbol | string(都接受,文件名取 string 形态)
   (define (registry-file libdir name)
-    (let ([name-str (if (symbol? name) (symbol->string name) name)])
+    (let ([name-str (name->string name)])
       (join-paths (registry-dir libdir) (string-append name-str ".ss"))))
 
   ;; ── 读 ──
@@ -85,7 +85,7 @@
                      (let* ([name-str (substring entry 0 (- (string-length entry) 3))]
                             [name-sym (string->symbol name-str)])
                        (guard (e [#t
-                                  (fprintf (current-error-port)
+                                  (eprintf
                                            "warning: skipping malformed registry: ~a~%" path)
                                   #f])
                          (let ([reg (read-registered libdir name-sym)])

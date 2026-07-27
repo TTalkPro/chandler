@@ -20,6 +20,20 @@
         (assert-equal 0 (proc-result-code r))
         (assert-string= "a b $HOME\n" (proc-result-out r))))
 
+    (env-prefix-quotes-and-skips-false
+      ;; 值经 shell-quote,故含空格/元字符的值不会被 sh 拆开或展开;
+      ;; 值为 #f 的项整条跳过(调用方把可选环境变量直接写成 (cons "K" #f))。
+      (assert-string= "A='x y' " (env-prefix '(("A" . "x y"))))
+      (assert-string= "A='$HOME' " (env-prefix '(("A" . "$HOME"))))
+      (assert-string= "B='2' " (env-prefix '(("A" . #f) ("B" . "2")))))
+
+    (env-prefix-round-trips-through-sh
+      ;; 端到端:含空格与 $ 的值必须原样抵达子进程,不被 /bin/sh 展开
+      (let ([r (run-capture "sh" '("-c" "printf %s \"$V\"")
+                            '((env . (("V" . "a b $HOME `id` \"q\"")))))])
+        (assert-equal 0 (proc-result-code r))
+        (assert-string= "a b $HOME `id` \"q\"" (proc-result-out r))))
+
     (capture-stdout
       (let ([r (run-capture "echo" '("hello"))])
         (assert-equal 0 (proc-result-code r))

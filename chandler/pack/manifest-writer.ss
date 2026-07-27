@@ -65,7 +65,7 @@
                                                      rel "/native/")])
                             (for-each
                               (lambda (f)
-                                (set! out (cons (string-append "    (" (strip-ext f)
+                                (set! out (cons (string-append "    (" (path-root f)
                                                                " \"" pre f "\")\n")
                                                 out)))
                               (native-files-in ndir))))
@@ -75,19 +75,12 @@
       (let ([entries (reverse out)])
         (if (null? entries) "" (string-append "  (native\n" (apply string-append entries) "    )\n")))))
 
-  (define (strip-ext f)
-    (let loop ([i (- (string-length f) 1)])
-      (cond
-        [(< i 0) f]
-        [(char=? #\. (string-ref f i)) (substring f 0 i)]
-        [else (loop (- i 1))])))
-
   ;; (files …):每个文件的 sha256 + 字节数。**按需**校验(chandler verify-pack / 补丁前),
   ;; 不在每次启动跑 —— 启动只做廉价的目标三元组比对。pack.manifest 最后写,故不自哈。
   (define (manifest-files-lines root)
     (apply string-append
       (map (lambda (abs)
-             (let ([rel (strip-prefix abs (string-append root "/"))])
+             (let ([rel (relativize root abs)])
                (string-append "    (\"" rel "\" (sha256 \"" (sha256-file abs)
                               "\") (size " (number->string (file-byte-size abs)) "))\n")))
            (list-sort string<? (files-under root)))))

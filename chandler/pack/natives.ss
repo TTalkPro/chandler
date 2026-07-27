@@ -13,20 +13,11 @@
           (chandler lock))
 
   ;; 对象树里每个带 native/ 的库,返回其名字段列表(("mylib") / ("chez" "async"))。
-  ;; **递归** —— 多段库名的 native 落在 lib/<mt>/chez/async/native/,一层扫描会漏掉。
+  ;; 遍历本身在 (chandler layout) 的 walk-native-dirs —— 与 install 的 native 预载
+  ;; 共用同一份「native 落点」定义。
   (define (native-libs-under base)
     (let ([out '()])
-      (let walk ([rel '()])
-        (let ([dir (fold-left join-paths base (reverse rel))])
-          (when (file-directory? dir)
-            (for-each
-              (lambda (e)
-                (let ([p (join-paths dir e)])
-                  (when (file-directory? p)
-                    (if (string=? e "native")
-                        (unless (null? rel) (set! out (cons (reverse rel) out)))
-                        (walk (cons e rel))))))
-              (list-sort string<? (dir-entries dir))))))
+      (walk-native-dirs base (lambda (segs nd) (set! out (cons segs out))))
       (reverse out)))
 
   (define (native-files-in dir)

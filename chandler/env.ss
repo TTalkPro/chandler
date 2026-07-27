@@ -88,7 +88,7 @@
 
   ;; 取到闭合引号为止;缺闭合引号则取到行尾(宽容)
   (define (single-quoted v)
-    (let ([i (char-index-from v #\' 1)])
+    (let ([i (char-index v #\' 1)])
       (if i (substring v 1 i) (substring v 1 (string-length v)))))
 
   ;; 双引号:取到闭合引号,途中 \n \t \r \\ \" 转义;缺闭合取到行尾
@@ -116,7 +116,7 @@
           [(>= i n) (list->string (reverse out))]
           [(and (char=? (string-ref s i) #\$)
                 (< (+ i 1) n) (char=? (string-ref s (+ i 1)) #\{))
-           (let ([close (char-index-from s #\} (+ i 2))])
+           (let ([close (char-index s #\} (+ i 2))])
              (if close
                  (let* ([name (substring s (+ i 2) close)]
                         [val  (lookup name acc)])
@@ -143,11 +143,4 @@
     (let loop ([i (string-length s)])
       (cond [(= i 0) ""]
             [(char-whitespace? (string-ref s (- i 1))) (loop (- i 1))]
-            [else (substring s 0 i)])))
-
-  (define (char-index-from s ch start)
-    (let ([n (string-length s)])
-      (let loop ([i start])
-        (cond [(>= i n) #f]
-              [(char=? (string-ref s i) ch) i]
-              [else (loop (+ i 1))])))))
+            [else (substring s 0 i)]))))

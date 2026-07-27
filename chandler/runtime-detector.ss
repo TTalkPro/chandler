@@ -68,7 +68,7 @@
         [(chez)
          (when skiff-c
            ;; 项目要求 Skiff,当前是标准 Chez → 警告(依赖可能 import (skiff …) 而硬错)
-           (fprintf (current-error-port)
+           (eprintf
                     "warning: project requires (skiff ~s) but the current runtime is stock Chez; dependencies using Skiff facilities will fail~%"
                     skiff-c))
          (when chez-c (gate! "Chez" chez-c (chez-version-string)))]

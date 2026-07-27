@@ -161,14 +161,7 @@
   (define (generated-status-line? line)
     (and (> (string-length line) 3)
          (let ([p (substring line 3 (string-length line))])
-           (build-tree-path? (car (string-split p #\space))))))
-
-  (define (build-tree-path? p)
-    (let loop ([segs (string-split p #\/)])
-      (cond
-        [(null? segs) #f]
-        [(string=? (car segs) "_build") #t]
-        [else (loop (cdr segs))])))
+           (path-has-segment? (car (string-split p #\space)) '("_build")))))
 
   ;; ── URL key 专用助手(通用字符串/FS 工具来自 util/fs)──
   (define (readable-tail norm)

@@ -35,11 +35,11 @@
   (define pack-format-supported 1)
 
   (define (%pack-err msg)
-    (fprintf (current-error-port) "chandler-pack: ~a~%" msg)
+    (eprintf "chandler-pack: ~a~%" msg)
     (flush-output-port (current-error-port)))
 
   (define (%pack-err-sexp s)
-    (fprintf (current-error-port) "~s~%" s)
+    (eprintf "~s~%" s)
     (flush-output-port (current-error-port)))
 
   ;; pack-field1 已由 (chandler sexp) 的 field-ref 提供同一语义(assq + cadr)。
@@ -82,28 +82,28 @@
             (if schema-bad
                 (begin
                   (set! bad (+ bad 1))
-                  (fprintf (current-error-port) "  INVALID ~s (~a)~%" e schema-bad))
+                  (eprintf "  INVALID ~s (~a)~%" e schema-bad))
                 (let* ([rel (car e)]
                    [want-h (field-ref (cdr e) 'sha256)]
                    [want-s (field-ref (cdr e) 'size)]
                        [abs (join-paths root rel)])
                   (cond
                     [(not (file-exists? abs))
-                     (set! bad (+ bad 1)) (fprintf (current-error-port) "  MISSING ~a~%" rel)]
+                     (set! bad (+ bad 1)) (eprintf "  MISSING ~a~%" rel)]
                     [(not (string=? want-h (sha256-file abs)))
-                     (set! bad (+ bad 1)) (fprintf (current-error-port) "  CHANGED ~a (sha256 mismatch)~%" rel)]
+                     (set! bad (+ bad 1)) (eprintf "  CHANGED ~a (sha256 mismatch)~%" rel)]
                      [(not (= want-s (file-byte-size abs)))
-                     (set! bad (+ bad 1)) (fprintf (current-error-port) "  CHANGED ~a (size mismatch)~%" rel)]
+                     (set! bad (+ bad 1)) (eprintf "  CHANGED ~a (size mismatch)~%" rel)]
                     [else (set! ok (+ ok 1))])))))
         files)
       ;; pack.manifest 自己从不被声明(最后写),排除掉;其余未声明文件 = EXTRA,致命
       (for-each
         (lambda (abs)
-          (let ([rel (strip-prefix abs (string-append root "/"))])
+          (let ([rel (relativize root abs)])
             (unless (or (string=? rel "pack.manifest") (hashtable-ref declared rel #f))
               (set! extra (+ extra 1))
               (set! bad (+ bad 1))
-              (fprintf (current-error-port) "  EXTRA ~a (not in manifest)~%" rel))))
+              (eprintf "  EXTRA ~a (not in manifest)~%" rel))))
         (files-under root))
       (printf "verify ~a: ~a ok, ~a bad, ~a extra~%" root ok bad extra)
       bad))

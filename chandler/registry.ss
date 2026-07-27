@@ -61,7 +61,7 @@
 
   ;; ── 文件枚举(v3:沿用 v2 的 enumerate-lib)──
   (define (enumerate-lib src name-str)
-    (let ([name-str (if (symbol? name-str) (symbol->string name-str) name-str)])
+    (let ([name-str (name->string name-str)])
       (append
         (let ([srcs (append
                       (if (file-exists? (join-paths src (string-append name-str ".ss")))
@@ -72,7 +72,7 @@
           (if (file-directory? bdir)
               (filter-map
                 (lambda (abs)
-                  (let ([rel (strip-prefix abs (string-append bdir "/"))])
+                  (let ([rel (relativize bdir abs)])
                     (and (deliverable? rel)
                          (cons (join-paths (current-machine-type) rel) abs))))
                 (files-under bdir))
@@ -81,10 +81,6 @@
   (define (deliverable? rel)
     (not (or (string=? (base-name rel) ".bake-manifest")
              (string-suffix? ".wpo" rel))))
-
-  (define (rel-files-under src sub)
-    (map (lambda (abs) (strip-prefix abs (string-append src "/")))
-         (files-under (join-paths src sub))))
 
   ;; ── install-global ──
   ;; 整段包在 per-prefix 锁里:staging promote + registry read-modify-write 是一个事务。

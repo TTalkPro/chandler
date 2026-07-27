@@ -53,6 +53,10 @@
               (map (lambda (d) (dep->rspec d 1 'dev #t)) (manifest-dev-deps root-mf)))))
 
       ;; BFS
+      ;; next 逆序累积、进下一层前一次 reverse。先前是 (append next (map …)) ——
+      ;; 在 for-each 里往尾巴上接,每解析出一个包就把 next 整个拷一遍。
+      ;; 层内顺序与先前逐字相同(仲裁看的是层、不是层内次序,但警告文本的确定性
+      ;; 靠它)。
       (let loop ([frontier (initial)])
         (unless (null? frontier)
           (let ([next '()])
@@ -69,13 +73,14 @@
                             [entry (resolve-one spec* provider overrides warn!)])
                        (hashtable-set! chosen name entry)
                        ;; 递归其子依赖(path 与 git 一致递归;path 自身不入 lock)
-                       (set! next
-                         (append next
-                           (map (lambda (d)
-                                  (dep->rspec d (+ (rspec-depth spec) 1) (rspec-scope spec) #f))
-                                (rentry-deps entry)))))])))
+                       (for-each
+                         (lambda (d)
+                           (set! next
+                             (cons (dep->rspec d (+ (rspec-depth spec) 1) (rspec-scope spec) #f)
+                                   next)))
+                         (rentry-deps entry)))])))
               frontier)
-            (loop next))))
+            (loop (reverse next)))))
 
       ;; 环检测(仓库级):基于 chosen 的 deps 图
       (detect-cycles chosen warn!)
@@ -181,7 +186,7 @@
                 (values rev '() '() #f)))]     ; 裸库默认
         [(path)
          (let* ([dir (join-paths root-dir sl)]
-                [mpath (join-paths dir "chandler-manifest.ss")])
+                [mpath (project-manifest-path dir)])
            (if (file-exists? mpath)
                (let ([mf (read-manifest mpath)])
                  (values #f (manifest-deps mf)
