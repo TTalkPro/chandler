@@ -10,7 +10,7 @@
           manifest-chez manifest-skiff manifest-chandler manifest-srcdir
           manifest-deps manifest-dev-deps manifest-native
           manifest-overrides
-          manifest-resources manifest-runtime-subset
+          manifest-runtime-subset
           manifest-app app? app-entry app-main
           dep? dep-name dep-source-kind dep-source-loc
           dep-pin-kind dep-pin-val
@@ -32,15 +32,13 @@
   ;; 它没有 URL、不需要 fetch,只需要「装的那份够不够新」(designs/06 §5)。
   ;;
   ;; v3(D13)取消 (resources ...) 字段:资源靠约定 `<src>/<libpath>/resources/`
-  ;; 与库源码同居。manifest-resources 保留为 export 但恒返回 #f(向后兼容)。
+  ;; 与库源码同居。旧 manifest 里的该字段解析时**静默忽略**(见 parse-manifest),
+  ;; 但不再有 manifest-resources 访问器 —— 它曾恒返回 #f,而 resolve 还老老实实把这个
+  ;; #f 一路传进 lock 的 resources 字段,是一整条不产出任何东西的死管道。
   (define-record-type manifest
     (fields format name version chez skiff chandler srcdir
             deps dev-deps native overrides scripts app
             runtime-subset))
-
-  ;; manifest-resources:向后兼容,恒返回 #f
-  ;; (旧代码可能调用它,如 resolve;现在资源靠约定,不需要 manifest 声明)
-  (define (manifest-resources m) #f)
 
   ;; app:这个包是**可分发的应用**时声明入口(designs/09 §CLI)。
   ;;   (app (entry (mdserver)) (main main))

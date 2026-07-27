@@ -11,7 +11,7 @@
           locked-dep-source-kind locked-dep-source-loc
           locked-dep-pin-kind locked-dep-pin-val
           locked-dep-rev locked-dep-deps locked-dep-natives
-          locked-dep-scope locked-dep-resources
+          locked-dep-scope
           make-lock lock? lock-format lock-manifest-sha256 lock-chandler lock-deps
           lock-files with-files lock-file-sha256
           lock->datum datum->lock write-lock read-lock
@@ -24,11 +24,14 @@
   (define lock-format-version 1)
 
   ;; 一条已锁依赖;scope ∈ {runtime, dev}
-  ;; resources:designs/11 §6 标准化快照 —— #f 表示无声明,否则为 ((libref-list . path) ...)
-  ;; M1/M2 才会从 manifest resources 字段填入,目前 resolve 路径传 #f。
+  ;;
+  ;; **无 resources 字段**(designs/09 §6):v3 的资源靠 method B 目录约定定位
+  ;; (`<src>/<libpath>/resources/`),manifest 的 `(resources …)` 声明已删,故 lock
+  ;; 里也没有可记的东西。旧 lock 若带 `(resources …)`,读取时**静默忽略**——
+  ;; datum->locked-dep 根本不看那个字段(降低升级摩擦,同 spec)。
   (define-record-type locked-dep
     (fields name source-kind source-loc pin-kind pin-val rev
-            deps natives scope resources
+            deps natives scope
             provenance))   ; v2:记录来源详情(git rev 字符串 | prebuilt 列表 | #f)
 
   ;; 用 3-arg 形:lock 是类型名,make-lock-rec 是自动构造,lock? 是谓词。
@@ -82,12 +85,6 @@
        (deps ,@(locked-dep-deps d))
        (natives ,@(locked-dep-natives d))
        ,@(if (eq? 'dev (locked-dep-scope d)) '((scope dev)) '())
-       ,@(let ([rs (locked-dep-resources d)])
-           (if rs
-               (list `(resources ,@(map (lambda (p)
-                                          `(,(car p) ,(cdr p)))
-                                        rs)))
-               '()))
        ,@(let ([pv (locked-dep-provenance d)])      ; v2:provenance
            (if pv (list `(provenance ,pv)) '()))))
 
@@ -127,20 +124,8 @@
         (field-ref* b 'deps)
         (field-ref* b 'natives)
         (if (equal? '(dev) (field-ref* b 'scope)) 'dev 'runtime)
-        (parse-locked-resources (field-ref* b 'resources))
+        ;; 旧 lock 的 (resources …) 不再读取 —— 未知字段一律静默忽略(designs/09 §6)
         (field-ref b 'provenance))))   ; v2:#f 若缺省(向后兼容老 lock)
-
-  ;; lock 里的 resources 已标准化(designs/11 §6.3):((libref-list "path") ...)
-  ;; 字段缺省 → #f(向后兼容老 lock 文件)
-  (define (parse-locked-resources items)
-    (and (not (null? items))
-         (map (lambda (it)
-                (unless (and (pair? it) (= 2 (length it))
-                             (pair? (car it)) (string? (cadr it)))
-                  (error 'datum->locked-dep
-                         "lock resources entry must be ((libref …) \"path\")" it))
-                (cons (car it) (cadr it)))
-              items)))
 
   ;; ── 文件 I/O ──
   (define (write-lock path lk)

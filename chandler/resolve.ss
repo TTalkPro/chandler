@@ -25,7 +25,7 @@
 
   ;; 已选条目(内部;含 depth,便于裁决与调试)
   (define-record-type rentry
-    (fields name source-kind source-loc pin-kind pin-val rev deps natives scope depth path? resources))
+    (fields name source-kind source-loc pin-kind pin-val rev deps natives scope depth path?))
 
   ;; ── 公共入口:默认 git provider ──
   ;; opts: (production . #t) (root-dir . "path")
@@ -34,8 +34,10 @@
       (resolve/provider root-mf (git-provider (alist-ref o 'root-dir ".")) o)))
 
   ;; ── 核心算法(provider 注入)──
-  ;; provider: (name sk sl pk pv) → (values rev child-deps natives path? resources)
+  ;; provider: (name sk sl pk pv) → (values rev child-deps natives path?)
   ;;   child-deps = manifest dep record 列表;natives = symbol 列表;rev=#f 表 path(不入 lock)
+  ;;   (v3 起不再有第 5 个 resources 值:资源靠 method B 目录约定,manifest 与 lock
+  ;;    的 (resources …) 字段都已删,见 designs/09 §6)
   (define (resolve/provider root-mf provider opts)
     (let* ([production? (alist-ref opts 'production #f)]
            [overrides (manifest-overrides root-mf)]
@@ -89,7 +91,7 @@
       ;; 不会 —— 所以检查必须在调 provider 之前,否则 prebuilt 会被静默吞掉。
       (when (eq? sk 'prebuilt)
         (error 'resolve "prebuilt source not yet supported; use git" name))
-      (let-values ([(rev child-deps natives path? resources)
+      (let-values ([(rev child-deps natives path?)
                     (provider name sk (rspec-source-loc spec)
                               (rspec-pin-kind spec) (rspec-pin-val spec))])
         ;; override 的 metadata(deps/natives)替换上游
@@ -98,8 +100,7 @@
                [natives* (if (ov-has? ov 'natives) (ov-natives ov) natives)])
           (make-rentry name (rspec-source-kind spec) (rspec-source-loc spec)
                        (rspec-pin-kind spec) (rspec-pin-val spec)
-                       rev deps* natives* (rspec-scope spec) (rspec-depth spec) path?
-                       resources)))))
+                       rev deps* natives* (rspec-scope spec) (rspec-depth spec) path?)))))
 
   ;; ── 冲突裁决(R1-R4);BFS 下 existing 恒 depth ≤ new,故「首见者胜」──
   (define (arbitrate! existing new warn!)
@@ -143,9 +144,8 @@
       (rentry-rev e)
       (filter-nonpath-names (rentry-deps e))    ; deps 字段:子依赖名(仅名)
       (rentry-natives e)
-       (rentry-scope e)
-       (rentry-resources e)
-       #f))   ; v2 provenance:resolve 阶段还未填(v2.4 prebuilt 实现时填)
+      (rentry-scope e)
+      #f))   ; v2 provenance:resolve 阶段还未填(v2.4 prebuilt 实现时填)
 
   (define (filter-nonpath-names deps)
     (map dep-name deps))                    ; lock deps 存名;path 子依赖名也留(图完整)
@@ -177,17 +177,15 @@
             (if content
                 (let ([mf (parse-manifest (read-datum-string content))])
                   (values rev (manifest-deps mf)
-                          (map native-name (manifest-native mf)) #f
-                          (manifest-resources mf)))
-                (values rev '() '() #f #f)))]     ; 裸库默认
+                          (map native-name (manifest-native mf)) #f))
+                (values rev '() '() #f)))]     ; 裸库默认
         [(path)
          (let* ([dir (join-paths root-dir sl)]
                 [mpath (join-paths dir "chandler-manifest.ss")])
            (if (file-exists? mpath)
                (let ([mf (read-manifest mpath)])
-                  (values #f (manifest-deps mf)
-                          (map native-name (manifest-native mf)) #t
-                          (manifest-resources mf)))
+                 (values #f (manifest-deps mf)
+                         (map native-name (manifest-native mf)) #t))
                (values #f '() '() #t)))]
         [(prebuilt)
          (error 'git-provider "prebuilt source not yet supported; use git" sk)]
