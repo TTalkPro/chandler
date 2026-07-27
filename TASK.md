@@ -3,6 +3,11 @@
 来源：2026-07-27 全库分析（公共代码提取 + 算法优化）。按收益从大到小排序。
 基线版本：0.1.6（d4965cf）。
 
+- **A / B 部分**（算法性能、公共代码提取）：已完成，见 [完成情况](#完成情况)。
+- **C 部分**（Windows 可移植性）：未开始。设计见
+  [designs/14-windows-portability.md](designs/14-windows-portability.md)，
+  编号 C1–C9 与该文 §13 的落地顺序一一对应。
+
 ---
 
 ## A. 算法 / 性能
@@ -217,6 +222,158 @@ EXTRA 文案、是否统计并打印 ok/extra 汇总。
 - [x] 顺带去掉 `build.ss` 已无用的 `(chandler compile)` import
       （`cli-make.ss` 的 task-engine import 仍需要，它用着 `exit-ok`）
 - [x] 测试 506 passed, 0 failed；清空 `_build` 从零重编亦通过
+
+---
+
+## C. Windows 可移植性
+
+来源：2026-07-27 全库平台相关代码走查。设计与理由全部在
+[designs/14-windows-portability.md](designs/14-windows-portability.md)，
+本节只列可勾选的动作 —— **不要在这里重复设计论证**，改主意先改设计文档。
+
+**总目标**：pack 分发态与 install 态只依赖 `cmd.exe`（Windows 必有），
+不依赖 PowerShell / MSYS / Cygwin；开发态（`-j` 并行）才允许用 pwsh。
+
+**当前状态**：Windows 支持一律标注为「未验证」，直到 C9 的 CI 跑绿。
+
+### C1. `.registry/<name>.active` sidecar（D35）
+> 设计 §8.1。**先做这个** —— 纯增量，POSIX 侧先受益，不动任何 Windows 代码就能测。
+
+- [ ] `install` / `switch` 写 `.registry/<name>.ss` 的同时派生
+      `.registry/<name>.active`：单行版本号 + **结尾换行**
+      （POSIX `read` 需要它才返回成功；cmd 的 `set /p` 两种都吃）
+- [ ] 写入受 D21 per-prefix 进程锁保护，走 D20 式原子写（同目录 temp + rename）
+- [ ] `uninstall` 一并删除
+- [ ] `doctor` 新增 issue `active-sidecar-drift`：`.active` 缺失、
+      或与 `.ss` 的 `(active …)` 不一致。**`.ss` 是权威，`.active` 是派生**
+- [ ] POSIX shim 的 awk 解析下线，改 `IFS= read -r ACTIVE < "$REGFILE"`
+- [ ] 测试：sidecar 与 `.ss` 的一致性、drift 检测、switch 后 sidecar 即时更新
+
+### C2. 资源 segment 拒绝 `\`（P1-2，安全）
+> 设计 §6 末段。一行的事，且是安全边界，不该等整个 Windows 计划。
+
+- [ ] `runtime-paths.ss:25` 的 `validate-resource-segment` 同时拒 `/` 与 `\`
+      —— 当前 `(resource-path '(app) "..\\..\\secret")` **绕过全部四条校验**
+- [ ] 测试：`..\..\x`、`a\b`、混合分隔符各一条
+
+### C3. 启动器 `.ps1` → `.cmd`（D34）
+> 设计 §8.2–8.7。依赖 C1。做完 Windows 就「装得上、发得出」。
+
+- [ ] install 模式 Windows shim 改 `.cmd`（模板见设计 §8.3）：
+      直线代码 + 底部错误标签，无内嵌块、无延迟展开、无正则；
+      退出码与 POSIX 侧逐条对齐（70 / 64 / 127）
+- [ ] pack 模式 Windows launcher 改 `.cmd`（§8.4）；
+      `boots-flags`（`pack/launchers.ss:70`）**原样共用**，prefix 传 `%HERE%`
+- [ ] **`.cmd` 必须写 CRLF** —— 加 `write-text-crlf`。§8.3 用了标签，
+      LF-only 下 `goto` 可能出错。**这是最容易漏的一条**
+- [ ] `launchers.ss:90` 的 win 分支去掉 `chmod`（`.cmd` 不需要）
+- [ ] `remove-app-launcher!`（`commands.ss:363`）补删 `.cmd`；
+      `.ps1` 的删除**保留**，让旧安装能干净卸载
+- [ ] `bin/chandler.cmd`（开发期 wrapper，P0-5）
+- [ ] 取消 `bootstrap.ss:287` 的「Windows 跳过冒烟测试」——
+      `.cmd` 可被 `system` 直接调起，补上这个覆盖缺口
+- [ ] **launcher parity 测试**：渲染 sh 与 cmd 两份，解析出
+      (registry 路径, runner 路径, runtime 候选序, 五个退出码) 五元组断言一致。
+      照 `bootstrap-parity` / `pack-verifier-parity` 的模式；
+      **必须验证非空转** —— 故意制造分叉确认它会红
+- [ ] 更新 `designs/08-launchers.md` §3（PowerShell 版被取代）
+
+### C4. 换行符与 hash 跨平台一致（D38，P1-3）
+> 设计 §9。独立于其它项，不做则跨平台协作随机报错。
+
+- [ ] 仓库根加 `.gitattributes`：`*.ss` / `*.sps` / `*.lock` / `*.md` → `text eol=lf`；
+      `*.cmd` → `text eol=crlf`。防 `core.autocrlf=true` 在 checkout 时改写内容
+- [ ] chandler 自己写 lock / registry / manifest 走**二进制端口**
+      （或显式 `(eol-style none)`），主要落点 `sexp.ss:105` 的 `call-with-output-file`
+- [ ] `sha256-file` **不做任何归一化** —— 它是文件真实字节的指纹，
+      归一化会让 `chandler verify` 失去意义
+- [ ] 测试：同一 datum 在两种 eol 环境下写出的字节一致
+
+### C5. `proc.ss` 平台派发子进程层（D33，P0-1）
+> 设计 §5。最大一块。**前提事实**：Chez 没有不经 shell 的 spawn
+> （`open-process-ports` 实测同样收 shell 命令串，`&&` 会被解释），
+> 所以只能把 cmd 的引用规则做对，不能绕开。
+
+- [ ] 导出面不变，内部按平台分派：
+  - [ ] 参数引用：Windows 走 `"…"` + MSVCRT 反斜杠规则 + 引号外元字符 `^` 转义
+  - [ ] 环境注入：`set "K=v" && cmd`（`bootstrap.ss:239` 已是此写法，抄过去）
+  - [ ] cwd：`cd /d "d" && ` —— **`/d` 不能少**，跨盘符会静默失败
+  - [ ] `which`：`where.exe <prog>` 取首行
+  - [ ] `real-path`：Windows 直接返回原路径（三个调用点都在 `pack/runtime.ss`，
+        只为找宿主 skiff/scheme，无符号链接需求）
+- [ ] `make-temp-dir`（`proc.ss:38`）区分「已存在」与真错误 ——
+      当前对任何失败都无限 loop（P0-2 的一半）
+- [ ] `bootstrap.ss` 的 `q` 同步（它是 `shell-quote` 的自包含副本，
+      由 `bootstrap-parity` 钉住，改一边就会红）
+- [ ] `-j` 并行编译（`compile.ss:588` `run-chunk`）在 Windows 上
+      **退化为串行 + 明确提示**（D37）。不为它引入 pwsh 依赖
+- [ ] **平台参数化单元测试**：平台判别抽成可 `parameterize` 的参数，
+      于是 Linux 上就能断言 Windows 分支的**生成结果**。
+      覆盖 `\`、空格、`$`、`&`、`^`、`"`，以及**含 `%` 的已知失真**（记录，不修）
+- [ ] 文档写明：`%` 在 cmd 双引号内也会展开且无可靠转义，
+      含 `%` 的值需改走环境变量（npm/yarn/mise 同样限制）
+
+### C6. 路径原语认 `\`（D36，P1-1）
+> 设计 §6。依赖 C5 的实跑才能验证。**这是静默错误**，比崩溃危险。
+
+- [ ] `fs.ss` 加单一出处的 `path-sep-char?`（`/` 或 `\`），下游全改走它：
+      `last-slash`(:32) → `parent-dir` / `base-name`、`path-join*`(:26)、
+      `path-has-segment?`(:166)、`relativize`(:180)、`rel-files-under`
+- [ ] `path-has-segment?` 修好后，`unmanaged-path?` 才能认出 `_build` / `.git`
+      —— 否则 install 清单与 `chandler verify` 会把生成物和 `.git` 当受管文件
+- [ ] `relativize` 处理**分隔符不一致**的前缀匹配：按段拆分比较，
+      不做裸字符串前缀比较
+- [ ] `absolute-path?`(:45) 收紧：`[A-Za-z]` + `:` + 后跟分隔符
+      （当前只要第二字符是 `:` 就算绝对，POSIX 上 `a:b` 会误判）
+- [ ] 测试：混合分隔符路径穿过全部六个函数
+
+### C7. 环境、临时目录、文件系统语义
+> 设计 §7、§10。
+
+- [ ] `system-temp-dir`（`fs.ss:188`）：`TMPDIR` → `TEMP` → `TMP` → 平台默认
+      （当前 Windows 上全部临时文件写向不存在的 `/tmp`）
+- [ ] `fetch.ss:24` `default-cache-root`：Windows 走 `%LOCALAPPDATA%\chandler\cache`，
+      与 `registry.ss` 的 `default-user-libdir` 同一套判别
+- [ ] `move-file`（`fs.ss:110`）：目标存在先删再 rename，与 `sexp.ss` /
+      `pack/core.ss` / `staging.ss` 对齐。修掉 `touch-file!`
+      （`compile.ss:295`）在 Windows 上被 `ignore-errors` 吞掉的静默失效
+- [ ] `copy-exe!`（`pack/core.ss:183`）补 win 分支，不调 `chmod`
+- [ ] `rm-rf`（`fs.ss:88`）：遇只读文件（git 的 `.git/objects/**`）先清只读属性
+      再重试一次；**仍失败不再吞** —— 让调用方知道没清干净
+- [ ] 被占用文件（已 `load-shared-object` 的 DLL、运行中的 exe）：
+      **响亮失败** + 可操作提示（「有进程正在使用 X，关闭后重试」），不留静默残件
+- [ ] NTFS 大小写不敏感 / 保留名（`aux`/`con`/`nul`/`prn`）：
+      `install` 与 `doctor` 报错，**不自动改名**（改名会让库名与磁盘路径失去对应）
+- [ ] `.env` 键大小写差异：记录已知行为，不做归一化
+
+### C8. 文档修正
+> 现在 README 的 Windows 一节描述的是坏掉的路径。
+
+- [ ] `README.md` / `README.en.md` 的前置环境表：PowerShell 从「仅 Windows 需要」
+      改为「不需要」（`.cmd` 只依赖 cmd.exe）
+- [ ] Windows 安装小节的启动器路径 `.ps1` → `.cmd`
+- [ ] 新增「Windows 已知限制」：`%` 参数失真、Ctrl+C 的
+      `Terminate batch job (Y/N)?`、`-j` 退化为串行
+
+### C9. 测试套件去 shell 依赖 + Windows CI
+> 设计 §12。**前面所有工作的验收关口** —— 不做这步，Windows 支持就是「没人跑过」。
+
+- [ ] 测试套件里的 `sh -c` / `/tmp` 硬编码抽象掉
+      （`tests/chandler/proc.ss`、`cli.ss:367`、`sexp.ss:10`、`lock.ss:56`、
+      `registry.ss:296`、`registered.ss:219`）
+- [ ] Windows CI：跑 `bootstrap.ss` + `run-tests.sps` + 一次 `pack` 后实跑
+- [ ] CI 绿之前，README / 设计文档里 Windows 支持一律标注「未验证」
+
+### C 部分的验证纪律
+
+三条，与 A/B 部分已经确立的做法一致：
+
+1. **平台参数化优先** —— 能在 Linux 上断言生成结果的，就不要等到 Windows 才发现。
+   `shell-quote` / `env-prefix` / 路径原语 / 两族启动器模板全部适用。
+2. **parity 测试必须验证非空转** —— 故意制造分叉，确认它会红。
+   B6 就是这么发现 `bootstrap.ss` 的 `q` 让 `` `id` `` 真的执行了命令。
+3. **静默失败一律改成响亮失败** —— C6 / C7 里多数问题的危害不是「挂了」，
+   而是「没挂但结果是错的」（清单收错文件、目录没清干净、mtime 没更新）。
 
 ---
 
