@@ -22,7 +22,10 @@
        (error 'runtime-paths "parent traversal rejected" seg)]
       [(string=? seg ".")
        (error 'runtime-paths "current-directory resource segment rejected" seg)]
-      [(string-contains? seg "/")
+      ;; `/` **与 `\`** 都算分隔符:先前只拒 `/`,于是 Windows 上
+      ;; (resource-path '(app) "..\\..\\secret") 能绕过上面全部四条检查 ——
+      ;; 反斜杠既不是 `/`、整串也不等于 ".."、更不是绝对路径。
+      [(has-path-sep? seg)
        (error 'runtime-paths "resource segment with path separator rejected" seg)]))
 
   ;; ══════════════════════════════════════════════════════════════════

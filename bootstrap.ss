@@ -282,10 +282,13 @@
   (smoke! (target-bindir target)))
 
 ;; shim 链路冒烟:启动器 → .registry active → run.sps → 运行时发现
+;;
+;; **两个平台都跑**(D34)。先前 Windows 上跳过,是因为启动器是 `.ps1` ——
+;; 没法直接 `system` 起来。改成 `.cmd` 后它就是个能直接执行的命令,
+;; 于是自举的最后一环在 Windows 上也真的被验证过,而不是印一行提示了事。
 (define (smoke! bindir)
-  (if (win?)
-      (printf "bootstrap: smoke test skipped on Windows (run: ~a\\chandler.ps1 --version)~%" bindir)
-      (run-or-die (q (join-paths bindir "chandler")) "smoke: chandler --version")))
+  (run-or-die (q (join-paths bindir (if (win?) "chandler.cmd" "chandler")))
+              "smoke: chandler --version"))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; §7 卸载(registry 驱动;源码直载 CLI,不依赖任何已装实例)
