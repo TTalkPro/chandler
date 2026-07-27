@@ -126,8 +126,8 @@
                  [app (make-app (list (cons 'n n)))])
             (install app '())
             (build app (list (cons 'allow-build #t)))
-            ;; 改依赖 lib/n/chandler-manifest.ss 的 native 描述 → 哈希变
-            (write-file (string-append (lib-dir app 'n) "/chandler-manifest.ss")
+            ;; 改依赖 _vendor/n/chandler-manifest.ss 的 native 描述 → 哈希变
+            (write-file (string-append (vendor-dir app 'n) "/chandler-manifest.ss")
               "(manifest (format 1) (name \"n\") (version \"0.1.0\") (srcdir \".\") (native (libn (path \"native/libn\") (build (script \"evil.sh\")))))")
             ;; 未重新授权 → 报错
             (assert-raises (lambda () (build app '()))))))))

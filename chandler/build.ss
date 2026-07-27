@@ -397,7 +397,7 @@
 
   ;; ── native 构建描述:读依赖 lib/<name>/chandler-manifest.ss 的 native 项 ──
   (define (dep-native-spec root name)
-    (let ([mpath (join-paths (lib-dir root (string->symbol name)) "chandler-manifest.ss")])
+    (let ([mpath (join-paths (vendor-dir root (string->symbol name)) "chandler-manifest.ss")])
       (if (file-exists? mpath)
           (let ([mf (read-manifest mpath)])
             ;; 用原始 native sexpr(而非 record)哈希更稳:重读 datum 取 native 字段
