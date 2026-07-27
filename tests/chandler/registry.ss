@@ -417,4 +417,140 @@
         (let ([issues (doctor-global libdir)])
           (assert-true (member 'missing-runner (map car issues))))))
 
+    ;; ══════════════════════════════════════════════════════════════
+    ;; active sidecar(D35,designs/14 §8.1)
+    ;;
+    ;; `.registry/<name>.active` 是 `<name>.ss` 的 `(active …)` 的派生投影,
+    ;; 供启动器 shim 一行读取(不必解析 s-expr)。权威仍是 `.ss`。
+    ;; ══════════════════════════════════════════════════════════════
+
+    (app-install-writes-active-sidecar
+      (let* ([libdir (mktmp)]
+             [src (make-lib-src "myapp")]
+             [version "1.0.0"])
+        (install-global src libdir (mk-meta "myapp" version) version '() '(myapp))
+        (assert-true (file-exists? (active-file libdir "myapp")))
+        (assert-string= version (read-active-sidecar libdir "myapp"))))
+
+    ;; 结尾换行不是装饰:POSIX 的 `read` 读到无换行的末行返回**非零**退出码,
+    ;; 启动器就会当成「没有 active version」而退 70。
+    (active-sidecar-ends-with-newline
+      (let* ([libdir (mktmp)]
+             [src (make-lib-src "myapp")]
+             [version "1.0.0"])
+        (install-global src libdir (mk-meta "myapp" version) version '() '(myapp))
+        (assert-string= "1.0.0\n" (read-file-string (active-file libdir "myapp")))))
+
+    ;; lib 没有 active,也没有启动器 —— 不该留下一个没人读的 sidecar
+    (lib-install-writes-no-active-sidecar
+      (let* ([libdir (mktmp)]
+             [src (make-lib-src "greet")]
+             [version "1.0.0"])
+        (install-global src libdir (mk-meta "greet" version) version '())
+        (assert-false (file-exists? (active-file libdir "greet")))
+        (assert-false (read-active-sidecar libdir "greet"))))
+
+    (switch-updates-active-sidecar
+      (let* ([libdir (mktmp)]
+             [src (make-lib-src "myapp")]
+             [v1 "1.0.0"] [v2 "2.0.0"])
+        (install-global src libdir (mk-meta "myapp" v1) v1 '() '(myapp))
+        (install-global src libdir (mk-meta "myapp" v2) v2 '() '(myapp))
+        (add-runner! libdir "myapp" v1)
+        (add-runner! libdir "myapp" v2)
+        ;; 首装置 active = v1;switch 后 sidecar 必须立刻跟上
+        (assert-string= v1 (read-active-sidecar libdir "myapp"))
+        (switch-active libdir "myapp" v2)
+        (assert-string= v2 (read-active-sidecar libdir "myapp"))
+        ;; 权威侧同步(sidecar 是派生,不是各说各话)
+        (assert-string= v2 (registered-active (read-registered libdir "myapp")))))
+
+    (remove-registered-deletes-active-sidecar
+      (let* ([libdir (mktmp)]
+             [reg (registered-set-active
+                    (registered-add-version (make-registered 'myapp 'app)
+                                            (make-version-entry "1.0.0" "t" '(path "/x") 'chandler))
+                    "1.0.0")])
+        (write-registered! libdir "myapp" reg)
+        (assert-true (file-exists? (active-file libdir "myapp")))
+        (remove-registered! libdir "myapp")
+        (assert-false (file-exists? (active-file libdir "myapp")))))
+
+    ;; 卸掉 active 那一版 → registered-remove-version 清空 active(D16)→ sidecar 应消失。
+    ;; 留下孤儿 sidecar 会让启动器指向一个已被删除的版本。
+    (uninstall-active-version-clears-sidecar
+      (let* ([libdir (mktmp)]
+             [src (make-lib-src "myapp")]
+             [v1 "1.0.0"] [v2 "2.0.0"])
+        (install-global src libdir (mk-meta "myapp" v1) v1 '() '(myapp))
+        (install-global src libdir (mk-meta "myapp" v2) v2 '() '(myapp))
+        (assert-string= v1 (read-active-sidecar libdir "myapp"))
+        (uninstall-global "myapp" libdir '() v1)
+        ;; v2 还在(registry 文件仍存),但已无 active
+        (assert-true (file-exists? (registry-file libdir "myapp")))
+        (assert-false (read-active-sidecar libdir "myapp"))))
+
+    (uninstall-last-version-removes-sidecar
+      (let* ([libdir (mktmp)]
+             [src (make-lib-src "myapp")]
+             [version "1.0.0"])
+        (install-global src libdir (mk-meta "myapp" version) version '() '(myapp))
+        (uninstall-global "myapp" libdir '() version)
+        (assert-false (file-exists? (registry-file libdir "myapp")))
+        (assert-false (file-exists? (active-file libdir "myapp")))))
+
+    (read-active-sidecar-missing-returns-false
+      (let ([libdir (mktmp)])
+        (assert-false (read-active-sidecar libdir "never-installed"))))
+
+    ;; 空 / 全空白的 sidecar 与「不存在」同形(#f),于是 drift 比对不必分情况
+    (read-active-sidecar-blank-returns-false
+      (let ([libdir (mktmp)])
+        (write-text (active-file libdir "blank") "   \n")
+        (assert-false (read-active-sidecar libdir "blank"))))
+
+    ;; ── doctor:active-sidecar-drift ──
+
+    (doctor-detects-missing-active-sidecar
+      (let* ([libdir (mktmp)]
+             [src (make-lib-src "myapp")]
+             [version "1.0.0"])
+        (install-global src libdir (mk-meta "myapp" version) version '() '(myapp))
+        (add-runner! libdir "myapp" version)
+        ;; 干净装完不该有任何 drift
+        (assert-false (member 'active-sidecar-drift (map car (doctor-global libdir))))
+        ;; 删掉 sidecar(= 写 .ss 后崩溃,或旧版 chandler 装的包)
+        (delete-file (active-file libdir "myapp"))
+        (assert-true (member 'active-sidecar-drift (map car (doctor-global libdir))))))
+
+    (doctor-detects-stale-active-sidecar
+      (let* ([libdir (mktmp)]
+             [src (make-lib-src "myapp")]
+             [version "1.0.0"])
+        (install-global src libdir (mk-meta "myapp" version) version '() '(myapp))
+        (add-runner! libdir "myapp" version)
+        ;; 手工改成一个不是 active 的值 → 启动器会跑到与 `chandler list` 不同的版本
+        (write-text (active-file libdir "myapp") "9.9.9\n")
+        (let ([issues (doctor-global libdir)])
+          (assert-true (member 'active-sidecar-drift (map car issues))))))
+
+    ;; lib 本无 active,却躺着一个 sidecar —— 同样是 drift(#f vs "1.0.0")
+    (doctor-detects-stray-sidecar-on-lib
+      (let* ([libdir (mktmp)]
+             [src (make-lib-src "greet")]
+             [version "1.0.0"])
+        (install-global src libdir (mk-meta "greet" version) version '())
+        (write-text (active-file libdir "greet") "1.0.0\n")
+        (let ([issues (doctor-global libdir)])
+          (assert-true (member 'active-sidecar-drift (map car issues))))))
+
+    ;; sidecar 不能被当成 registry 文件扫进来(只认 .ss 后缀)
+    (active-sidecar-not-listed-as-registry
+      (let* ([libdir (mktmp)]
+             [src (make-lib-src "myapp")]
+             [version "1.0.0"])
+        (install-global src libdir (mk-meta "myapp" version) version '() '(myapp))
+        (assert-equal '(myapp) (map car (list-registry-files libdir)))
+        (assert-equal '(myapp) (map car (list-registered libdir)))))
+
     ))

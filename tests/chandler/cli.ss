@@ -13,10 +13,40 @@
           (chandler manifest)
           (chandler lock)
           (chandler hash)
+          (chandler proc)
           (chandler registry)
           (chandler version)
           (chandler cli args)
+          (chandler cli commands)   ; app-launcher-sh:启动器端到端实跑
           (chandler cli main))
+
+  ;; 渲染 sh 启动器并**实跑**它,返回 (values exit-code stdout)。
+  ;;
+  ;; runtime 用一个 stub 脚本(把收到的参数原样打出),而不是真的 skiff/scheme ——
+  ;; 本测试要证明的是「shim 把 sidecar 读对了、runner 路径拼对了」,牵进真运行时
+  ;; 只会让断言变模糊,还得赌 PATH 上有什么。
+  (define (run-app-launcher libdir name)
+    (let* ([bin (mktmp)]
+           [stub (join-paths bin "fakescheme")]
+           [launcher (join-paths bin name)])
+      (write-text stub "#!/bin/sh\necho \"$@\"\n")
+      (run-status "chmod" (list "+x" stub))
+      (write-text launcher (app-launcher-sh name libdir))
+      (run-status "chmod" (list "+x" launcher))
+      (let ([r (run-capture launcher '()
+                            (list (cons 'env (list (cons "CHANDLER_RUNTIME" "chez")
+                                                   (cons "CHANDLER_SCHEME" stub)))))])
+        (values (proc-result-code r) (proc-result-out r)))))
+
+  ;; 装一个 app 到 libdir 并补上 runner,返回 libdir
+  (define (install-app-with-runner! libdir name version)
+    (let ([reg (registered-set-active
+                 (registered-add-version (make-registered (string->symbol name) 'app)
+                                         (make-version-entry version "t" '(path "/x") 'test))
+                 version)])
+      (write-registered! libdir name reg)
+      (write-text (join-paths libdir name version ".chandler" "run.sps") "#!chezscheme\n")
+      libdir))
 
   (define-suite suite
     ;; ── args ──
@@ -414,6 +444,62 @@
             (assert-true (substr? out " exec"))
             (assert-true (substr? out " tree"))
             (assert-true (substr? out " test"))))))    ; v3:顶层 chandler test 命令
+
+    ;; ══════════════════════════════════════════════════════════════
+    ;; 启动器 shim 端到端(D35 active sidecar)
+    ;;
+    ;; 光比模板字符串证明不了 `IFS= read -r ACTIVE < file` 真能读出版本号 ——
+    ;; 结尾换行、空文件、缺文件三种情形都得让 /bin/sh 亲自跑一遍。
+    ;; ══════════════════════════════════════════════════════════════
+
+    (launcher-resolves-active-from-sidecar
+      (let ([libdir (mktmp)])
+        (install-app-with-runner! libdir "myapp" "1.0.0")
+        (let-values ([(rc out) (run-app-launcher libdir "myapp")])
+          (assert-equal 0 rc)
+          ;; stub 打出 shim 传给 runtime 的参数 —— runner 路径必须带对版本
+          (assert-true (substr? out (join-paths libdir "myapp" "1.0.0" ".chandler" "run.sps")))
+          (assert-true (substr? out "--program")))))
+
+    ;; switch 后**不重写 launcher**(D17 稳定 shim),但下一次启动就该换版本
+    (launcher-follows-switch-without-rewrite
+      (let ([libdir (mktmp)])
+        (install-app-with-runner! libdir "myapp" "1.0.0")
+        (let ([reg (registered-add-version (read-registered libdir "myapp")
+                                           (make-version-entry "2.0.0" "t" '(path "/x") 'test))])
+          (write-registered! libdir "myapp" reg))
+        (write-text (join-paths libdir "myapp" "2.0.0" ".chandler" "run.sps") "#!chezscheme\n")
+        (switch-active libdir "myapp" "2.0.0")
+        (let-values ([(rc out) (run-app-launcher libdir "myapp")])
+          (assert-equal 0 rc)
+          (assert-true (substr? out (join-paths libdir "myapp" "2.0.0" ".chandler" "run.sps")))
+          (assert-false (substr? out (join-paths libdir "myapp" "1.0.0" ".chandler" "run.sps"))))))
+
+    ;; sidecar 缺失 → 70(而不是拿到空版本号去拼一个不存在的 runner 路径)
+    (launcher-without-sidecar-exits-70
+      (let ([libdir (mktmp)])
+        (install-app-with-runner! libdir "myapp" "1.0.0")
+        (delete-file (active-file libdir "myapp"))
+        (let-values ([(rc out) (run-app-launcher libdir "myapp")])
+          (assert-equal 70 rc))))
+
+    ;; sidecar 存在但空 → 同样 70(`read` 读空行成功但 ACTIVE 是空串)
+    (launcher-with-blank-sidecar-exits-70
+      (let ([libdir (mktmp)])
+        (install-app-with-runner! libdir "myapp" "1.0.0")
+        (write-text (active-file libdir "myapp") "\n")
+        (let-values ([(rc out) (run-app-launcher libdir "myapp")])
+          (assert-equal 70 rc))))
+
+    ;; 无结尾换行:`read` 返回非零,但 ACTIVE 已被赋值 —— shim 不该因此误判成
+    ;; 「没有 active」。(chandler 自己写的 sidecar 恒带换行;手工编辑的未必。)
+    (launcher-tolerates-sidecar-without-trailing-newline
+      (let ([libdir (mktmp)])
+        (install-app-with-runner! libdir "myapp" "1.0.0")
+        (write-text (active-file libdir "myapp") "1.0.0")
+        (let-values ([(rc out) (run-app-launcher libdir "myapp")])
+          (assert-equal 0 rc)
+          (assert-true (substr? out (join-paths libdir "myapp" "1.0.0" ".chandler" "run.sps"))))))
 
     ;; ── usage 含 test 行(可发现性)──
     (usage-lists-test-command
