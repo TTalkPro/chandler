@@ -8,7 +8,7 @@
 (library (chandler base)
   (export
     ;; runtime-paths(designs/11)
-    resource-path find-resource-path
+    resource-path find-resource-path define-resource-path-resolver
     ;; hash
     sha256-bytevector sha256-string sha256-file
     ;; version
@@ -18,7 +18,7 @@
     string-prefix? string-suffix? string-search string-contains?
     char-index strip-prefix strip-suffix string-join
     alist-ref getenv* ignore-errors plural chandler-version
-    format-object eprintf datum->string string-subst strip-leading
+    format-object eprintf datum->string
     filter-map short-rev
     ;; fs
     parent-dir base-name path-join*
@@ -44,7 +44,6 @@
     resources-dirname lib-resource-dir
     native-so? lib-native-dir lib-native-path native-so-name
     library-name->path srcdir-join
-    rel-to
     ;; runtime-detector(designs/06 §3-4)
     current-runtime runtime-version chez-version-string verify-runtime!
     runtime-env-var preferred-runtime parse-runtime-kind

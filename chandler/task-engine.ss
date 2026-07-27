@@ -22,7 +22,7 @@
     ;; registries(可变,dsl set!)
     task-registry rule-registry default-task-name rule-order-counter
     ;; globals
-    bake-version rule-recursion-limit *optimize-level*
+    rule-recursion-limit *optimize-level*
     exit-ok exit-exec-error exit-config-error exit-usage-error exit-internal
     *dry-run* *quiet* *verbose* *trace* *all-tasks* *exit-code* *current-recipe* *rule-depth*
     ;; bail + condition
@@ -72,12 +72,17 @@
   ;; §globals — designs/04(来自 bake/globals.ss)
   ;; ====================================================================
 
-  (define bake-version "0.1.5")
+  ;; 版本号的唯一出处是 (chandler util) 的 chandler-version —— bake 那份
+  ;; `bake-version` 已删:它导出但零引用,却必须手工与 chandler-version 保持同步,
+  ;; 发版漏改一处不会有任何报错。
   (define rule-recursion-limit 16)
   ;; Injected compile flag(designs/07 §编译动作). Env-overridable so a flag
   ;; change can be exercised without touching sources (I7).
+  ;; 变量名从 BAKE_ 改到 CHANDLER_(bake 二进制已作废,这是最后一处对外 bake 命名);
+  ;; 旧名保留为过渡别名,新名优先。
   (define *optimize-level*
-    (let ((e (getenv "BAKE_OPTIMIZE_LEVEL")))
+    (let ((e (or (getenv "CHANDLER_OPTIMIZE_LEVEL")
+                 (getenv "BAKE_OPTIMIZE_LEVEL"))))
       (or (and e (string->number e)) 2)))
 
   ;; Exit codes(designs/04 §退出码)
