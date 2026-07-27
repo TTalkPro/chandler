@@ -11,7 +11,7 @@
 
 (library (chandler install)
   (export install verify list-deps
-           vendor-dir lib-dir project-lock-path project-manifest-path
+           vendor-dir project-lock-path project-manifest-path
            native-load-paths
            chandler-runtime-sublibs
            global-prefix global-libdir
@@ -33,7 +33,6 @@
   (define (project-manifest-path root) (join-paths root "chandler-manifest.ss"))
   (define (project-lock-path root) (join-paths root "chandler-manifest.lock"))
   (define (vendor-dir root name) (join-paths (join-paths root "_vendor") (symbol->string name)))
-  (define (lib-dir root name) (vendor-dir root name))   ; 兼容:依赖源码树现居 _vendor/
 
   ;; ── install:主命令 ──
   ;; opts: (production . bool) (force . bool) (keep-extra . bool) (offline . bool)
@@ -211,7 +210,9 @@
                 (copy-file p dst)))))
         (dir-entries from))))
 
-  ;; ── 通用树拷贝原语(P7:install/pack 共享,消除 merge-tree!/copy-obj-tree! 重复)──
+  ;; ── 通用树拷贝原语(消除 merge-tree!/copy-obj-tree! 重复)──
+  ;; 本模块私有(不导出):pack 走 install-project-payload! 这条更高层的入口,
+  ;; 并不直接用它 —— 「P7:install/pack 共享」那句注释早已过时。
   ;; 把 src 下所有文件拷到 dst。语义差异由参数表达(而非两个函数):
   ;;   skip-dirs   路径首段在其中的整棵跳过(如 ("_build" ".git"))
   ;;   file-filter 谓词 (rel → bool),只拷满足的文件;全拷传 (lambda (_) #t)
@@ -446,18 +447,6 @@
   ;;   不必重跑 deps,也不需要 APP_ROOT。
   ;;   (先前要拷进 lib/ 是因为「APP_ROOT 指向唯一前缀」那套模型;C1 把资源定位
   ;;    改成扫 library-directories 之后,那个理由消失了。)
-
-  ;; 只在内容可能变了时拷:mtime 严格更新即拷(相等则认为没变 —— 拷贝时 dst 恒不早于 src)
-  (define (copy-if-stale! src dst)
-    (when (or (not (file-exists? dst)) (mtime>? src dst))
-      (ensure-parent dst)
-      (copy-file src dst)))
-
-  (define (mtime>? a b)
-    (let ([ta (file-modification-time a)] [tb (file-modification-time b)])
-      (or (> (time-second ta) (time-second tb))
-          (and (= (time-second ta) (time-second tb))
-               (> (time-nanosecond ta) (time-nanosecond tb))))))
 
   ;; ── 工具 ──
   (define (opt opts k default) (alist-ref opts k default))

@@ -219,8 +219,6 @@
               (if pin (cadr pin) (rspec-pin-val spec))
               (rspec-depth spec) (rspec-scope spec) (rspec-root? spec))))))
 
-  (define (ov-field ov key)                ; override 单值字段 (key v)
-    (and ov (let ([f (assq key (cdr ov))]) (and f (pair? (cdr f)) (cadr f)))))
   (define (ov-field-list ov key)           ; (key a b) → (a b)
     (and ov (let ([f (assq key (cdr ov))]) (and f (cdr f)))))
   (define (ov-has? ov key) (and ov (assq key (cdr ov)) #t))

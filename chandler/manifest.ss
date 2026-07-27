@@ -143,10 +143,6 @@
          (error 'parse-dep "pin must be exactly one of tag/rev/branch/version" who pins)]
         [else (values (caar pins) (cadar pins))])))
 
-  (define (extract-srcdir forms)
-    (let ([s (find-tagged forms 'srcdir)])
-      (if s (cadr s) #f)))
-
   (define (parse-native item)
     (let ([name (car item)]
           [fs   (cdr item)])
