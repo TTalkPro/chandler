@@ -38,7 +38,7 @@
       (let loop ([n (+ (* (time-second t) 1000000)
                        (quotient (time-nanosecond t) 1000)
                        (next-counter))])
-        (let ([d (string-append (or (getenv "TMPDIR") "/tmp") "/chandler-" (number->string n))])
+        (let ([d (string-append (system-temp-dir) "/chandler-" (number->string n))])
           (if (ignore-errors (mkdir d) #t) d (loop (+ n 1)))))))
 
   ;; ── 主入口 ──

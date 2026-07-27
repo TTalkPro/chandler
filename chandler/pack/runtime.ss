@@ -79,7 +79,7 @@
     "(display (let ((v (top-level-value 'skiff-version))) (if (procedure? v) (v) v)))")
 
   (define (probe-skiff-version exe)
-    (let* ([dir (join-paths (or (getenv* "TMPDIR") "/tmp")
+    (let* ([dir (join-paths (system-temp-dir)
                             (string-append "chandler-pack-" (number->string (get-process-id))))]
            [probe (join-paths dir "probe.ss")])
       (ensure-dir dir)

@@ -247,13 +247,15 @@
         (errorf 'run "command exited with ~s: ~a" code (%join-args args)))))
 
   (define (run/capture . args)
-    ;; 跑命令,返回 stdout 字符串;非零即抛。临时名带 pid,并发 bake 进程不撞。
+    ;; 跑命令,返回 stdout 字符串;非零即抛。临时名带 pid,并发进程不撞。
+    ;; 落点走 (chandler fs) 的 system-temp-dir(尊重 TMPDIR)—— 此处原先硬编码
+    ;; "/tmp",是 system-temp-dir 那次可移植性修复漏掉的最后一处。
     (set! %capture-counter (+ %capture-counter 1))
     (let* ((cmd (%join-args args))
-           (tmp (string-append "/tmp/chandler-capture-"
+           (tmp (string-append (system-temp-dir) "/chandler-capture-"
                                (number->string (get-process-id)) "-"
                                (number->string %capture-counter)))
-           (code (system (string-append cmd " > " tmp))))
+           (code (system (string-append cmd " > " (shq tmp)))))
       (let ((out (if (file-exists? tmp) (file->string tmp) "")))
         (when (file-exists? tmp) (delete-file tmp))
         (unless (= code 0)
