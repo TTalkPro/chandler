@@ -53,7 +53,8 @@
     ;; proc
     run-capture run-check run-status run-foreground shell-quote env-prefix
     proc-result-code proc-result-out proc-result-err
-    which real-path)
+    which real-path
+    windows-shell? sh-quote cmd-quote cd-prefix)
   (import (chezscheme)
           (chandler runtime-paths)
           (chandler hash)

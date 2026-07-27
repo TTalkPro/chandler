@@ -85,16 +85,48 @@
   (let ([v (getenv name)])
     (and v (> (string-length v) 0) v)))
 
-;; shell 单引号引用:' → '\'' 包裹。与 (chandler proc) 的 shell-quote 同语义。
-;; **不能**用双引号:双引号内 $ ` \ " 对 sh 仍然特殊,而这里引的全是真实路径
-;; (仓库根、前缀、解释器、libdirs),检出在含 $ 的目录下就会静默拼错。
+;; 参数引用。与 (chandler proc) 的 shell-quote 同语义,**按平台分派**
+;; (自包含红线要求这里另写一份;两份不许分叉,由 bootstrap-parity 测试逐条钉住)。
+;;
+;; POSIX:单引号包裹,' → '\''。**不能**用双引号 —— 双引号内 $ ` \ " 对 sh 仍然
+;; 特殊,而这里引的全是真实路径(仓库根、前缀、解释器、libdirs),检出在含 $ 的
+;; 目录下就会静默拼错。
+;;
+;; Windows(cmd.exe):双引号包裹 + MSVCRT 反斜杠规则(`"` 前与**结尾**的连续
+;; 反斜杠加倍)。全包在引号里,cmd 的 `& | < > ^ ( )` 那层也就自动安全了。
 (define (q s)
+  (if (win?) (q-cmd s) (q-sh s)))
+
+(define (q-sh s)
   (let ([op (open-output-string)])
     (display #\' op)
     (string-for-each
       (lambda (c) (if (char=? c #\') (display "'\\''" op) (display c op)))
       s)
     (display #\' op)
+    (get-output-string op)))
+
+(define (q-cmd s)
+  ;; 字面 `"` / 换行在 cmd 下无法安全传递(cmd 不认反斜杠转义,引号配对会错位,
+  ;; 后续的 & | > ^ 就落到引号外变成控制字符)—— 当场硬错,别悄悄传错。
+  (string-for-each
+    (lambda (c)
+      (when (or (char=? c #\") (char=? c #\newline) (char=? c #\return))
+        (die 64 "cannot pass this path through cmd.exe safely: ~s" s)))
+    s)
+  (let ([op (open-output-string)] [n (string-length s)])
+    (display #\" op)
+    (let loop ([i 0] [pending 0])
+      (if (= i n)
+          (do ([k 0 (+ k 1)]) ((= k (* 2 pending))) (display #\\ op))
+          (let ([c (string-ref s i)])
+            (if (char=? c #\\)
+                (loop (+ i 1) (+ pending 1))
+                (begin
+                  (do ([k 0 (+ k 1)]) ((= k pending)) (display #\\ op))
+                  (display c op)
+                  (loop (+ i 1) 0))))))
+    (display #\" op)
     (get-output-string op)))
 
 (define (die code fmt . args)
@@ -236,9 +268,14 @@
 (define (boot-cli-cmd args)
   (let ([main-sps (join-paths boot-vroot "src" "chandler" "cli" "main.sps")]
         [libdirs (pair (join-paths boot-vroot "src") (join-paths boot-vroot mt))]
+        ;; 环境注入前缀,与 (chandler proc) 的 env-prefix 同形:
+        ;;   POSIX `K='v' cmd` / cmd `set "K=v" && cmd`
+        ;; **值要经 q-cmd 引用**,不能像先前那样把 boot-prefix 裸贴进引号里 ——
+        ;; 前缀含 `"` 或结尾反斜杠时那样会拼出一条错的命令。
         [env (if (win?)
-                 (string-append "set \"CHANDLER_HOME=" boot-prefix "\" && ")
-                 (string-append "CHANDLER_HOME=" (q boot-prefix) " "))])
+                 (string-append "set " (q-cmd (string-append "CHANDLER_HOME=" boot-prefix))
+                                " && ")
+                 (string-append "CHANDLER_HOME=" (q-sh boot-prefix) " "))])
     (string-append env (q interp) " -q --libdirs " (q libdirs)
                    " --program " (q main-sps)
                    " -C " (q here-abs) " " args)))
