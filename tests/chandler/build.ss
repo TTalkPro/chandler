@@ -17,12 +17,10 @@
           (chandler layout)
           (chandler util)
           (chandler install)
-          (chandler compile)
           (chandler build))
 
-  ;; 编译产物断言需要真编译器;Petite 没有,那几条断言在它上面跳过
-  ;; (授权逻辑照跑 —— 它在编译之前就完成了)。
-  (define (when-compiler proc) (when (compiler-available?) (proc)))
+  ;; when-compiler 来自 (tests chandler fixtures):编译产物断言需要真编译器,
+  ;; Petite 上跳过(授权逻辑照跑 —— 它在编译之前就完成了)。
 
     ;; C0:依赖的编译产物留在**它自己的** _vendor 树里,不再搬进汇总的 lib/
   (define (dep-obj app dep rel)

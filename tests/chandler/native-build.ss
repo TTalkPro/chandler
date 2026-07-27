@@ -19,23 +19,7 @@
           (chandler compile)
           (chandler native-build))
 
-  (define (with-proj files proc)
-    (let ((d (mktmp)) (old (current-directory)))
-      (for-each (lambda (f)
-                  (let ((p (join-paths d (car f))))
-                    (ensure-parent p)
-                    (write-file p (cdr f))))
-                files)
-      (dynamic-wind
-        (lambda () (current-directory d))
-        (lambda () (proc d))
-        (lambda () (current-directory old) (rm-rf d)))))
-
-  (define (silently thunk)
-    (let ((sink (open-output-string)))
-      (guard (e (#t (raise e)))
-        (parameterize ((current-output-port sink) (*quiet* #t))
-          (thunk)))))
+  ;; with-proj / silently / when-compiler 来自 (tests chandler fixtures)。
 
   ;; 环境门:真编 C + 编 Scheme 库都具备才跑端到端用例。
   (define (cc-available?) (= 0 (run/code "command -v cc >/dev/null 2>&1")))

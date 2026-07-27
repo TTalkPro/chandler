@@ -13,19 +13,6 @@
           (chandler base)
           (chandler import-graph))
 
-  ;; 在临时目录里铺一组 "相对路径" → 内容 的源文件,交 proc 处置绝对根路径。
-  (define (with-src-tree files proc)
-    (let ((d (mktmp)))
-      (dynamic-wind
-        (lambda () (void))
-        (lambda ()
-          (for-each (lambda (f)
-                      (let ((p (join-paths d (car f))))
-                        (ensure-parent p)
-                        (write-file p (cdr f))))
-                    files)
-          (proc d))
-        (lambda () (rm-rf d)))))
 
   ;; 常用夹具:(app core) 依赖 (app util) + (rnrs)
   (define basic-tree
@@ -38,7 +25,7 @@
 
     (parse-library-shape
       ;; name / exports / edges 三样从 (library …) 头部抽出来。
-      (with-src-tree basic-tree
+      (with-file-tree basic-tree
         (lambda (d)
           (let ((n (parse-source (join-paths d "src/app/core.sls"))))
             (assert-equal '(app core) (lib-node-name n))
@@ -48,7 +35,7 @@
 
     (parse-program-shape
       ;; 没有 (library …) 头 → 程序:name 为 #f,import 仍收边。
-      (with-src-tree
+      (with-file-tree
         '(("p.ss" . "(import (rnrs) (app util))\n(display 1)\n"))
         (lambda (d)
           (let ((n (parse-source (join-paths d "p.ss"))))
@@ -58,7 +45,7 @@
 
     (i2-wrappers-do-not-change-deps
       ;; only/except/rename/prefix 只剥壳,依赖仍是同一个库。
-      (with-src-tree
+      (with-file-tree
         '(("src/app/core.sls" .
            "(library (app core) (export c)
               (import (only (app util) u) (except (app io) w)
@@ -70,7 +57,7 @@
 
     (i3-phase-for-expand
       ;; (for (app macros) expand) → phase 'expand;多 level 各出一条边。
-      (with-src-tree
+      (with-file-tree
         '(("src/app/b.sls" .
            "(library (app b) (export b)
               (import (rnrs) (for (app macros) expand) (for (app m2) (meta 2)))
@@ -85,7 +72,7 @@
 
     (i4-include-scanned
       ;; include 的字面路径按源文件所在目录解析,进 lib-node-includes。
-      (with-src-tree
+      (with-file-tree
         '(("src/app/helpers.ss" . "(define h 1)")
           ("src/app/x.sls" .
            "(library (app x) (export h) (import (rnrs)) (include \"helpers.ss\"))"))
@@ -123,7 +110,7 @@
 
     (classify-builtin-and-source
       ;; (rnrs)/(chezscheme) 是内建;搜索根下的源码归自己编。
-      (with-src-tree basic-tree
+      (with-file-tree basic-tree
         (lambda (d)
           (parameterize ((lib-roots (list (join-paths d "src"))))
             (assert-equal 'builtin (classify-libref '(rnrs)))
@@ -138,7 +125,7 @@
       ;; classify-cache 的键只有 ref,roots 变更靠「代」作废(比 roots 列表的
       ;; eq?)。交替查询同一个 ref:两个根下各有一份同名库,结论必须各归各的,
       ;; 且反复查询保持稳定 —— 若代际判断失效,第二个根会读到第一个的结论。
-      (with-src-tree
+      (with-file-tree
         '(("r1/foo/bar.sls" . "(library (foo bar) (export x) (import (rnrs)) (define x 1))")
           ("r2/foo/bar.sls" . "(library (foo bar) (export x) (import (rnrs)) (define x 2))"))
         (lambda (d)
@@ -158,7 +145,7 @@
     (classify-prebuilt-root
       ;; ("src" . "obj") 对:obj 侧有 .so → 'prebuilt(原样消费,不重编);
       ;; 只有 src 侧没 .so → 回落成源码路径(自己编)。
-      (with-src-tree
+      (with-file-tree
         '(("dep/src/x/a.sls" . "(library (x a) (export a) (import (rnrs)) (define a 1))")
           ("dep/ta6le/x/a.so" . "not-really-fasl")
           ("dep/src/x/b.sls" . "(library (x b) (export b) (import (rnrs)) (define b 1))"))
@@ -173,7 +160,7 @@
 
     (own-source-beats-prebuilt
       ;; 项目库恒胜过同名预构建库(classify 顺序:builtin → own → prebuilt)。
-      (with-src-tree
+      (with-file-tree
         '(("mine/x/a.sls" . "(library (x a) (export a) (import (rnrs)) (define a 2))")
           ("dep/src/x/a.sls" . "(library (x a) (export a) (import (rnrs)) (define a 1))")
           ("dep/ta6le/x/a.so" . "not-really-fasl"))
@@ -195,7 +182,7 @@
 
     (i1-build-graph-reachable
       ;; 可达集 = 入口 + 传递依赖;内建边不下降。
-      (with-src-tree basic-tree
+      (with-file-tree basic-tree
         (lambda (d)
           (parameterize ((lib-roots (list (join-paths d "src"))))
             (let* ((nodes (build-graph (list (join-paths d "src/app/core.sls"))))
@@ -206,7 +193,7 @@
 
     (build-graph-skips-prebuilt
       ;; 预构建边不下降(它生成的 loader 没有源码可解析),故只有入口一个节点。
-      (with-src-tree
+      (with-file-tree
         '(("mine/app/main.sls" .
            "(library (app main) (export m) (import (rnrs) (x a)) (define m 1))")
           ("dep/src/x/a.sls" . "(library (x a) (export a) (import (rnrs) (x deep)) (define a 1))")
@@ -221,7 +208,7 @@
 
     (i9-cycle-detected
       ;; 环报错带完整链路,用 " → " 连接。
-      (with-src-tree
+      (with-file-tree
         '(("src/app/a.sls" . "(library (app a) (export a) (import (rnrs) (app b)) (define a 1))")
           ("src/app/b.sls" . "(library (app b) (export b) (import (rnrs) (app a)) (define b 1))"))
         (lambda (d)
@@ -234,7 +221,7 @@
 
     (i10-unresolvable-lists-candidates
       ;; 解析不到:报库名 + 搜过哪些候选路径(可操作)。
-      (with-src-tree
+      (with-file-tree
         '(("src/app/bad.sls" . "(library (app bad) (export b) (import (rnrs) (app nope)) (define b 1))"))
         (lambda (d)
           (parameterize ((lib-roots (list (join-paths d "src"))))
@@ -246,7 +233,7 @@
 
     (parse-error-is-actionable
       ;; 读不动的源文件报的是「哪个文件 + 为什么」,不是裸 read error。
-      (with-src-tree
+      (with-file-tree
         '(("broken.sls" . "(library (a b) (export x"))
         (lambda (d)
           (let ((msg (guard (e (#t (condition-message e)))

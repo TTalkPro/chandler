@@ -15,33 +15,8 @@
           (chandler recipe)
           (chandler cli make))
 
-  (define (with-proj files proc)
-    (let ([d (mktmp)] [old (current-directory)])
-      (for-each (lambda (f)
-                  (let ([p (join-paths d (car f))])
-                    (ensure-parent p)
-                    (write-file p (cdr f))))
-                files)
-      (dynamic-wind
-        (lambda () (current-directory d))
-        (lambda () (proc d))
-        (lambda () (current-directory old) (rm-rf d)))))
-
-  ;; 吞掉 stdout(任务输出 + Chez 的 "compiling …")。run-quiet 返回 thunk 的值
-  ;; (退出码),capture 返回吞下的文本。guard 先解开 parameterize 再重抛 ——
-  ;; 否则断言失败时 harness 的 FAIL 行会被打进 sink 吞掉。
-  (define (run-quiet thunk)
-    (let ([sink (open-output-string)])
-      (guard (e [#t (raise e)])
-        (parameterize ([current-output-port sink]) (thunk)))))
-
-  (define (capture thunk)
-    (let ([sink (open-output-string)])
-      (guard (e [#t (raise e)])
-        (parameterize ([current-output-port sink]) (thunk)))
-      (get-output-string sink)))
-
-  (define (when-compiler proc) (when (compiler-available?) (proc)))
+  ;; with-proj / run-quiet / capture-output / when-compiler 来自
+  ;; (tests chandler fixtures)。
 
   ;; 一个不需要编译器的最小 recipe:两个 phony 任务,默认任务写文件。
   (define phony-files
@@ -103,7 +78,7 @@
           (assert-equal exit-config-error (run-quiet (lambda () (make-main '())))))))
 
     (help-exits-0
-      (let ([out (capture (lambda () (assert-equal exit-ok (make-main '("--help")))))])
+      (let ([out (capture-output (lambda () (assert-equal exit-ok (make-main '("--help")))))])
         (assert-true (string-contains? out "chandler make [options]"))
         (assert-true (string-contains? out "-j, --jobs"))))
 
@@ -129,7 +104,7 @@
     (dry-run-executes-nothing
       (with-proj phony-files
         (lambda (d)
-          (let ([out (capture (lambda () (make-main '("-n"))))])
+          (let ([out (capture-output (lambda () (make-main '("-n"))))])
             (assert-false (file-exists? "BUILT"))))))
 
     (list-tasks-shows-described-and-default
@@ -138,13 +113,13 @@
       ;; 'build 偏偏是最该看见却看不见的那个。
       (with-proj phony-files
         (lambda (d)
-          (let ([out (capture (lambda () (make-main '("-T"))))])
+          (let ([out (capture-output (lambda () (make-main '("-T"))))])
             (assert-true (string-contains? out "build (default)"))
             (assert-true (string-contains? out "# build it"))
             (assert-true (string-contains? out "other"))
             (assert-false (string-contains? out "hidden")))
           ;; -A 连没描述的也列
-          (let ([out (capture (lambda () (make-main '("-T" "-A"))))])
+          (let ([out (capture-output (lambda () (make-main '("-T" "-A"))))])
             (assert-true (string-contains? out "hidden"))))))
 
     (prereqs-tree
@@ -152,7 +127,7 @@
         '(("chandler-tasks.ss" .
            "(task 'leaf (lambda () (void)))\n(task 'top \"top\" '(leaf) (lambda () (void)))\n(default-task 'top)\n"))
         (lambda (d)
-          (let ([out (capture (lambda () (make-main '("-P"))))])
+          (let ([out (capture-output (lambda () (make-main '("-P"))))])
             (assert-true (string-contains? out "top"))
             (assert-true (string-contains? out "└─ leaf"))))))
 

@@ -6,6 +6,8 @@
 
 (library (tests chandler fixtures)
   (export mktmp write-file read-file trim substr?
+          write-file-tree with-file-tree with-proj
+          run-quiet silently capture-output when-compiler
           lock-ref
           git-init! git-commit! git-in
           manifest-text lib-umbrella-text
@@ -14,8 +16,77 @@
           (tests chandler harness)
           (chandler util)
           (chandler fs)
+          (chandler layout)          ; join-paths
           (chandler lock)
-          (chandler proc))
+          (chandler proc)
+          (chandler task-engine)     ; *quiet*
+          (chandler compile))        ; compiler-available?
+
+  ;; ── 文件树夹具 ──
+  ;; files = (("rel/path" . "内容") …)。四个测试文件先前各写一份这个循环
+  ;; (compile / cli-make 的 with-proj 逐字节相同,import-graph 的 with-src-tree
+  ;; 与 cli-runtime-env 的 proj-with-files 只差要不要切 cwd)。
+  (define (write-file-tree dir files)
+    (for-each (lambda (f)
+                (let ([p (join-paths dir (car f))])
+                  (ensure-parent p)
+                  (write-file p (cdr f))))
+              files)
+    dir)
+
+  ;; 临时目录里铺一棵树,交 proc 处置**绝对根路径**。不动 cwd。
+  (define (with-file-tree files proc)
+    (let ([d (write-file-tree (mktmp) files)])
+      (dynamic-wind
+        (lambda () (void))
+        (lambda () (proc d))
+        (lambda () (rm-rf d)))))
+
+  ;; 同上,但把 cwd 切进去 —— recipe / CLI 通路以 cwd 为项目根。无论成败都还原。
+  (define (with-proj files proc)
+    (let ([d (write-file-tree (mktmp) files)]
+          [old (current-directory)])
+      (dynamic-wind
+        (lambda () (current-directory d))
+        (lambda () (proc d))
+        (lambda () (current-directory old) (rm-rf d)))))
+
+  ;; ── stdout 吞噬 ──
+  ;; Chez 的 compile-library 自己往 stdout 打 "compiling … with output to …",
+  ;; 不受 *quiet* 管,故必须换端口而不只是设 *quiet*。
+  ;;
+  ;; **guard 先解开 parameterize 再重抛**:否则断言失败时 harness 的 FAIL 行
+  ;; 会被打进 sink 一起吞掉,测试报「N failed」却一条都看不见。
+  ;;
+  ;; 三种用法各有一个名字(不用布尔开关 —— 调用点上 `#t` 说明不了任何事):
+  ;;
+  ;;   (run-quiet thunk)      换端口;返回 thunk 的值。**不**设 *quiet*:
+  ;;                          CLI 用例要的正是任务的正常输出被产生出来
+  ;;   (silently thunk)       换端口 + 设 *quiet*;返回 thunk 的值。
+  ;;                          编译用例只看产物,连 task-engine 的进度行一起压
+  ;;   (capture-output thunk) 换端口;返回**吞下的文本**(断言输出内容用,
+  ;;                          故同样不设 *quiet*)
+  (define (run-quiet thunk)
+    (let ([sink (open-output-string)])
+      (guard (e [#t (raise e)])
+        (parameterize ([current-output-port sink]) (thunk)))))
+
+  (define (silently thunk)
+    (let ([sink (open-output-string)])
+      (guard (e [#t (raise e)])
+        (parameterize ([current-output-port sink] [*quiet* #t]) (thunk)))))
+
+  (define (capture-output thunk)
+    (let ([sink (open-output-string)])
+      (guard (e [#t (raise e)])
+        (parameterize ([current-output-port sink]) (thunk)))
+      (get-output-string sink)))
+
+  ;; ── 编译器门 ──
+  ;; Petite 没有编译器(compile-library 一调就抛 "compile package is not loaded")。
+  ;; 真编译的用例在它上面**跳过**而不是放宽断言 —— 那些用例验的正是「产出能被
+  ;; Chez 加载的对象」,放宽等于不验。scheme / skiff 上照跑。
+  (define (when-compiler proc) (when (compiler-available?) (proc)))
 
   ;; ── lock 里按名取一条依赖 ──
   ;; 曾是 (chandler lock) 的导出,但生产代码从不用它 —— 只有断言在用。

@@ -16,15 +16,8 @@
           (chandler cli args)
           (chandler cli runtime-env))
 
-  ;; 写 .env / .env.tests / 任一文件到临时项目根
-  (define (proj-with-files files)
-    (let ([d (mktmp)])
-      (for-each (lambda (f)
-                  (let ([p (join-paths d (car f))])
-                    (ensure-parent p)
-                    (write-file p (cdr f))))
-                files)
-      d))
+  ;; 写 .env / .env.tests / 任一文件到临时项目根(返回根路径,清理交 harness)
+  (define (proj-with-files files) (write-file-tree (mktmp) files))
 
   ;; parse-args 返回 4 值;collect-dotenv 只取 flags。包一层方便用。
   (define (test-flags . argv)

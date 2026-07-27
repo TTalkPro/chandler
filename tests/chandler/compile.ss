@@ -30,28 +30,7 @@
       ("app/core.sls" . "(library (app core) (export c) (import (rnrs) (app util)) (define c (+ u 1)))")
       ("recipe.ss" . "(define-lib-roots \".\")\n(library-task 'build '(app core))\n(default-task 'build)\n")))
 
-  ;; 在临时项目目录里跑(cwd 切进去,无论成败都还原)。
-  (define (with-proj files proc)
-    (let ((d (mktmp)) (old (current-directory)))
-      (for-each (lambda (f)
-                  (let ((p (join-paths d (car f))))
-                    (ensure-parent p)
-                    (write-file p (cdr f))))
-                files)
-      (dynamic-wind
-        (lambda () (current-directory d))
-        (lambda () (proc d))
-        (lambda () (current-directory old) (rm-rf d)))))
-
-  ;; Chez 的 compile-library 自己往 stdout 打 "compiling … with output to …",
-  ;; 不受 *quiet* 管;测试里吞掉,免得刷屏。
-  ;; guard 先解开 parameterize 再重抛 —— 否则断言失败时 harness 的 FAIL 行
-  ;; 会被打进 sink 吞掉,测试报「9 failed」却一条都看不见。
-  (define (silently thunk)
-    (let ((sink (open-output-string)))
-      (guard (e (#t (raise e)))
-        (parameterize ((current-output-port sink) (*quiet* #t))
-          (thunk)))))
+  ;; with-proj / silently / when-compiler 来自 (tests chandler fixtures)。
 
   ;; 一次完整构建(与 CLI build 通路同序):装配 → 加载 recipe → 读清单 →
   ;; 跑目标 → 写清单。返回本次真正执行过的编译目标列表。
@@ -73,10 +52,6 @@
           (write-fp-manifest!)))
       executed))
 
-  ;; Petite 没有编译器(compile-library 一调就抛 "compile package is not loaded"),
-  ;; 真编译的用例在它上面**跳过**而不是放宽断言 —— 这些用例验的正是「产出能被
-  ;; Chez 加载的对象」,放宽等于不验。scheme / skiff 上照跑。
-  (define (needs-compiler proc) (when (compiler-available?) (proc)))
 
   (define-suite suite
 
@@ -105,7 +80,7 @@
 
     (library-task-compiles-closure
       ;; 端到端:真产出 .so,且依赖也被编(闭包,不只入口)。
-      (needs-compiler (lambda ()
+      (when-compiler (lambda ()
         (with-proj basic-files
           (lambda (d)
             (build!)
@@ -117,7 +92,7 @@
       ;; 交付形态自洽:**只给对象根**(源码不在搜索路径里)也能 import 起来。
       ;; 这才是编译层的产出标准 —— 能被 Chez 加载,而不是「字节等于某个参照实现」
       ;; (Chez 的 fasl 本就不可复现:同一份源码连编两次字节都不同)。
-      (needs-compiler (lambda ()
+      (when-compiler (lambda ()
         (with-proj basic-files
           (lambda (d)
             (build!)
@@ -130,7 +105,7 @@
 
     (fingerprint-skips-unchanged
       ;; 第二次构建什么都不该编(内容没变)。
-      (needs-compiler (lambda ()
+      (when-compiler (lambda ()
         (with-proj basic-files
           (lambda (d)
             (build!)
@@ -138,7 +113,7 @@
 
     (fingerprint-ignores-touch
       ;; 只 bump mtime、内容不变 → **不**重编(这正是 mtime 判据做不到的)。
-      (needs-compiler (lambda ()
+      (when-compiler (lambda ()
         (with-proj basic-files
           (lambda (d)
             (build!)
@@ -148,7 +123,7 @@
 
     (fingerprint-catches-content-change
       ;; 改内容 → 该库重编,**下游也重编**(上游指纹进下游指纹)。
-      (needs-compiler (lambda ()
+      (when-compiler (lambda ()
         (with-proj basic-files
           (lambda (d)
             (build!)
@@ -162,7 +137,7 @@
       ;; **库化引入的新语义**:bake 是「一次调用一个进程」,靠退出复位全局状态;
       ;; chandler 是单二进制,同进程连着建两次时若不清 fp-cache,内容真改了也会
       ;; 被判成「无需重编」。load-recipe 现在跑 recipe-reset-hooks,故下面成立。
-      (needs-compiler (lambda ()
+      (when-compiler (lambda ()
         (with-proj basic-files
           (lambda (d)
             (build!)
@@ -183,7 +158,7 @@
     ;;      源码重编出一套自洽的实例,同样验不出来。而只挂对象侧正是 pack 启动器
     ;;      的加载方式,也是这个 bug 唯一现形的地方。
     (touched-upstream-does-not-poison-downstream
-      (needs-compiler (lambda ()
+      (when-compiler (lambda ()
         (with-proj basic-files
           (lambda (d)
             (write-file "build-once.ss"
@@ -215,7 +190,7 @@
       ;; 换编译旗标 → 指纹变 → 重编(mtime 判据同样抓不到)。
       ;; 注意**不能** parameterize 着 load-recipe:它跑 recipe-reset-hooks,
       ;; 而复位的第一件事就是把 *generate-wpo* 归 #f(program-task 逐 recipe 打开)。
-      (needs-compiler (lambda ()
+      (when-compiler (lambda ()
         (with-proj basic-files
           (lambda (d)
             (build!)
@@ -232,7 +207,7 @@
 
     (manifest-round-trip-and-gc
       ;; 清单写的是 "<target> <fp>" 行;只写**本次**取过指纹的目标(GC 陈条目)。
-      (needs-compiler (lambda ()
+      (when-compiler (lambda ()
         (with-proj basic-files
           (lambda (d)
             (build!)
@@ -317,7 +292,7 @@
 
     (clean-removes-declared-outputs
       ;; 只删声明过的产物 + 整棵 _build/;源码一个不碰。
-      (needs-compiler (lambda ()
+      (when-compiler (lambda ()
         (with-proj basic-files
           (lambda (d)
             (build!)
