@@ -78,8 +78,24 @@
                  (and (>= (string-length m) 2)
                       (string=? (substring m (- (string-length m) 2) (string-length m)) "nt"))))
 
-;; shell 引号(路径不含双引号的假设,与旧版一致)
-(define (q s) (string-append "\"" s "\""))
+;; getenv 但空串视为未设 —— 与 (chandler util) 的 getenv* 同语义。
+;; Chez 的 putenv 删不掉变量,还原时只能置 "",故空串必须当作「没设」;
+;; 否则 CHANDLER_SKIFF="" 会让下面的 (or …) 拿到 "" 去 exec 一个空命令名。
+(define (getenv* name)
+  (let ([v (getenv name)])
+    (and v (> (string-length v) 0) v)))
+
+;; shell 单引号引用:' → '\'' 包裹。与 (chandler proc) 的 shell-quote 同语义。
+;; **不能**用双引号:双引号内 $ ` \ " 对 sh 仍然特殊,而这里引的全是真实路径
+;; (仓库根、前缀、解释器、libdirs),检出在含 $ 的目录下就会静默拼错。
+(define (q s)
+  (let ([op (open-output-string)])
+    (display #\' op)
+    (string-for-each
+      (lambda (c) (if (char=? c #\') (display "'\\''" op) (display c op)))
+      s)
+    (display #\' op)
+    (get-output-string op)))
 
 (define (die code fmt . args)
   (fprintf (current-error-port) (apply format (string-append "bootstrap: " fmt "~%") args))
@@ -149,14 +165,17 @@
 
 (define boot-vroot (join-paths boot-prefix "chandler" chandler-ver))
 
-;; 与 (chandler registry) default-*-libdir/bindir 保持一致(此处无法 import,镜像之)
+;; 与 (chandler registry) default-*-libdir/bindir 保持一致(此处无法 import,镜像之)。
+;; **这不是靠人记住的**:tests/chandler/bootstrap-parity.ss 把本文件当数据读进来、
+;; 抽出下面两个定义 eval 进干净环境,再与 registry 那份逐条比对。§4 的运行时
+;; 选择同理(对 cli/runtime-env.ss 的 choose-interp)。改一处漏一处会当场红。
 (define (target-libdir target)
   (case (car target)
     [(user)   (if (win?)
-                  (join-paths (or (getenv "LOCALAPPDATA") home) "chez")
+                  (join-paths (or (getenv* "LOCALAPPDATA") home) "chez")
                   (string-append home "/.local/share/chez"))]
     [(system) (if (win?)
-                  (join-paths (or (getenv "ProgramData") "C:/ProgramData") "chez")
+                  (join-paths (or (getenv* "ProgramData") "C:/ProgramData") "chez")
                   "/usr/local/chez")]
     [(prefix) (cdr target)]))
 
@@ -180,18 +199,21 @@
 ;; §4 运行时选择(跟随调用 bootstrap 的解释器;env 显式覆盖)
 ;; ════════════════════════════════════════════════════════════════════
 
+(define (skiff-exe) (or (getenv* "CHANDLER_SKIFF") "skiff"))
+(define (chez-exe)  (or (getenv* "CHANDLER_SCHEME") "scheme"))
+
 (define (running-skiff?)
   ;; skiff 自 0.1.1 起内置 (skiff-version) 自证
   (top-level-bound? (string->symbol "skiff-version")))
 
 (define interp
-  (let ([rt (getenv "CHANDLER_RUNTIME")])
+  (let ([rt (getenv* "CHANDLER_RUNTIME")])
     (cond
-      [rt (cond [(string=? rt "skiff") (or (getenv "CHANDLER_SKIFF") "skiff")]
-                [(string=? rt "chez")  (or (getenv "CHANDLER_SCHEME") "scheme")]
+      [rt (cond [(string=? rt "skiff") (skiff-exe)]
+                [(string=? rt "chez")  (chez-exe)]
                 [else (die 64 "invalid CHANDLER_RUNTIME=~a (want: skiff|chez)" rt)])]
-      [(running-skiff?) (or (getenv "CHANDLER_SKIFF") "skiff")]
-      [else (or (getenv "CHANDLER_SCHEME") "scheme")])))
+      [(running-skiff?) (skiff-exe)]
+      [else (chez-exe)])))
 
 ;; ════════════════════════════════════════════════════════════════════
 ;; §5 spawn 原语(唯一的外部调用点)
