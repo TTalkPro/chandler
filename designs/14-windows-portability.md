@@ -1,7 +1,10 @@
 # 14 — Windows 可移植性
 
-> 状态: **设计中,未实现**。本文是 Windows 支持的权威设计;实现落地前,
-> [08-launchers.md](08-launchers.md) §3 描述的 PowerShell 启动器仍是现状代码。
+> 状态: **部分实现**。本文是 Windows 支持的权威设计。
+> 已落地:**D34**(`.cmd` 启动器)、**D35**(active sidecar)、以及 §6 的
+> `\` 穿越校验(P1-2)—— 对应 TASK.md 的 C1 / C2 / C3。
+> 未落地:**D33**(子进程层)、**D36**(路径原语)、**D37**、**D38**,
+> 即 TASK.md 的 C4–C7。**在 C9 的 Windows CI 跑绿前,Windows 支持一律「未验证」。**
 > 来源:2026-07-27 全库平台相关代码走查(`proc` / `fs` / `layout` / `compile` /
 > `native-build` / `pack` / `registry` / `bootstrap` / 启动器)。
 
@@ -39,16 +42,16 @@
 |---|------|------|
 | P0-1 | `proc.ss` 全文 | 整层假设 `/bin/sh`。`shell-quote` 是 POSIX 单引号、`env-prefix` 生成 `K=v cmd` 前缀、`cd d && `、`which` 用 `command -v`、`real-path` 用 `readlink -f`。**git / native / pack / run / exec 全线经此**。`bootstrap.ss:91` 的 `q` 是同一份实现的副本 |
 | P0-2 | `fs.ss:188` `system-temp-dir` | 只认 `TMPDIR`,Windows 是 `TEMP`/`TMP` → 全部临时文件写向不存在的 `/tmp`;`proc.ss:38` `make-temp-dir` 不区分「已存在」与真错误,会**死循环重试** |
-| P0-3 | `cli/commands.ss:325` | `Join-Path $LibDir $Name $Active …` 是 PowerShell 6+ 语法;Windows 预装的是 **5.1**,该行直接报错 → 现有 `.ps1` 启动器在裸机上必挂 |
-| P0-4 | 启动器格式 | `.PS1` 不在默认 `PATHEXT` 里 → cmd 中敲 `chandler` 找不到,被别的程序 spawn 也找不到;叠加 ExecutionPolicy |
-| P0-5 | `bin/chandler` | 只有 sh 版,Windows 上没有开发期入口 |
+| P0-3 ✅ | `cli/commands.ss:325` | `Join-Path $LibDir $Name $Active …` 是 PowerShell 6+ 语法;Windows 预装的是 **5.1**,该行直接报错 → 现有 `.ps1` 启动器在裸机上必挂 |
+| P0-4 ✅ | 启动器格式 | `.PS1` 不在默认 `PATHEXT` 里 → cmd 中敲 `chandler` 找不到,被别的程序 spawn 也找不到;叠加 ExecutionPolicy |
+| P0-5 ✅ | `bin/chandler` | 只有 sh 版,Windows 上没有开发期入口 |
 
 ### 2.3 静默出错(P1)
 
 | # | 位置 | 问题 |
 |---|------|------|
 | P1-1 | `fs.ss:32` `last-slash` 及其下游 | 只扫 `#\/`。Chez 在 Windows 上返回反斜杠路径,一旦混入 `\`:`base-name` 返回整串;`path-has-segment?`(:166)认不出 `_build`/`.git` 段 → **install 清单与 `chandler verify` 会把生成物和 `.git` 当受管文件**;`relativize`(:180)纯前缀匹配失败 |
-| P1-2 | `runtime-paths.ss:25` | `validate-resource-segment` 只拒含 `/` 的 segment。Windows 上 `\` 同样是分隔符 → `(resource-path '(app) "..\\..\\secret")` **绕过全部四条校验**。安全相关 |
+| P1-2 ✅ | `runtime-paths.ss:25` | `validate-resource-segment` 只拒含 `/` 的 segment。Windows 上 `\` 同样是分隔符 → `(resource-path '(app) "..\\..\\secret")` **绕过全部四条校验**。安全相关 |
 | P1-3 | `lock.ss:134` / `install.ss:109` | `sha256-file` 读原始字节;Windows 上 git 默认 `core.autocrlf=true` → Linux 生成的 lock 在 Windows 上 hash 必然失配,`lock-fresh?` 恒判 stale、`verify` 恒报文件被改 |
 | P1-4 | `fs.ss:88` `rm-rf` | 每步 `ignore-errors`。Windows 上 ① git 的 `.git/objects/**` 只读 → 删不掉;② 已 `load-shared-object` 的 DLL / 运行中的 exe 不能删也不能改名。**失败被吞,调用方以为清干净了** |
 | P1-5 | `pack/core.ss:183` | `copy-exe!` 无条件 `chmod +x`,没有 win 分支(`launchers.ss:90` 与 `commands.ss:359` 有) |
@@ -194,7 +197,7 @@ cmd 的 `set /p` 两种都吃)。
 不做读路径上的自愈 —— `read-registered` 在 `run`/`build`/`repl` 的热路径上,
 且不在锁内,让它写文件是错的。
 
-### 8.2 POSIX shim(简化后)
+### 8.2 POSIX shim(简化后)—— ✅ 已实现
 
 awk 下线:
 
@@ -207,7 +210,7 @@ IFS= read -r ACTIVE < "$REGFILE"
 
 其余(runner 检查、runtime 发现、`exec`)与 [08 §2](08-launchers.md) 现状一致。
 
-### 8.3 Windows shim(install 模式)
+### 8.3 Windows shim(install 模式)—— ✅ 已实现
 
 全直线代码 + 底部错误标签,无内嵌块、无延迟展开、无正则:
 
@@ -270,7 +273,7 @@ exit /b 127
 `CHANDLER_RUNTIME=""` 在 cmd 中等价于未定义,`if defined` 判否 → 走 PATH 搜索,
 与 sh 的 `""` 分支同语义。
 
-### 8.4 Windows shim(pack 模式)
+### 8.4 Windows shim(pack 模式)—— ✅ 已实现
 
 pack 启动器本来就没有任何发现逻辑(全是固定相对路径),翻译是平凡的:
 

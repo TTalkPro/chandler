@@ -1,7 +1,7 @@
 # 08 — 启动器生成
 
 > 状态: 已实现(v3 + v4),对齐 `chandler/cli/commands.ss` `write-app-launcher!` /
-> `app-launcher-sh` / `app-launcher-ps1` 与 `chandler/pack.ss` `generate-launchers`。
+> `app-launcher-sh` / `app-launcher-cmd` 与 `chandler/pack/launchers.ss`。
 > v3 中心设计见 [06-installed-layout.md](06-installed-layout.md) §10。
 
 ## 1. 一句话目标
@@ -18,8 +18,8 @@ version 由启动器运行时读 `<libdir>/.registry/<name>.active` 决定;
 
 | 模式 | 启动器位置 | runtime 来源 | 找 run.sps 的依据 |
 |------|----------|------------|------------------|
-| **install** | `~/.local/bin/<app>`(POSIX)/ `%LOCALAPPDATA%\chez\bin\<app>.ps1`(Windows) | 系统 runtime(运行时发现,skiff 优先) | `.registry/<app>.active` 的单行版本号 → `<libdir>/<app>/<v>/.chandler/run.sps` |
-| **pack** | `<pack>/bin/<app>`(POSIX)/ `<pack>/bin/<app>.ps1`(Windows) | bundled `<pack>/bin/<runtime>` | `<pack>/share/chez/<app>/<v>/.chandler/run.sps`(同 layout) |
+| **install** | `~/.local/bin/<app>`(POSIX)/ `%LOCALAPPDATA%\chez\bin\<app>.cmd`(Windows) | 系统 runtime(运行时发现,skiff 优先) | `.registry/<app>.active` 的单行版本号 → `<libdir>/<app>/<v>/.chandler/run.sps` |
+| **pack** | `<pack>/bin/<app>`(POSIX)/ `<pack>/bin/<app>.cmd`(Windows) | bundled `<pack>/bin/<runtime>` | `<pack>/share/chez/<app>/<v>/.chandler/run.sps`(同 layout) |
 | **dev** | (无独立启动器) | — | `chandler run` 子进程:实时算 `resolved-libdirs`,不走 shim |
 
 ## 2. POSIX 稳定 shim(install 模式)
@@ -65,46 +65,98 @@ exec "$_rt" -q --program "$RUNNER" "$@"
 - 启动器跨 install/uninstall 持久;同 name 重装不必删 shim(D17 不变量)
 - shim 失败原因直接打到 stderr,且退出码语义化(70 / 64 / 127)
 
-## 3. Windows 稳定 shim(PowerShell)
+## 3. Windows 稳定 shim(`.cmd`)
 
-> **本节将被取代**(D34):`.ps1` 有三个独立的坑 —— pwsh 从不预装、下面这段的
-> `Join-Path` 多段形式是 PS6+ 语法(在预装的 PS 5.1 上直接报错)、`.PS1` 不在默认
-> `PATHEXT` 里。新设计改用 `.cmd`,见
-> [14-windows-portability.md §8](14-windows-portability.md#8-启动器d34--d35)。
-> 在实现落地前,下面描述的仍是现状代码。
+**D34:`.ps1` 已下线,Windows shim 是批处理。** 理由三条,任何一条都够呛:
 
-```powershell
-#!/usr/bin/env pwsh
-# <name> launcher — chandler v3 stable shim; do not edit.
-$ErrorActionPreference = 'Continue'
-$AppArgs = $args
-$Name = '<name>'
-$LibDir = '<libdir>'
-$RegFile = Join-Path $LibDir '.registry' "$Name.active"
+1. **pwsh 从不预装**。Windows 10/11 自带的是 **PowerShell 5.1**,而旧 `.ps1` 模板用了
+   PS6+ 的 `Join-Path` 多段形式 —— 在裸机上直接报错,即「用户什么都不装就必挂」。
+2. **ExecutionPolicy** 可能拒跑未签名脚本。对「解包即用」的分发包是不可接受的门槛。
+3. **`.PS1` 不在默认 `PATHEXT` 里**。`bin/` 进 PATH 后,cmd 里敲 `myapp` 找不到,
+   被别的程序 spawn 也找不到。
 
-if (-not (Test-Path $RegFile)) { [Console]::Error.WriteLine("$Name: not installed, or installed by an older chandler; run: chandler install"); exit 70 }
+`.cmd` 三条全无:只依赖每台 Windows 必有的 cmd.exe,`.CMD` 在默认 PATHEXT 里,
+不受执行策略管。完整动机见
+[14-windows-portability.md §8](14-windows-portability.md)。
 
-$Active = (Get-Content $RegFile -TotalCount 1).Trim()
-if (-not $Active) { [Console]::Error.WriteLine("$Name: no active version; run: chandler switch"); exit 70 }
+```bat
+@echo off
+rem <name> launcher -- chandler v4 stable shim; do not edit.
+rem Reads active version from .registry\<name>.active at runtime.
+setlocal
+set "NAME=<name>"
+set "LIBDIR=<libdir>"
+set "REG=%LIBDIR%\.registry\%NAME%.active"
 
-$Runner = Join-Path $LibDir $Name $Active '.chandler' 'run.sps'
-if (-not (Test-Path $Runner)) { [Console]::Error.WriteLine("$Name: active $Active missing runner"); exit 70 }
+if not exist "%REG%" goto :e_notreg
+set "ACTIVE="
+set /p ACTIVE=<"%REG%"
+if not defined ACTIVE goto :e_noactive
 
-switch ($env:CHANDLER_RUNTIME) {
-  'skiff' { $rt = if ($env:CHANDLER_SKIFF) { $env:CHANDLER_SKIFF } else { 'skiff' } }
-  'chez'  { $rt = if ($env:CHANDLER_SCHEME) { $env:CHANDLER_SCHEME } else { 'scheme' } }
-  ''      { foreach ($c in @('skiff','scheme','chez')) { if (Get-Command $c -ErrorAction SilentlyContinue) { $rt = $c; break } } }
-  $null   { foreach ($c in @('skiff','scheme','chez')) { if (Get-Command $c -ErrorAction SilentlyContinue) { $rt = $c; break } } }
-  default { [Console]::Error.WriteLine("$Name: invalid CHANDLER_RUNTIME"); exit 64 }
-}
+set "RUNNER=%LIBDIR%\%NAME%\%ACTIVE%\.chandler\run.sps"
+if not exist "%RUNNER%" goto :e_norunner
 
-if (-not $rt) { [Console]::Error.WriteLine("$Name: no Scheme runtime"); exit 127 }
+rem Runtime discovery: CHANDLER_RUNTIME > PATH search (skiff > scheme > chez).
+rem An empty CHANDLER_RUNTIME is undefined to cmd, so it falls through to the
+rem PATH search -- same semantics as the sh shim's "" branch.
+if /i "%CHANDLER_RUNTIME%"=="skiff" goto :rt_skiff
+if /i "%CHANDLER_RUNTIME%"=="chez"  goto :rt_chez
+if defined CHANDLER_RUNTIME goto :e_badrt
+where skiff  >nul 2>nul && set "RT=skiff"  && goto :run
+where scheme >nul 2>nul && set "RT=scheme" && goto :run
+where chez   >nul 2>nul && set "RT=chez"   && goto :run
+goto :e_nort
 
-& $rt -q --program $Runner @AppArgs
-exit $LASTEXITCODE
+:rt_skiff
+set "RT=%CHANDLER_SKIFF%"
+if not defined RT set "RT=skiff"
+goto :run
+
+:rt_chez
+set "RT=%CHANDLER_SCHEME%"
+if not defined RT set "RT=scheme"
+goto :run
+
+:run
+"%RT%" -q --program "%RUNNER%" %*
+exit /b %errorlevel%
+
+:e_notreg
+>&2 echo %NAME%: not installed, or installed by an older chandler; run: chandler install
+exit /b 70
+:e_noactive
+>&2 echo %NAME%: no active version; run: chandler switch
+exit /b 70
+:e_norunner
+>&2 echo %NAME%: active %ACTIVE% missing runner ^(reinstall^)
+exit /b 70
+:e_badrt
+>&2 echo %NAME%: invalid CHANDLER_RUNTIME ^(want: skiff ^| chez^)
+exit /b 64
+:e_nort
+>&2 echo %NAME%: no Scheme runtime found ^(install skiff or Chez Scheme^)
+exit /b 127
 ```
 
-> 头部 `#!/usr/bin/env pwsh` 让 Linux 上的 pwsh 也能跑同一份;`[System.IO.Path]::PathSeparator` 在 Linux 是 `:`,在 Windows 是 `;`,但 launcher 当前不构造 `--libdirs` 串(run.sps 自管),故不依赖它。
+### 3.1 关键点
+
+- **全直线代码 + 底部错误标签**。不用内嵌 `( … )` 块(块内变量按块解析,要么写延迟
+  展开要么处处踩坑)、不用正则、**不 `cd`**(于是 UNC 路径下也可用)。
+- **必须 CRLF**。cmd.exe 对 LF-only 的批处理大体容忍,但标签与 `goto` 会出错 ——
+  而本模板正是用标签组织的。由 `(chandler fs)` 的 `write-text-crlf` 保证。
+- **ASCII-only**。cmd.exe 按 OEM 代码页读批处理,不是 UTF-8;注释里的非 ASCII
+  即便无害也会显示成乱码。
+- **退出码显式转发**:cmd 没有 `exec`,不写 `exit /b %errorlevel%` 就永远返回 0。
+- 退出码与 POSIX 侧逐条对齐(70 / 64 / 127),由 `tests/chandler/launcher-parity.ss` 钉住。
+
+### 3.2 与 POSIX 侧刻意保留的差异
+
+这两条是 cmd 的固有限制,**不是待修的 bug**(parity 测试里显式钉住,免得被人「修」掉):
+
+| 差异 | 后果 |
+|------|------|
+| cmd 无 `exec` | cmd.exe 作为父进程常驻,进程树多一层;Ctrl+C 会弹 `Terminate batch job (Y/N)?`。无干净解法,除非将来出真的 `.exe` shim |
+| `%*` vs `"$@"` | `%*` 传原始命令行尾部(cmd 下最保真的做法),但含 `%` 的参数会被展开、未加引号的 `& \| < > ^` 会破。npm/yarn 的 Windows shim 同款限制 |
 
 ## 4. pack 模式启动器
 
@@ -113,58 +165,69 @@ pack 启动器与 install shim **不是同一份模板**:pack 启动器指 **bun
 
 ### 4.1 POSIX
 
+skiff 包(`launcher-sh-skiff`):
+
 ```sh
 #!/bin/sh
-# <name> launcher — generated by chandler pack; do not edit.
-# Uses the bundled runtime; mounts the pack prefix.
-HERE="$(dirname "$(readlink -f "$0")")"
-PACK_ROOT="$(dirname "$HERE")"
-APP_NAME="<name>"
-APP_VERSION="<version>"
-RUNTIME="$PACK_ROOT/bin/<runtime>"
-RUNNER="$PACK_ROOT/share/chez/$APP_NAME/$APP_VERSION/.chandler/run.sps"
-
-[ -x "$RUNTIME" ] || { echo "$APP_NAME: pack broken — bundled runtime missing" 1>&2; exit 70; }
-[ -f "$RUNNER" ] || { echo "$APP_NAME: pack broken — $RUNNER missing" 1>&2; exit 70; }
-
-case "${CHANDLER_RUNTIME:-}" in
-  skiff|chez) ;;        # pack 包内 layout 与系统 layout 不同,显式覆盖照单,但 bundled 是默认
-  "") ;;                # 默认 = bundled(已固化在 RUNTIME 路径上)
-  *) echo "$APP_NAME: invalid CHANDLER_RUNTIME" 1>&2; exit 64 ;;
-esac
-
-exec "$RUNTIME" -q --program "$RUNNER" "$@"
+# generated by chandler pack -- do not edit
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+export SKIFF_BOOT_DIR="$HERE/lib/chez"
+exec "$HERE/bin/skiff" -q --program "$HERE/share/chez/<name>/<version>/.chandler/run.sps" "$@"
 ```
 
-### 4.2 Windows(PowerShell)
+stock 包(`launcher-sh-stock`)—— 用绝对 `-b` 链取代 `SKIFF_BOOT_DIR`:
 
-```powershell
-#!/usr/bin/env pwsh
-# <name> launcher — generated by chandler pack; do not edit.
-$ErrorActionPreference = 'Continue'
-$AppArgs = $args
-$Here = Split-Path -Parent $MyInvocation.MyCommand.Path
-$PackRoot = Split-Path -Parent $Here
-$AppName = '<name>'
-$AppVersion = '<version>'
-$Runtime = Join-Path $PackRoot 'bin' '<runtime>[.exe]'
-$Runner = Join-Path $PackRoot 'share' 'chez' $AppName $AppVersion '.chandler' 'run.sps'
-
-if (-not (Test-Path $Runtime)) { [Console]::Error.WriteLine("$AppName: bundled runtime missing"); exit 70 }
-if (-not (Test-Path $Runner)) { [Console]::Error.WriteLine("$AppName: pack broken"); exit 70 }
-
-& $Runtime -q --program $Runner @AppArgs
-exit $LASTEXITCODE
+```sh
+#!/bin/sh
+# generated by chandler pack -- do not edit
+HERE=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+exec "$HERE/bin/scheme" -b "$HERE/lib/chez/petite.boot" [-b "$HERE/lib/chez/scheme.boot"] \
+  -q --program "$HERE/share/chez/<name>/<version>/.chandler/run.sps" "$@"
 ```
+
+### 4.2 Windows(`.cmd`)
+
+与 §3 同样的理由改用批处理(D34)。pack 启动器**没有任何发现逻辑** —— 全是从
+`%~dp0..` 起算的固定相对路径 —— 所以翻译是平凡的:
+
+```bat
+@echo off
+rem generated by chandler pack -- do not edit
+setlocal
+set "HERE=%~dp0.."
+set "SKIFF_BOOT_DIR=%HERE%\lib\chez"
+"%HERE%\bin\skiff.exe" -q --program "%HERE%\share\chez\<name>\<version>\.chandler\run.sps" %*
+exit /b %errorlevel%
+```
+
+stock 包同构,`-b` 链取代 `SKIFF_BOOT_DIR`:
+
+```bat
+"%HERE%\bin\scheme.exe" -b "%HERE%\lib\chez\petite.boot" [-b "%HERE%\lib\chez\scheme.boot"] -q --program "%HERE%\share\chez\<name>\<version>\.chandler\run.sps" %*
+exit /b %errorlevel%
+```
+
+要点:
+
+- **`%~dp0` 带尾反斜杠**,故 `%~dp0..` 就是包根;**不 `cd`**,于是 UNC 下可用。
+- **可执行文件带 `.exe`**(`pack/paths.ss` 的 `exe-name`):`.cmd` 按全名调用,
+  无扩展名跑不起来。
+- **`boots-flags` 两侧共用同一个函数** —— Chez 在 Windows 上也接受 `/`,不必写第二份;
+  只在 cmd 侧出口把分隔符归一成 `\`,免得生成半 Unix 半 Windows 的路径。
+- CRLF / ASCII-only / `exit /b %errorlevel%` 三条同 §3.1。
 
 ### 4.3 boot 路径
 
-pack 启动器不显式指 boot 路径,但 pack 内的 skiff/scheme 需要按相对路径找 boot:
+包内 boot 恒在 `<pack>/lib/chez/`(与 `bin/` 平级),两种运行时的交接方式不同:
 
-- **skiff 包**:`SKIFF_BOOT_DIR=$PACK_ROOT/boot/<mt>`,启动器 export 后 exec
-- **stock 包(scheme/petite)**:`scheme -b boot/<mt>/petite.boot [-b boot/<mt>/scheme.boot]` 显式 `-b`,因 stock 不走 boot 目录默认值
+- **skiff 包**:`SKIFF_BOOT_DIR=<pack>/lib/chez`,启动器 export 后 exec。
+  env 是唯一可用的交接方式 —— skiff 按 exe 相对找 boot(`<exedir>/../lib/skiff/boot`),
+  包内布局对不上;而 boot 必须在进程有堆之前注册,远早于 `--program` 被解析。
+- **stock 包**:`-b "<pack>/lib/chez/petite.boot"` 绝对路径链。`petite.boot` 恒随;
+  `scheme.boot` 只在 `runtime=scheme` 时随(部署态只 fasl 载入预编译 `.so`,
+  petite 单独即可,包更小)。
 
-详见 [05-pack.md](05-pack.md) §6。
+详见 [05-pack.md](05-pack.md)。
 
 ## 5. run.sps 交接(lock 驱动,D18)
 
@@ -186,8 +249,8 @@ pack 模式追加 manifest 校验 + native walk。
 
 | 模式 | 触发 | 实现位置 |
 |------|------|---------|
-| install | `cmd-install`(app install 时) | `chandler/cli/commands.ss:write-app-launcher!` → `app-launcher-sh` + `app-launcher-ps1` |
-| pack | `cmd-pack`(app pack 时) | `chandler/pack.ss:generate-launchers` |
+| install | `cmd-install`(app install 时) | `chandler/cli/commands.ss:write-app-launcher!` → `app-launcher-sh` + `app-launcher-cmd` |
+| pack | `cmd-pack`(app pack 时) | `chandler/pack/launchers.ss:write-launcher!` → `launcher-{sh,cmd}-{skiff,stock}` |
 | uninstall | `cmd-uninstall-global` | `remove-app-launcher!`(删 shim;不删 run.sps,它在 vroot 里随 rm -rf 走) |
 
 ### 6.1 不重写不变量(D17)
@@ -239,20 +302,17 @@ shim 与 `chandler run` / `repl` / `exec` 共享同一套优先级(`interp-kind`
 | POSIX | `~/.local/bin/` |
 | Windows | `%LOCALAPPDATA%\chez\bin\`(libdir 内) |
 
-### 9.2 PowerShell 执行策略
+### 9.2 为什么不需要 PowerShell
 
-启动器是 `.ps1`。若报「running scripts is disabled」,执行策略为 Restricted:
+启动器是 `.cmd`(D34),**只依赖 cmd.exe** —— 每台 Windows 必有,不受
+ExecutionPolicy 管,`.CMD` 也在默认 `PATHEXT` 里(故 cmd / PowerShell /
+被别的程序 spawn 三种情形都能直接调 `<app>`)。
 
-```powershell
-# 一次性方案(当前用户)
-Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+先前用 `.ps1` 时用户可能撞上「running scripts is disabled」并被要求
+`Set-ExecutionPolicy` —— 对一个「解包即用」的分发包,那是不可接受的门槛。
+理由全文见 §3 与 [14-windows-portability.md §8](14-windows-portability.md)。
 
-# 或本次运行绕过
-pwsh -ExecutionPolicy Bypass -File <app>.ps1
-```
-
-启动器头部的 `#!/usr/bin/env pwsh` 让 POSIX 上的 pwsh 也能跑同一份(同一脚本可
-双平台验收,见 `tests/powershell-run.sh`)。
+开发态另说:开发 chandler 自身时装个 PowerShell 无妨,但**产品路径不依赖它**。
 
 ## 相关文档
 
