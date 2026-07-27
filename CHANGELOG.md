@@ -28,8 +28,28 @@ Windows 可移植性工作的第一步(设计见
 - **`bootstrap.ss` 的冒烟测试在 Windows 上不再跳过** —— 启动器成了可直接执行的命令,
   自举的最后一环于是在两个平台上都真的被验证。
 
+- **子进程层按平台分派引用规则**(D33)。`shell-quote` / `env-prefix` / 工作目录切换 /
+  `which` / `real-path` 在 Windows 上走 cmd.exe 的规则:参数用 `"` 包裹 + MSVCRT
+  反斜杠规则、环境走 `set "K=v" && `、`cd` 带 `/d`(不带它跨盘符会静默不切过去)、
+  `which` 走 `where.exe`。**git / native 构建 / pack / run / exec 全线经此。**
+
+  无法安全传递的参数(字面 `"`、换行)**当场硬错**而不是悄悄传错 —— cmd 不认反斜杠
+  转义,一个裸引号就让引号配对错位,后面的 `& | > ^` 变成 cmd 的控制字符。
+
+- **`-j` 并行编译在 Windows 上退化为串行**(D37),并明确提示。cmd 没有「同时起 N 个、
+  全部等完、汇总状态」的等价物;`-j` 是开发便利,不值得为它把 PowerShell 拉进依赖。
+
+- **换行与字节一致性**(D38)。chandler 写文件改用显式 `(eol-style none)` 的
+  transcoder,写什么字符就是什么字节,不再随平台的 `native-eol-style` 漂移;
+  仓库根新增 `.gitattributes` 钉住 checkout 侧。两边都堵才管用 ——
+  lock 的 `manifest-sha256` 与 install/pack 的 per-file sha256 都是**字节**指纹,
+  写侧一旦漂移,跨平台协作时 `verify` 会持续假失败而两边文件「看起来」一模一样。
+
 ### 修复
 
+- **`chandler run` / `deps` 等在临时目录不存在时不再死循环**。`make-temp-dir`
+  先前对任何 `mkdir` 失败都重试,撞上不存在的临时目录根就会一直转;现在只在
+  目标已存在时换名重试,其余原样抛,并给出「设 TMPDIR / TEMP / TMP」的可操作提示。
 - **资源定位的路径穿越校验补上反斜杠**。`resource-path` / `find-resource-path`
   此前只拒绝含 `/` 的 segment,于是 `(resource-path '(app) "..\\..\\secret")` 能绕过
   全部四条检查 —— 反斜杠既不是 `/`、整串也不等于 `..`、更不是绝对路径。
