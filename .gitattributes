@@ -1,0 +1,38 @@
+# .gitattributes --- 钉死换行,保跨平台字节一致(D38,designs/14 §9)
+#
+# 为什么必须有这个文件:
+#
+# Windows 上 git 的 `core.autocrlf=true` 是常见默认 —— checkout 时把 LF 改写成
+# CRLF。而 chandler 的 lock 里记着 `manifest-sha256`,install/pack 的清单里记着
+# 每个文件的 sha256,那些都是**字节**指纹(`sha256-file` 读原始字节,刻意不做
+# 归一化 —— 归一化会让它不再是「文件真实内容的指纹」,`chandler verify` 就失去
+# 意义)。于是:在 Linux 上生成的 lock,在 Windows 上 checkout 后必然失配 ——
+# `lock-fresh?` 恒判 stale、`chandler verify` 恒报文件被改,而两边的文件
+# 「看起来」一模一样。
+#
+# 写侧的另一半在 `chandler/fs.ss` 的 `text-transcoder`(eol-style none):
+# chandler 自己写出的字节也不随平台漂移。**两边都堵才管用。**
+
+# 默认:不猜。未在下方列出的类型一律按二进制处理,git 不碰它的字节。
+* -text
+
+# 源码与数据文件:强制 LF(含 lock —— 它的 sha256 就是拿字节算的)
+*.ss    text eol=lf
+*.sps   text eol=lf
+*.sls   text eol=lf
+*.lock  text eol=lf
+*.md    text eol=lf
+*.sh    text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+.gitignore      text eol=lf
+.gitattributes  text eol=lf
+LICENSE         text eol=lf
+
+# POSIX 启动器 / wrapper(无扩展名)
+bin/chandler    text eol=lf
+
+# Windows 批处理:**必须 CRLF**。cmd.exe 对 LF-only 的批处理大体容忍,但标签与
+# `goto` 会出错 —— 而 `bin/chandler.cmd` 和生成的启动器正是用底部错误标签组织的。
+*.cmd   text eol=crlf
+*.bat   text eol=crlf
