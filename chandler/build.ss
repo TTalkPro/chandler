@@ -79,6 +79,7 @@
                              (string-join names ", ") (string-join names ",")))))
         ;; 2) 按拓扑序逐个依赖:就地在它自己的 _vendor/<dep>/…/_build/<mt>/ 编译
         (build-deps root order (and (alist-ref opts 'verbose) #t))
+
         ;; 4) 落授权(描述哈希绑定)
         (unless (null? to-record)
           (write-approvals approvals-path
@@ -91,13 +92,19 @@
   ;; ── 逐个依赖:在**它自己的 _vendor/ 树里**就地编译,产物留在原地 ──
   ;; **拓扑序**要紧:A 依赖 B 时,编 A 需要 B 的对象已就位。故按 lock 的 topo-order
   ;; 逐个编,已编好的上游作为**预构建对象根**挂进去(见 upstream-prebuilt-roots)。
+  ;;
+  ;; gate 根与 fallback 根在整趟里是常量,故**提到循环外算一次**:先前每个依赖都要
+  ;; 重新读一遍项目 manifest(gate-prebuilt-roots),并重新扫一遍整个全局前缀的
+  ;; .registry/(fallback-roots → global-libdir)。upstream-prebuilt-roots 同理 ——
+  ;; 它先前对每个依赖都把 lock 重读 + 重做一次 topo-order,而 order 就在手边。
   (define (build-deps root order verbose?)
-    (for-each (lambda (d) (build-one-dep root d verbose?)) order))
+    (let ([gate (gate-prebuilt-roots root)]
+          [fallback (fallback-roots root)])
+      (for-each (lambda (d) (build-one-dep root d order gate fallback verbose?)) order)))
 
-  (define (build-one-dep root d verbose?)
+  (define (build-one-dep root d order gate fallback verbose?)
     (let* ([name   (symbol->string (locked-dep-name d))]
-           [vdir   (vendor-dir root (locked-dep-name d))]
-           [srcdir vdir])
+           [srcdir (vendor-dir root (locked-dep-name d))])
       (unless (file-directory? srcdir)
         (error 'build (format "~a not vendored; run `chandler deps` first" srcdir)))
       (build-tree!
@@ -108,9 +115,9 @@
         ;; gate-prebuilt-roots 排在 upstream 与 fallback 之间:chandler 运行时门的对象
         ;; 在 _vendor/chandler/_build/<mt>/(build-chandler-runtime! 编的),优先于
         ;; 全局前缀(避免实例分歧,BUG-1)。
-        (cons "." (append (gate-prebuilt-roots root)
-                          (upstream-prebuilt-roots root d)
-                          (fallback-roots root)))
+        (cons "." (append gate
+                          (upstream-prebuilt-roots root d order)
+                          fallback))
         (lambda ()
           ;; 顺序与旧的生成 recipe 一致:native 先(它把 _build/.gen 挂进搜索根,
           ;; 随后的 library-task 才解析得到生成的 (<lib> native-loader)),库在后。
@@ -127,8 +134,9 @@
       (and (file-directory? obj) (prebuilt src obj))))
 
   ;; 本依赖之前(topo 序)那些依赖的预构建根 —— 编 d 时它们必须已就位。
-  (define (upstream-prebuilt-roots root d)
-    (let loop ([ds (topo-order (read-lock (project-lock-path root)))] [acc '()])
+  ;; order 由调用方传入(build-deps 手里就有那份 topo-order),不再自己重读 lock。
+  (define (upstream-prebuilt-roots root d order)
+    (let loop ([ds order] [acc '()])
       (cond
         [(null? ds) (reverse acc)]
         [(eq? (locked-dep-name (car ds)) (locked-dep-name d)) (reverse acc)]
@@ -138,11 +146,12 @@
 
   ;; 全部依赖的预构建根 —— 编项目自身时用(它可能 import 任何一个)。
   (define (all-dep-prebuilt-roots root)
-    (if (file-exists? (project-lock-path root))
-        (filter values
-                (map (lambda (u) (dep-prebuilt-root root u))
-                     (topo-order (read-lock (project-lock-path root)))))
-        '()))
+    (let ([lpath (project-lock-path root)])
+      (if (file-exists? lpath)
+          (filter values
+                  (map (lambda (u) (dep-prebuilt-root root u))
+                       (topo-order (read-lock lpath))))     ; 先前这里把 lock 读了两遍
+          '())))
 
   ;; 兜底根:chandler 运行时门(designs/12 §5)与全局装的库都住在全局前缀,而它们
   ;; **不在 lock**(gate 不是 dep)。故编译时把全局前缀作为预构建根挂在末尾 ——
