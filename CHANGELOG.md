@@ -2,6 +2,28 @@
 
 本文件记录用户可见的变更。设计决策的完整记录在 [designs/00-design-principles.md](designs/00-design-principles.md) 的决策表。
 
+## 未发布
+
+Windows 可移植性工作的第一步(设计见
+[designs/14-windows-portability.md](designs/14-windows-portability.md))。
+
+### 变更
+
+- **启动器改读 `.registry/<name>.active` 纯文本 sidecar**(D35)。此前 shim 要自己
+  解析 `<name>.ss` 里的 `(active "<v>")` —— sh 侧一段 awk、PowerShell 侧一段正则,
+  两份实现、两份 bug 面,还让启动器与 registry 的文件格式绑死。现在 `install` /
+  `switch` / `uninstall` 顺带维护一个单行文本文件,两边各一行读取即可。
+  `.ss` 仍是唯一权威,`.active` 是它的派生投影。
+- **`chandler doctor` 新增 `active-sidecar-drift` 检查**:sidecar 缺失、陈旧、
+  或 lib 上有多余 sidecar,三种都报。
+
+### 升级注意
+
+- **已装的包需要重装一次**。0.1.6 及更早版本装的包没有 sidecar,新启动器会退 70 并
+  提示 `not installed, or installed by an older chandler; run: chandler install`。
+  `chandler doctor` 会把它列为 `active-sidecar-drift`;重装或对该包
+  `chandler switch` 一次即修复。
+
 ## 0.1.6
 
 一轮以**代码审计**为主的发布:修掉 6 个 bug(其中 3 个是长期存在、只是没人踩到的),
