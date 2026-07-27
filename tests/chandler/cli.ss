@@ -278,7 +278,7 @@
                     (make-lock 1 "sha" "0.1.0"
                                (list (make-locked-dep 'greet 'git "https://x/greet"
                                                       'tag "v1.0.0" "0123456789abcdef"
-                                                      '() '() 'runtime #f #f))))
+                                                      '() '() 'runtime #f))))
         (let ([op (open-output-string)])
           (let ([rc (parameterize ([current-output-port op])
                       (main (list "-C" app "tree")))])
