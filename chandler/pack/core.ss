@@ -177,10 +177,15 @@
         (when (= n 0)
           (error 'pack (format "no chandler runtime objects found in ~a" from))))))
 
+  ;; 拷贝可执行文件并保住执行位。
+  ;; **Windows 上不设** —— 那里没有执行位(可执行性看扩展名),先前无条件 shell-out
+  ;; 到 `chmod` 会往 stderr 喷「'chmod' 不是内部或外部命令」,退出码还被丢掉。
+  ;; POSIX 侧改用 Chez 自带的 chmod:少起一个进程,也不再经过 shell。
   (define (copy-exe! src dst)
     (ensure-parent dst)
     (copy-file src dst)
-    (run-status "chmod" (list "+x" dst)))
+    (unless (windows-mt? (current-machine-type))
+      (chmod dst (bitwise-ior (get-mode dst) #o111))))
 
   ;; manifest 声明了 (skiff …) 门 → 捆 skiff;否则 stock petite(部署态只 fasl 载入
   ;; 预编译 .so,不需要编译器,包更小)。--runtime 覆盖。

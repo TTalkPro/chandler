@@ -82,6 +82,39 @@
     (not (or (string=? (base-name rel) ".bake-manifest")
              (string-suffix? ".wpo" rel))))
 
+  ;; ── 名字可移植性(C7,designs/14 §10)──
+  ;;
+  ;; 两类 Windows 特有的坑,都**不自动改名** —— 改名会让包名与磁盘路径失去对应,
+  ;; 后果比拒装更难查:
+  ;;
+  ;;   ① **保留设备名**(con/prn/aux/nul/com1-9/lpt1-9,大小写不敏感、带扩展名也算):
+  ;;      在 Windows 上根本落不了盘。那里**硬错**;POSIX 上装得下,只警告
+  ;;      ——「你这个包在 Windows 上装不了」是包作者该知道的事,但不该由此
+  ;;      拦住一次本地安装。
+  ;;   ② **大小写撞名**:NTFS 不区分大小写,`Foo` 与 `foo` 会落到同一个目录,
+  ;;      registry 里却是两条记录。两个平台**都硬错** —— 这不是「Windows 上不行」,
+  ;;      而是「这两个包在 Windows 上是同一个」,继续装下去必然互相覆盖。
+  (define (check-name-portability! libdir name-sym)
+    (let ([name-str (symbol->string name-sym)])
+      (when (windows-reserved-name? name-str)
+        (if (win?)
+            (error 'install-global
+                   (format "~s is a reserved Windows device name; it cannot be created on this filesystem (pick another name)"
+                           name-str))
+            (eprintf "warning: ~s is a reserved Windows device name (con/prn/aux/nul/com1-9/lpt1-9, extension included); this package will not install on Windows~%"
+                     name-str)))
+      ;; 已登记的名字里有没有只差大小写的
+      (let ([clash (find (lambda (p)
+                           (let ([other (symbol->string (car p))])
+                             (and (not (string=? other name-str))
+                                  (string=? (string-downcase other)
+                                            (string-downcase name-str)))))
+                         (list-registered libdir))])
+        (when clash
+          (error 'install-global
+                 (format "name clashes with already-installed ~s on case-insensitive filesystems (NTFS/APFS treat them as one directory); uninstall that one or pick another name"
+                         (symbol->string (car clash))))))))
+
   ;; ── install-global ──
   ;; 整段包在 per-prefix 锁里:staging promote + registry read-modify-write 是一个事务。
   (define install-global
@@ -110,6 +143,7 @@
                       (format "kind mismatch: registry has ~a, incoming is ~a"
                               (registered-kind existing0) incoming-kind)
                       name-sym))
+             (check-name-portability! libdir name-sym)
              (with-staging! libdir name-sym version
                (lambda ()
                  (let ([sp (staging-path libdir name-sym version)])
@@ -271,6 +305,26 @@
       (for-each
         (lambda (p) (add! (list 'stale-staging p)))
         (stale-staging-list libdir))
+      ;; ── 名字可移植性(C7)──
+      ;; doctor 是可移植性审计,故**两个平台都报**:在 Linux 上装好的前缀,
+      ;; 拷到 Windows(或被 CI 在 Windows 上重建)会撞上这两条。
+      (let ([names (map car parsed)])
+        (for-each
+          (lambda (n)
+            (when (windows-reserved-name? (symbol->string n))
+              (add! (list 'windows-reserved-name n))))
+          names)
+        ;; 只差大小写的两个名字:NTFS/APFS 上是同一个目录
+        (let loop ([ns names])
+          (unless (null? ns)
+            (for-each
+              (lambda (other)
+                (let ([a (symbol->string (car ns))] [b (symbol->string other)])
+                  (when (and (not (string=? a b))
+                             (string=? (string-downcase a) (string-downcase b)))
+                    (add! (list 'case-insensitive-name-clash (car ns) other)))))
+              (cdr ns))
+            (loop (cdr ns)))))
       (reverse issues)))
 
   (define (condition-brief e)

@@ -15,9 +15,15 @@
        (error 'runtime-paths "resource segment must be a string" seg)]
       [(string=? seg "")
        (error 'runtime-paths "empty resource segment rejected")]
-      ;; absolute-path? 而非裸 "/" 前缀:Windows 盘符形("C:foo")同样要拒
       [(absolute-path? seg)
        (error 'runtime-paths "absolute resource segment rejected" seg)]
+      ;; 含 `:` 一律拒。**不能只靠 absolute-path?** —— 它(收紧后,D36)要求
+      ;; 盘符后跟分隔符才算绝对,而 `C:foo` 是 **drive-relative**(「C 盘当前
+      ;; 目录下的 foo」),既不绝对、也不含分隔符,会从上下两条检查之间漏过去。
+      ;; 顺带挡住 NTFS 的备用数据流写法 `file:stream`。
+      ;; 合法的资源段是单个普通文件名,本就不该出现 `:`。
+      [(string-contains? seg ":")
+       (error 'runtime-paths "resource segment with a drive or stream separator rejected" seg)]
       [(string=? seg "..")
        (error 'runtime-paths "parent traversal rejected" seg)]
       [(string=? seg ".")
