@@ -117,28 +117,41 @@
 
   ;; 叶子列表(元素全为原子)且短 → 内联;否则首元素跟在 ( 后,余元素逐行缩进 +2
   (define (print-list lst op col)
-    (let ([inline (try-inline lst)])
-      (if (and inline (<= (+ col (string-length inline)) line-budget))
+    (let ([inline (try-inline lst (- line-budget col))])
+      (if inline
           (display inline op)
           (print-list-broken lst op col))))
 
-  ;; 尝试整表内联为一行字符串;含子列表也可内联(只要总长受控,由调用方判 budget)
-  (define (try-inline lst)
-    (let ([op (open-output-string)])
-      (write-inline lst op)
-      (get-output-string op)))
+  ;; 尝试整表内联为一行字符串;含子列表也可内联。**超出 limit 立刻放弃**(返回 #f)。
+  ;;
+  ;; 判定与「先整段渲染、再比 (+ col 长度) 与 line-budget」逐字节等价:输出长度单调
+  ;; 递增,故「某个中途长度 > limit」⟺「总长 > limit」。早退的意义在于折行的场合:
+  ;; 先前每一层 print-list 都要把自己**整棵子树**渲染成字符串再丢掉,于是同一份数据
+  ;; 被渲染「深度」遍(lock 的 (lock (resolved (dep …) …)) 就是四层)。
+  (define (try-inline lst limit)
+    (and (>= limit 0)
+         (call/1cc
+           (lambda (abort)
+             (let ([op (open-output-string)] [n 0])
+               (define (emit s)
+                 (set! n (+ n (string-length s)))
+                 (when (> n limit) (abort #f))
+                 (display s op))
+               (let write-inline ([x lst])
+                 (cond
+                   [(and (pair? x) (list? x))
+                    (emit "(")
+                    (let loop ([xs x] [first #t])
+                      (unless (null? xs)
+                        (unless first (emit " "))
+                        (write-inline (car xs))
+                        (loop (cdr xs) #f)))
+                    (emit ")")]
+                   [else (emit (atom->string x))]))
+               (get-output-string op))))))
 
-  (define (write-inline x op)
-    (cond
-      [(and (pair? x) (list? x))
-       (display "(" op)
-       (let loop ([xs x] [first #t])
-         (unless (null? xs)
-           (unless first (display " " op))
-           (write-inline (car xs) op)
-           (loop (cdr xs) #f)))
-       (display ")" op)]
-      [else (write-atom x op)]))
+  (define (atom->string x)
+    (let ([p (open-output-string)]) (write-atom x p) (get-output-string p)))
 
   (define (print-list-broken lst op col)
     (display "(" op)
