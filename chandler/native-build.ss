@@ -142,15 +142,28 @@
 
   ;; 相关工具链版本的哈希(C 编译器恒计;后端的驱动程序也计)。gcc→clang 或
   ;; cmake 版本变动都会改 ABI/输出,故必须使指纹失效(designs/20 §指纹)。
+  ;;
+  ;; **按后端记忆化**:本函数是 native-fingerprint 的一部分,而后者作为
+  ;; fingerprint-providers 里的 thunk 会被 fingerprint-of 反复调用(needed? 一次、
+  ;; 记录指纹一次、下游算指纹时还会再来)。每次都 fork 两个子进程去问
+  ;; `cc --version` / `cmake --version`,而工具链在一个进程的生命周期里不会变。
+  ;; **刻意不进 reset-native-state!**:复位钩子是每次 load-recipe / 每棵依赖树跑一遍,
+  ;; 清掉它等于没缓存;而「同一进程内工具链换了」不是真实场景。
+  (define toolchain-cache (make-hashtable string-hash string=?))
+
   (define (toolchain-id build)
     (define (ver cmd) (guard (e (#t "")) (string-trim (run/capture cmd))))
-    (sha256-string
-      (string-append
-        "cc\n"   (ver "cc --version 2>/dev/null | head -1")
-        "\nbk\n" (cond ((and (pair? build) (eq? (car build) 'cmake))
-                        (ver "cmake --version 2>/dev/null | head -1"))
-                       ((eq? build 'make) (ver "make --version 2>/dev/null | head -1"))
-                       (else "")))))
+    (let ([key (datum->string build)])
+      (or (hashtable-ref toolchain-cache key #f)
+          (let ([id (sha256-string
+                      (string-append
+                        "cc\n"   (ver "cc --version 2>/dev/null | head -1")
+                        "\nbk\n" (cond ((and (pair? build) (eq? (car build) 'cmake))
+                                        (ver "cmake --version 2>/dev/null | head -1"))
+                                       ((eq? build 'make) (ver "make --version 2>/dev/null | head -1"))
+                                       (else ""))))])
+            (hashtable-set! toolchain-cache key id)
+            id))))
 
   (define (native-fingerprint prereqs build chez-api soname)
     (sha256-string
