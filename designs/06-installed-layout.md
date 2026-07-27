@@ -178,7 +178,19 @@
 
 ### 6.1 关键约束
 
-- `(files ...)` 路径相对 `<vroot>`,与 registry/uninstall 工作目录一致。
+- `(files ...)` 有**两种用途,基准不同**,由 lock 所在位置决定:
+
+  | lock 在哪 | 基准 | 覆盖什么 | 谁写 / 谁读 |
+  |---|---|---|---|
+  | `<vroot>/.chandler/chandler-manifest.lock`(已装包快照) | `<vroot>` | 该 version 自己的文件 | registry / uninstall |
+  | `<project>/chandler-manifest.lock`(项目 lock) | **项目根** | 整棵 `_vendor/`(多依赖 + 运行时门) | `chandler deps` 写 / `chandler verify` 读 |
+
+  第二行是 2026-07-27 定的:依赖树校验没有单一 `<vroot>` 可作基准,故取项目根
+  (`_vendor/greet/greet.ss`)。生产侧见 `(chandler install)` 的 `record-vendor-files!`,
+  消费侧见 [11 §verify](11-cli.md)。
+- 项目 lock 的 `(files ...)` **排除 `.git/` 与 `_build/`**:前者是 checkout 自带的仓库
+  元数据(其一致性由 `verify` 的 git 态检查管),后者是 `chandler build` 的产物 ——
+  写清单时还不存在,记进去只会让 build 之后的 `verify` 立刻失效。
 - `(files ...)` 不含 `.chandler/chandler-manifest.lock` 自己(避免自哈希悖论),也不含 staging。
 - `(deps <name> (src . ...) (obj . ...))` —— install 模式写绝对路径;pack 模式 lock 在 pack 根级,可写相对路径或省略(由 run.sps 推导)。
 - v2 的 `manifest.lock`(无前缀)已废弃;v3 全部用 `chandler-manifest.lock`。

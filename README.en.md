@@ -184,9 +184,9 @@ The global fallback mounts **one version per installed package**: for an `app` t
 | `init [--lib\|--app] [--name=N]` | Scaffold `chandler-manifest.ss` + `chandler-tasks.ss` (lib by default; `--app` writes `(app …)` so it can be packed) |
 | `add <name> <url> [--tag/--rev/--branch/--path]` | Add a dependency |
 | `remove <name>` | Remove a dependency |
-| `deps [--production] [--offline] [--force] [--update]` | Resolve → write lock → check out git deps into `_vendor/` + put the chandler runtime gate in place; `--list` shows locked deps, `--tree` shows them as a tree |
+| `deps [--production] [--offline] [--force] [--update]` | Resolve → write lock → check out git deps into `_vendor/` + put the chandler runtime gate in place + record `_vendor/`'s file list and sha256 into the lock's `(files …)` (consumed by `verify`); `--list` shows locked deps, `--tree` shows them as a tree |
 | `build [--allow-build[=a,b]]` | In-process compile of the dependency closure + native → each `_vendor/<dep>/_build/<mt>/` |
-| `verify` | Check `_vendor/` matches the `(files …)` in `chandler-manifest.lock` (CI, read-only); mismatched/missing/extra → exit 65 |
+| `verify` | Check `_vendor/` matches `chandler-manifest.lock` (CI, read-only): **git state** (each git dependency's HEAD == the locked rev, working tree clean) + **content hashes** (the lock's `(files …)`, compared only when non-empty; `.git/` and `_build/` never count as EXTRA). Any mismatch → exit 65 |
 | `list` | List globally installed packages (multi-version; the active one is tagged `[active]`) |
 | `tree` | Alias for `deps --tree`: locked dependencies as a tree |
 | `run <script.ss> [args…]` | Run a script with library search paths mounted |

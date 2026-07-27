@@ -159,9 +159,9 @@ chandler run --script main.ss [args...]
 | `init [--lib\|--app] [--name=N]` | 生成骨架 `chandler-manifest.ss` + `chandler-tasks.ss`(默认 lib;`--app` 写 `(app …)` 使其可 pack) |
 | `add <name> <url> [--tag/--rev/--branch/--path]` | 添加依赖 |
 | `remove <name>` | 移除依赖 |
-| `deps [--production] [--offline] [--force] [--update]` | 解析 → 写 lock → git 依赖 checkout 到 `_vendor/` + chandler 运行时门就位;`--list` 显已锁依赖,`--tree` 树状显已锁依赖 |
+| `deps [--production] [--offline] [--force] [--update]` | 解析 → 写 lock → git 依赖 checkout 到 `_vendor/` + chandler 运行时门就位 + 记录 `_vendor/` 文件清单与 sha256 到 lock 的 `(files …)`(供 `verify`);`--list` 显已锁依赖,`--tree` 树状显已锁依赖 |
 | `build [--allow-build[=a,b]]` | 进程内编译依赖闭包 + native → 各 `_vendor/<dep>/_build/<mt>/` |
-| `verify` | 校验 `_vendor/` 与 `chandler-manifest.lock` 的 `(files …)` 一致(CI,只读);不一致/缺失/多余 → exit 65 |
+| `verify` | 校验 `_vendor/` 与 `chandler-manifest.lock` 一致(CI,只读):**git 态**(每个 git 依赖的 HEAD == lock 的 rev、工作区无脏改动)+ **内容哈希**(lock 的 `(files …)`,仅在其非空时比对;`.git/`、`_build/` 不计 EXTRA)。任一不符 → exit 65 |
 | `list` | 列全局已装包(多版本,active 版本标 `[active]`) |
 | `tree` | `deps --tree` 别名:树状显已锁依赖 |
 | `run <script.ss> [args…]` | 挂库搜索路径后跑脚本 |
