@@ -7,10 +7,11 @@
 
 (library (chandler fs)
   (export parent-dir base-name path-join* absolute-path?
+           path-sep-char? has-path-sep?
            ensure-dir ensure-parent
            dir-entries files-under dir-empty?
            rm-rf copy-file move-file
-           read-file-string read-lines write-text write-text-atomic
+           read-file-string read-lines write-text write-text-atomic write-text-crlf
            sweep-empty-parents home-dir
            write-text-if-changed file-byte-size mtime
            path-swap-ext
@@ -37,6 +38,18 @@
     (cond [(string=? a "") b]
           [(char=? #\/ (string-ref a (- (string-length a) 1))) (string-append a b)]
           [else (string-append a "/" b)]))
+
+  ;; ── 路径分隔符 ──
+  ;; POSIX 只有 "/";Windows 上 "\" 与 "/" 都是(Chez 两者都接受、内部规范化)。
+  ;; 全仓单一出处 —— 判「这是不是分隔符」的地方将来还有一批(见 designs/14 §6),
+  ;; 各写各的必然漏一处,而漏掉的那处是**静默**错误。
+  (define (path-sep-char? c) (or (char=? c #\/) (char=? c #\\)))
+
+  (define (has-path-sep? s)
+    (let loop ([i (- (string-length s) 1)])
+      (cond [(< i 0) #f]
+            [(path-sep-char? (string-ref s i)) #t]
+            [else (loop (- i 1))])))
 
   ;; 路径是否绝对:POSIX 的前导 "/",或 Windows 的盘符 "C:"。
   ;; 全仓单一出处 —— 先前 manifest / commands(两处)/ runtime-env / runtime-paths /
@@ -152,6 +165,28 @@
         (when (file-exists? path)
           (guard (e (#t (void))) (delete-file path)))
         (rename-file tmp path))))
+
+  ;; ── 写文本,换行一律 CRLF(Windows `.cmd` 启动器专用)──
+  ;;
+  ;; cmd.exe 对 LF-only 的批处理**大体**容忍,但标签与 `goto` 会出错 —— 而生成的
+  ;; `.cmd` 启动器正是用底部错误标签组织的(designs/14 §8.3)。既然只有一种正确答案,
+  ;; 就不留给「大体容忍」去赌。
+  ;;
+  ;; 已是 CRLF 的不重复转换(幂等),故对混合换行的输入也安全。
+  (define (write-text-crlf path s)
+    (write-text path (lf->crlf s)))
+
+  (define (lf->crlf s)
+    (let ([n (string-length s)] [op (open-output-string)])
+      (let loop ([i 0])
+        (if (= i n)
+            (get-output-string op)
+            (let ([c (string-ref s i)])
+              (when (and (char=? c #\newline)
+                         (or (= i 0) (not (char=? #\return (string-ref s (- i 1))))))
+                (write-char #\return op))
+              (write-char c op)
+              (loop (+ i 1)))))))
 
   (define (home-dir) (or (getenv "HOME") (getenv "USERPROFILE") "."))
 

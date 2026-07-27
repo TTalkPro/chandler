@@ -9,8 +9,8 @@
           cmd-build cmd-pack cmd-verify-pack cmd-deps-tree cmd-verify cmd-exec
           cmd-uninstall-global cmd-doctor cmd-list cmd-switch cmd-test
           ;; 启动器模板:导出供测试**实跑**渲染结果(光比字符串证明不了
-          ;; `IFS= read -r` 真能读出 sidecar)。C3 的 launcher parity 测试也要它们。
-          app-launcher-sh app-launcher-ps1)
+          ;; `IFS= read -r` 真能读出 sidecar),以及 launcher-parity 两侧对拍。
+          app-launcher-sh app-launcher-cmd)
   (import (chezscheme)
           (chandler util)
           (chandler fs)
@@ -320,30 +320,78 @@
       "[ -z \"$_rt\" ] && { echo \"$NAME: no Scheme runtime found (install skiff or Chez Scheme)\" 1>&2; exit 127; }\n"
       "exec \"$_rt\" -q --program \"$RUNNER\" \"$@\"\n"))
 
-  (define (app-launcher-ps1 name libdir)
+  ;; Windows 稳定 shim —— **`.cmd`,不是 `.ps1`**(D34,designs/14 §8.3)。
+  ;;
+  ;; 只依赖 cmd.exe(每台 Windows 必有);`.CMD` 在默认 PATHEXT 里,故 cmd /
+  ;; PowerShell / 被别的程序 spawn 三种情形都能直接调;不受 ExecutionPolicy 管。
+  ;; 先前的 `.ps1` 三条都不满足,而且用了 PS6+ 的 `Join-Path` 多段形式 ——
+  ;; 在 Windows 预装的 PowerShell 5.1 上直接报错,即「裸机上必挂」。
+  ;;
+  ;; 结构:全直线代码 + **底部错误标签**。不用内嵌 `( … )` 块(块内变量按块解析,
+  ;; 要么写延迟展开要么处处踩坑),不用正则,不 `cd`(于是 UNC 路径下也可用)。
+  ;; 退出码与 POSIX 侧逐条对齐(70 / 64 / 127),由 launcher-parity 测试钉住。
+  ;;
+  ;; `%*` 传原始命令行尾部 —— 已是 cmd 下最保真的做法,但含 `%` 的参数会被展开、
+  ;; 未加引号的 `& | < > ^` 会破。这是 cmd 的固有限制(npm/yarn shim 同款),
+  ;; 见 designs/14 §8.5。
+  (define (app-launcher-cmd name libdir)
     (string-append
-      "#!/usr/bin/env pwsh\n"
-      "# " name " launcher — chandler v3 stable shim; do not edit.\n"
-      "$ErrorActionPreference = 'Continue'\n"
-      "$AppArgs = $args\n"
-      "$Name = '" name "'\n"
-      "$LibDir = '" libdir "'\n"
-      "$RegFile = Join-Path $LibDir \".registry\" \"$Name.active\"\n"
-      "if (-not (Test-Path $RegFile)) { [Console]::Error.WriteLine(\"$Name: not installed, or installed by an older chandler; run: chandler install\"); exit 70 }\n"
-      "$Active = (Get-Content $RegFile -TotalCount 1).Trim()\n"
-      "if (-not $Active) { [Console]::Error.WriteLine(\"$Name: no active version; run: chandler switch\"); exit 70 }\n"
-      "$Runner = Join-Path $LibDir $Name $Active \".chandler\" \"run.sps\"\n"
-      "if (-not (Test-Path $Runner)) { [Console]::Error.WriteLine(\"$Name: active $Active missing runner\"); exit 70 }\n"
-      "switch ($env:CHANDLER_RUNTIME) {\n"
-      "  'skiff' { $rt = if ($env:CHANDLER_SKIFF) { $env:CHANDLER_SKIFF } else { 'skiff' } }\n"
-      "  'chez'  { $rt = if ($env:CHANDLER_SCHEME) { $env:CHANDLER_SCHEME } else { 'scheme' } }\n"
-      "  ''      { foreach ($c in @('skiff','scheme','chez')) { if (Get-Command $c -ErrorAction SilentlyContinue) { $rt = $c; break } } }\n"
-      "  $null   { foreach ($c in @('skiff','scheme','chez')) { if (Get-Command $c -ErrorAction SilentlyContinue) { $rt = $c; break } } }\n"
-      "  default { [Console]::Error.WriteLine(\"$Name: invalid CHANDLER_RUNTIME\"); exit 64 }\n"
-      "}\n"
-      "if (-not $rt) { [Console]::Error.WriteLine(\"$Name: no Scheme runtime\"); exit 127 }\n"
-      "& $rt -q --program $Runner @AppArgs\n"
-      "exit $LASTEXITCODE\n"))
+      "@echo off\r\n"
+      "rem " name " launcher -- chandler v4 stable shim; do not edit.\r\n"
+      "rem Reads active version from .registry\\<name>.active at runtime.\r\n"
+      "setlocal\r\n"
+      "set \"NAME=" name "\"\r\n"
+      "set \"LIBDIR=" libdir "\"\r\n"
+      "set \"REG=%LIBDIR%\\.registry\\%NAME%.active\"\r\n"
+      "\r\n"
+      "if not exist \"%REG%\" goto :e_notreg\r\n"
+      "set \"ACTIVE=\"\r\n"
+      "set /p ACTIVE=<\"%REG%\"\r\n"
+      "if not defined ACTIVE goto :e_noactive\r\n"
+      "\r\n"
+      "set \"RUNNER=%LIBDIR%\\%NAME%\\%ACTIVE%\\.chandler\\run.sps\"\r\n"
+      "if not exist \"%RUNNER%\" goto :e_norunner\r\n"
+      "\r\n"
+      "rem Runtime discovery: CHANDLER_RUNTIME > PATH search (skiff > scheme > chez).\r\n"
+      "rem An empty CHANDLER_RUNTIME is undefined to cmd, so it falls through to the\r\n"
+      "rem PATH search -- same semantics as the sh shim's \"\" branch.\r\n"
+      "if /i \"%CHANDLER_RUNTIME%\"==\"skiff\" goto :rt_skiff\r\n"
+      "if /i \"%CHANDLER_RUNTIME%\"==\"chez\"  goto :rt_chez\r\n"
+      "if defined CHANDLER_RUNTIME goto :e_badrt\r\n"
+      "where skiff  >nul 2>nul && set \"RT=skiff\"  && goto :run\r\n"
+      "where scheme >nul 2>nul && set \"RT=scheme\" && goto :run\r\n"
+      "where chez   >nul 2>nul && set \"RT=chez\"   && goto :run\r\n"
+      "goto :e_nort\r\n"
+      "\r\n"
+      ":rt_skiff\r\n"
+      "set \"RT=%CHANDLER_SKIFF%\"\r\n"
+      "if not defined RT set \"RT=skiff\"\r\n"
+      "goto :run\r\n"
+      "\r\n"
+      ":rt_chez\r\n"
+      "set \"RT=%CHANDLER_SCHEME%\"\r\n"
+      "if not defined RT set \"RT=scheme\"\r\n"
+      "goto :run\r\n"
+      "\r\n"
+      ":run\r\n"
+      "\"%RT%\" -q --program \"%RUNNER%\" %*\r\n"
+      "exit /b %errorlevel%\r\n"
+      "\r\n"
+      ":e_notreg\r\n"
+      ">&2 echo %NAME%: not installed, or installed by an older chandler; run: chandler install\r\n"
+      "exit /b 70\r\n"
+      ":e_noactive\r\n"
+      ">&2 echo %NAME%: no active version; run: chandler switch\r\n"
+      "exit /b 70\r\n"
+      ":e_norunner\r\n"
+      ">&2 echo %NAME%: active %ACTIVE% missing runner ^(reinstall^)\r\n"
+      "exit /b 70\r\n"
+      ":e_badrt\r\n"
+      ">&2 echo %NAME%: invalid CHANDLER_RUNTIME ^(want: skiff ^| chez^)\r\n"
+      "exit /b 64\r\n"
+      ":e_nort\r\n"
+      ">&2 echo %NAME%: no Scheme runtime found ^(install skiff or Chez Scheme^)\r\n"
+      "exit /b 127\r\n"))
 
   ;; write-app-launcher! : 写 run.sps + 稳定 shim launcher
   ;; v3(D17):shim 只需 name + libdir(version 在运行时读 .registry)。
@@ -357,23 +405,27 @@
       (ensure-dir runner-dir)
       (write-text (join-paths runner-dir "run.sps")
         (run-sps-content entry main))
-      ;; launcher:稳定 shim(读 .registry/ 找 active version)
+      ;; launcher:稳定 shim(读 .registry/<name>.active 找 active version)
       (ensure-dir bindir)
       (if win?
-          (write-text (join-paths bindir (string-append name ".ps1"))
-            (app-launcher-ps1 name libdir))
+          ;; CRLF:模板里已经全是 \r\n,write-text-crlf 只是把「必须是 CRLF」
+          ;; 这条不变量落到写入侧,不依赖模板作者每行都记得
+          (write-text-crlf (join-paths bindir (string-append name ".cmd"))
+            (app-launcher-cmd name libdir))
           (let ([f (join-paths bindir name)])
             (write-text f (app-launcher-sh name libdir))
             (run-status "chmod" (list "+x" f) '())))
       (printf "installed command '~a' to ~a~%" name bindir)))
 
   (define (remove-app-launcher! name bindir)
-    ;; 删 launcher(sh 和 .ps1 都试,防跨平台残留)。runner 在 .chandler/<name>/,
-    ;; 由 cmd-uninstall 删整个 .chandler/<name>/ 时一并清。
-    (let ([sh (join-paths bindir name)]
-          [ps1 (join-paths bindir (string-append name ".ps1"))])
-      (when (file-exists? sh) (delete-file sh))
-      (when (file-exists? ps1) (delete-file ps1))))
+    ;; 删 launcher:sh / .cmd 都试(防跨平台残留),外加 **.ps1 —— D34 之前的形态**。
+    ;; 旧安装卸载时必须把它带走,否则 PATH 上留一个指向已删包的僵尸启动器。
+    ;; runner 在 .chandler/<name>/,由 cmd-uninstall 删整个 .chandler/<name>/ 时一并清。
+    (for-each
+      (lambda (f) (when (file-exists? f) (delete-file f)))
+      (list (join-paths bindir name)
+            (join-paths bindir (string-append name ".cmd"))
+            (join-paths bindir (string-append name ".ps1")))))
 
   ;; ── install:安装 lib + 依赖 + resources + manifest 到全局前缀 ──
   (define (cmd-install root flags)
