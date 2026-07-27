@@ -9,6 +9,14 @@ Windows 可移植性工作的第一步(设计见
 
 ### 变更
 
+- **Windows 启动器改用 `.cmd`,`.ps1` 下线**(D34)。`.cmd` 只依赖每台 Windows 必有的
+  `cmd.exe`:不受 ExecutionPolicy 管,`.CMD` 也在默认 `PATHEXT` 里(于是 cmd、
+  PowerShell、被别的程序 spawn 三种情形都能直接调 `<app>`)。**`chandler pack` 打出的
+  包因此不再要求用户装 PowerShell** —— 这是先前分发态最硬的一道门槛。
+
+  顺带修掉一个「裸机上必挂」的 bug:旧 `.ps1` 模板用了 PowerShell 6+ 的 `Join-Path`
+  多段形式,而 Windows 预装的是 **5.1**,那一行直接报错。
+
 - **启动器改读 `.registry/<name>.active` 纯文本 sidecar**(D35)。此前 shim 要自己
   解析 `<name>.ss` 里的 `(active "<v>")` —— sh 侧一段 awk、PowerShell 侧一段正则,
   两份实现、两份 bug 面,还让启动器与 registry 的文件格式绑死。现在 `install` /
@@ -16,6 +24,16 @@ Windows 可移植性工作的第一步(设计见
   `.ss` 仍是唯一权威,`.active` 是它的派生投影。
 - **`chandler doctor` 新增 `active-sidecar-drift` 检查**:sidecar 缺失、陈旧、
   或 lib 上有多余 sidecar,三种都报。
+- **`bin/chandler.cmd`**:Windows 上的开发期入口(先前只有 sh 版)。
+- **`bootstrap.ss` 的冒烟测试在 Windows 上不再跳过** —— 启动器成了可直接执行的命令,
+  自举的最后一环于是在两个平台上都真的被验证。
+
+### 修复
+
+- **资源定位的路径穿越校验补上反斜杠**。`resource-path` / `find-resource-path`
+  此前只拒绝含 `/` 的 segment,于是 `(resource-path '(app) "..\\..\\secret")` 能绕过
+  全部四条检查 —— 反斜杠既不是 `/`、整串也不等于 `..`、更不是绝对路径。
+  Windows 上 `\` 同样是分隔符,现在两者都拒。
 
 ### 升级注意
 
@@ -23,6 +41,15 @@ Windows 可移植性工作的第一步(设计见
   提示 `not installed, or installed by an older chandler; run: chandler install`。
   `chandler doctor` 会把它列为 `active-sidecar-drift`;重装或对该包
   `chandler switch` 一次即修复。
+- **Windows 用户**:重装一次会把 `%LOCALAPPDATA%\chez\bin\<app>.ps1` 换成 `<app>.cmd`;
+  `chandler uninstall` 会把残留的 `.ps1` 一并带走。
+- `.cmd` 的固有限制(cmd 决定的,npm / yarn 的 Windows shim 同款):参数里含 `%`
+  会被变量展开、未加引号的 `& | < > ^` 会破;`Ctrl+C` 会弹
+  `Terminate batch job (Y/N)?`。
+
+> **Windows 支持仍标注「未验证」** —— 子进程层(`proc.ss`)与路径原语尚未适配,
+> 且还没有 Windows CI。进度见
+> [designs/14-windows-portability.md](designs/14-windows-portability.md)。
 
 ## 0.1.6
 
