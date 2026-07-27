@@ -236,18 +236,41 @@ EXTRA 文案、是否统计并打印 ok/extra 汇总。
 
 **当前状态**：Windows 支持一律标注为「未验证」，直到 C9 的 CI 跑绿。
 
-### C1. `.registry/<name>.active` sidecar（D35）
-> 设计 §8.1。**先做这个** —— 纯增量，POSIX 侧先受益，不动任何 Windows 代码就能测。
+### C1. `.registry/<name>.active` sidecar（D35）✅ 已完成
+> 设计 §8.1。纯增量，POSIX 侧先受益（awk 下线），不动任何 Windows 代码就能测。
 
-- [ ] `install` / `switch` 写 `.registry/<name>.ss` 的同时派生
-      `.registry/<name>.active`：单行版本号 + **结尾换行**
-      （POSIX `read` 需要它才返回成功；cmd 的 `set /p` 两种都吃）
-- [ ] 写入受 D21 per-prefix 进程锁保护，走 D20 式原子写（同目录 temp + rename）
-- [ ] `uninstall` 一并删除
-- [ ] `doctor` 新增 issue `active-sidecar-drift`：`.active` 缺失、
-      或与 `.ss` 的 `(active …)` 不一致。**`.ss` 是权威，`.active` 是派生**
-- [ ] POSIX shim 的 awk 解析下线，改 `IFS= read -r ACTIVE < "$REGFILE"`
-- [ ] 测试：sidecar 与 `.ss` 的一致性、drift 检测、switch 后 sidecar 即时更新
+- [x] 写入点**只有** `(chandler registry io)` 的 `write-registered!` /
+      `remove-registered!` 两个 —— 三个业务入口（install/uninstall/switch）都经它们，
+      故 sidecar 不可能漏更新，且天然落在 D21 的 per-prefix 锁内。
+      内容 = 单行版本号 + **结尾换行**
+- [x] 原子写：提取 `fs.ss` 的 `write-text-atomic`（temp 与目标同目录 + Windows 先删
+      + 失败清残件）。`sexp.ss` 的 `write-canonical-file` 原本内联了一份逐字相同的
+      逻辑，一并改为调它 —— 单一出处，顺带把 sexp.ss 那段缩到一行
+- [x] 顺序 = **先写权威 `.ss`，再写 sidecar**。中途崩溃 → sidecar 陈旧（doctor 报），
+      权威文件始终完整；反过来会出现「registry 说 v1、启动器跑 v2」且无人知晓
+- [x] lib 不写 sidecar（无 active、无启动器）；`remove-registered!` 一并清 ——
+      孤儿 `.active` 会让启动器指向已不在 registry 里的版本
+- [x] `doctor` 新增 issue `active-sidecar-drift`，覆盖三种形态：缺失（含旧版装的包）、
+      陈旧、lib 上有多余 sidecar。`#f` 与「文件不存在」同形，故直接 `equal?` 比
+- [x] POSIX shim 的 awk 下线 → `IFS= read -r ACTIVE < "$REGFILE"`；
+      ps1 侧的正则同步下线 → `Get-Content -TotalCount 1`（C3 会整个换掉，
+      但留着一份读 `.ss`、一份读 `.active` 的分叉没有道理）
+- [x] shim 缺失分支的措辞改准：原文案是 `not registered`，但对**升级上来的旧安装**
+      是误诊（包是注册着的，只是没有 sidecar）。改为
+      `not installed, or installed by an older chandler; run: chandler install`
+- [x] 测试 +18（506 → 524，0 failed）：registry 侧 13 条（写入/换行/lib 不写/
+      switch 跟随/两种卸载/空白读成 #f/三种 drift/sidecar 不被当 registry 扫）、
+      cli 侧 5 条**端到端实跑** sh 启动器（stub runtime 打印收到的参数）
+- [x] **验证非空转**：三处故意分叉各自变红 —— 去掉 sidecar 写入 → 8 红；
+      去掉 doctor drift 检查 → 3 红；shim 退回读 `.ss` → 3 红
+- [x] 端到端手测：真装 hello 1.0.0 → 启动器跑通、doctor 干净 → 装 2.0.0
+      （首装的 active 不被抢）→ `switch` → **启动器文件未重写**但下次启动即换版本
+      （D17 稳定 shim 不变量保住）→ 删/改 sidecar → doctor 报 drift → 重装修复
+- [x] 清空 `_build` 从零重编亦通过
+
+**迁移**：D35 之前装的包没有 sidecar，启动器退 70 并提示重装；`doctor` 会报
+`active-sidecar-drift`，重装或 `chandler switch` 一次即修复。**不做读路径自愈** ——
+`read-registered` 在 `run`/`build`/`repl` 的热路径上且不在锁内，让它写文件是错的。
 
 ### C2. 资源 segment 拒绝 `\`（P1-2，安全）
 > 设计 §6 末段。一行的事，且是安全边界，不该等整个 Windows 计划。
