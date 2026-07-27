@@ -32,15 +32,17 @@
       [() (activate ".")]
       [(root)
        (gate-runtime! root)
-       (library-directories (append (resolved-libdirs root) (library-directories)))
-       (activate-natives root)]))
+       (let ([dirs (resolved-libdirs root)])
+         (library-directories (append dirs (library-directories)))
+         (activate-natives root dirs))]))   ; 已算好,别让它再算一遍
 
   ;; 仅载 native —— 统一加载**兜底**:有 native-loader 的库自加载,不在此列
   (define activate-natives
     (case-lambda
       [() (activate-natives ".")]
-      [(root)
-       (for-each (lambda (so) (load-one so)) (native-load-paths root))]))
+      [(root) (activate-natives root (resolved-libdirs root))]
+      [(root dirs)
+       (for-each (lambda (so) (load-one so)) (native-load-paths root dirs))]))
 
   (define (load-one p)
     (unless (hashtable-ref loaded p #f)
@@ -50,11 +52,10 @@
 
   ;; 运行时版本门(manifest 有 chez/skiff 声明时)
   (define (gate-runtime! root)
-    (let ([mpath (join-paths root "chandler-manifest.ss")])
-      (when (file-exists? mpath)
-        (let ([mf (read-manifest mpath)])
-          (verify-runtime! (list (cons 'chez (manifest-chez mf))
-                                 (cons 'skiff (manifest-skiff mf))))))))
+    (let ([mf (read-project-manifest root)])
+      (when mf
+        (verify-runtime! (list (cons 'chez (manifest-chez mf))
+                               (cons 'skiff (manifest-skiff mf)))))))
 
   ;; ── load-native / native-path(边缘/显式用;native 收进所属库 <root>/_build/<mt>/<lib>/native/)──
   ;;   (native-path pkg soname) → <native-root>/<mt>/<pkg>/native/<soname>.<ext>

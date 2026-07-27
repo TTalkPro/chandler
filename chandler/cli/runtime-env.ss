@@ -47,14 +47,12 @@
         [(equal? rt "chez") 'chez]
         [(preferred-runtime)]                          ; CHANDLER_RUNTIME=skiff|chez
         [else
-         (let ([mpath (join-paths root "chandler-manifest.ss")])
-           (if (file-exists? mpath)
-               (let ([mf (read-manifest mpath)])
-                 (cond
-                   [(and (manifest-chez mf) (not (manifest-skiff mf))) 'chez]   ; 明确 chez-only
-                   [(and (manifest-skiff mf) (not (manifest-chez mf))) 'skiff]  ; 明确 skiff-only
-                   [else (current-runtime)]))           ; 双跑 / 未声明 → 跟随当前(默认 skiff)
-               (current-runtime)))])))                  ; 无 manifest → 跟随当前
+         (let ([mf (read-project-manifest root)])
+           (cond
+             [(not mf) (current-runtime)]                                  ; 无 manifest → 跟随当前
+             [(and (manifest-chez mf) (not (manifest-skiff mf))) 'chez]    ; 明确 chez-only
+             [(and (manifest-skiff mf) (not (manifest-chez mf))) 'skiff]   ; 明确 skiff-only
+             [else (current-runtime)]))])))                                ; 双跑 / 未声明 → 跟随当前
 
   ;; 生成 preamble 临时脚本:先 load 各 native,再(若有)load 目标脚本。
   ;;
@@ -103,7 +101,7 @@
                                '())]
               [cli-extra  (let ([f (flag flags 'env-file)])
                             (if (string? f)
-                                (read-dotenv (if (absolute-path? f) f (join-paths root f)))
+                                (read-dotenv (abspath root f))
                                 '()))])
          (append base tests-extra cli-extra))]))
 

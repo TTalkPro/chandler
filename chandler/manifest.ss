@@ -5,7 +5,7 @@
 ;;; 校验规则表逐条校验。name=目录名 的校验属上下文,交 CLI(见 designs/05 §3)。
 
 (library (chandler manifest)
-  (export read-manifest parse-manifest validate-manifest
+  (export read-manifest read-project-manifest parse-manifest validate-manifest
           manifest? manifest-format manifest-name manifest-version
           manifest-chez manifest-skiff manifest-chandler manifest-srcdir
           manifest-deps manifest-dev-deps manifest-native
@@ -20,6 +20,7 @@
           (chandler sexp)
           (chandler util)
           (chandler fs)
+          (chandler layout)          ; project-manifest-path(layout 只依赖 util,无环)
           (chandler version))
 
   (define supported-format 1)
@@ -59,6 +60,16 @@
   ;; ── 读文件 → 校验过的 manifest ──
   (define (read-manifest path)
     (validate-manifest (parse-manifest (read-datum-file path))))
+
+  ;; 项目根 → manifest,没有 manifest 则给 default。
+  ;; 「存在就读、否则取默认」这个成语先前在 build / activate / runtime-env /
+  ;; install / pack 各手写一遍(每处都自己拼一次路径字面量)。
+  (define read-project-manifest
+    (case-lambda
+      [(root) (read-project-manifest root #f)]
+      [(root default)
+       (let ([mp (project-manifest-path root)])
+         (if (file-exists? mp) (read-manifest mp) default))]))
 
   ;; ── 解析 datum → manifest record(结构性错误此处即抛)──
   (define (parse-manifest datum)
