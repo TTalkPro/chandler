@@ -17,8 +17,7 @@
           write-registered!
           remove-registered!
           list-registered-names
-          list-registry-files
-          registered-exists?)
+          list-registry-files)
   (import (chezscheme)
           (chandler util)
           (chandler fs)
@@ -46,10 +45,6 @@
     (let ([path (registry-file libdir name)])
       (and (file-exists? path)
            (datum->registered (read-datum-file path)))))
-
-  ;; registered-exists? : libdir name → bool
-  (define (registered-exists? libdir name)
-    (file-exists? (registry-file libdir name)))
 
   ;; ── 写 ──
 

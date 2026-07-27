@@ -21,9 +21,7 @@
   (export staging-dir
           staging-path
           with-staging!
-          clear-staging!
           promote-staging!
-          clear-stale-staging
           stale-staging-list)
   (import (chezscheme)
           (chandler fs)
@@ -53,11 +51,6 @@
           (rm-rf p)
           ;; version 层清掉后 name 层若空,顺手收掉,不留空壳
           (guard (e (#t (void))) (delete-directory (parent-dir p)))))))
-
-  ;; clear-staging! : libdir name version → void
-  ;; 显式删某个 staging 目录(幂等)。
-  (define (clear-staging! libdir name version)
-    (rm-rf (staging-path libdir name version)))
 
   ;; promote-staging! : libdir name version vroot → void
   ;; staging 整目录**单次 rename** 到 vroot(POSIX rename 原子:
@@ -95,9 +88,4 @@
                     acc)))
             '() (dir-entries d))
           '())))
-
-  ;; clear-stale-staging : libdir → void
-  ;; 清掉所有残留 staging(force install 时用)。
-  (define (clear-stale-staging libdir)
-    (for-each rm-rf (stale-staging-list libdir)))
   )

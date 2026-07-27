@@ -16,11 +16,11 @@
     make-version-entry version-entry? version-entry-version
     version-entry-installed-at version-entry-source version-entry-installer
     registry-dir registry-file
-    read-registered write-registered! remove-registered! registered-exists?
+    read-registered write-registered! remove-registered!
     list-registered-names list-registry-files
     with-registry-lock!
-    staging-dir staging-path with-staging! clear-staging!
-    clear-stale-staging stale-staging-list promote-staging!)
+    staging-dir staging-path with-staging!
+    stale-staging-list promote-staging!)
   (import (chezscheme)
           (chandler util)
           (chandler fs)
