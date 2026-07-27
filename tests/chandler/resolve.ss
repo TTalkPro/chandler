@@ -6,6 +6,7 @@
   (import (chezscheme)
           (tests chandler harness)
           (tests chandler fixtures)
+          (chandler fs)
           (chandler manifest)
           (chandler lock)
           (chandler fetch)
@@ -16,13 +17,13 @@
   (define (make-provider graph)
     (lambda (name sk sl pk pv)
       (if (eq? sk 'path)
-          (values #f '() '() #t #f)
+          (values #f '() '() #t)
           (let ([e (assq name graph)])
             (if e
                 (let ([info (cdr e)])
                   (values (list-ref info 0)
-                          (deps-from-sexprs (list-ref info 1)) (list-ref info 2) #f #f))
-                (values "rev-unknown" '() '() #f #f))))))
+                          (deps-from-sexprs (list-ref info 1)) (list-ref info 2) #f))
+                (values "rev-unknown" '() '() #f))))))
 
   (define (deps-from-sexprs sexprs)
     (manifest-deps (parse-manifest `(manifest (name "x") (version "0") (deps ,@sexprs)))))
@@ -128,6 +129,21 @@
              [lk (resolution-lock r)])
         (assert-false (member 'mylib (names lk)))    ; path 不入 lock
         (assert-true (member 'sub (names lk)))))
+
+    ;; **真** git-provider(不是 mock)+ 一个没有 chandler-manifest.ss 的 path 依赖。
+    ;;
+    ;; 回归:该分支曾返回 4 个值,而 resolve-one 解构 5 个(第 5 个是 resources)——
+    ;; Chez 对数量不符的 let-values 直接抛,于是 `chandler deps` 在这种依赖上崩溃。
+    ;; 有 manifest 的分支返回 5 个,所以只有「path 依赖没写 manifest」才踩得到,
+    ;; 一直没被发现。resources 那条死管道拆掉后两个分支都是 4 个值。
+    (path-dep-without-manifest-resolves
+      (let* ([root (mktmp)]
+             [_ (ensure-dir (string-append root "/sub"))]   ; 目录在,但没有 manifest
+             [mf (root-mf* '(manifest (name "root") (version "0.1.0")
+                              (deps (mylib (path "sub")))))]
+             [r (resolve mf (list (cons 'root-dir root)))])
+        ;; path 依赖不入 lock,故解析结果是空闭包 —— 关键是**没有抛异常**
+        (assert-equal '() (names (resolution-lock r)))))
 
     (cycle-warns
       (let* ([g '((a "ra" ((b (git "https://h/b"))) ())

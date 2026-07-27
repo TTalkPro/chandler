@@ -114,25 +114,25 @@
 
     ;; ── v3 (resources ...) 字段:静默忽略(D13)──
     ;; v3 取消 manifest 的 (resources ...) 声明;资源靠约定 <src>/<libpath>/resources/。
-    ;; 旧 manifest 含此字段 → 解析成功(不报错),manifest-resources 恒返回 #f。
+    ;; 契约是**旧 manifest 含此字段仍解析成功**(不报错、不影响其余字段);
+    ;; 访问器 manifest-resources 已删 —— 它恒返回 #f,而 resolve 还把这个 #f
+    ;; 一路传进 lock,是条不产出任何东西的死管道。
 
     (resources-silently-ignored-simple
-      ;; 旧 simple 形("data" 字符串)→ 解析成功,manifest-resources = #f
+      ;; 旧 simple 形("data" 字符串)→ 解析成功,其余字段照常
       (let ([x (m '(manifest (name "mylib") (version "0.1.0")
                       (resources "data")))])
-        (assert-false (manifest-resources x))))
+        (assert-string= "mylib" (manifest-name x))
+        (assert-string= "0.1.0" (manifest-version x))))
 
     (resources-silently-ignored-multi-lib
       ;; 旧 multi-lib 形 → 同样静默忽略
       (let ([x (m '(manifest (name "suite") (version "0.1.0")
+                      (deps (http (git "https://x/http")))
                       (resources ((mylib) "resources")
                                  ((mylib parser) "resources/parser"))))])
-        (assert-false (manifest-resources x))))
-
-    (resources-absent-still-false
-      ;; 无 (resources ...) 字段 → manifest-resources = #f(原行为)
-      (let ([x (m '(manifest (name "a") (version "0.1.0")))])
-        (assert-false (manifest-resources x))))
+        (assert-string= "suite" (manifest-name x))
+        (assert-equal 1 (length (manifest-deps x)))))
 
     (resources-v3-no-validation
       ;; v3 不再校验路径:abs path / .. / // / dup 全部静默接受

@@ -5,21 +5,15 @@
   (export suite)
   (import (chezscheme)
           (tests chandler harness)
+          (tests chandler fixtures)
           (chandler hash)
+          (chandler sexp)
           (chandler lock))
 
   (define (ld name deps natives . scope)
     (make-locked-dep name 'git (string-append "https://x/" (symbol->string name))
                      'tag "v1.0.0" "abcdef0123456789" deps natives
                      (if (null? scope) 'runtime (car scope))
-                     #f        ; resources:测试套件按需显式提供
-                     #f))      ; v2 provenance
-
-  (define (ldr name deps natives resources . scope)
-    (make-locked-dep name 'git (string-append "https://x/" (symbol->string name))
-                     'tag "v1.0.0" "abcdef0123456789" deps natives
-                     (if (null? scope) 'runtime (car scope))
-                     resources
                      #f))      ; v2 provenance
 
   (define sample
@@ -88,25 +82,41 @@
              [back (datum->lock (lock->datum lk))])
         (assert-equal 'dev (locked-dep-scope (lock-ref back 'test)))))
 
-    ;; ── resources 字段(designs/11 §6.3 标准化快照)──
-    (resources-roundtrip
-      (let* ([rs (list (cons '(http) "resources")
-                       (cons '(http server) "resources/server"))]
-             [lk (make-lock 1 "x" "0.1.0"
-                   (list (ldr 'http '() '() rs)))]
-             [back (datum->lock (lock->datum lk))])
-        (assert-equal rs (locked-dep-resources (lock-ref back 'http)))))
+    ;; ── resources 字段已删(designs/09 §6)──
+    ;; v3 的资源靠 method B 目录约定定位,lock 里没有可记的东西。
+    ;; 契约是**旧 lock 的 (resources …) 读取时静默忽略**(降低升级摩擦):
+    ;; 既不报错,也不影响其余字段。
+    (old-lock-resources-field-silently-ignored
+      (let ([back (datum->lock
+                    '(lock (format 1) (manifest-sha256 "x") (chandler "0.1.0")
+                       (resolved
+                         (http (source (git "https://x/http")) (pin (tag "v1.0.0"))
+                               (rev "abcdef0123456789") (deps) (natives)
+                               (resources ((http) "resources")
+                                          ((http server) "resources/server"))))))])
+        (let ([d (lock-ref back 'http)])
+          ;; 其余字段照常解析,不被那个陌生字段带偏
+          (assert-equal 'http (locked-dep-name d))
+          (assert-string= "abcdef0123456789" (locked-dep-rev d))
+          (assert-string= "https://x/http" (locked-dep-source-loc d))
+          (assert-equal 'runtime (locked-dep-scope d)))))
 
-    (resources-absent-roundtrip
-      ;; 无 resources 字段的 lock(老文件) → 读回 #f(向后兼容)
-      (let* ([lk (make-lock 1 "x" "0.1.0" (list (ld 'http '() '())))]
-             [back (datum->lock (lock->datum lk))])
-        (assert-false (locked-dep-resources (lock-ref back 'http)))))
+    ;; 畸形的旧 resources 同样不该炸 —— 现在根本不解析它。
+    ;; (先前 parse-locked-resources 会对形状不符的项报错,而这个字段永远不由我们写出。)
+    (old-lock-malformed-resources-does-not-raise
+      (let ([back (datum->lock
+                    '(lock (format 1) (manifest-sha256 "x") (chandler "0.1.0")
+                       (resolved
+                         (http (source (git "https://x/http")) (pin (tag "v1.0.0"))
+                               (rev "abcdef0123456789") (deps) (natives)
+                               (resources "not-a-pair" 42)))))])
+        (assert-string= "abcdef0123456789" (locked-dep-rev (lock-ref back 'http)))))
 
-    (resources-accessor
-      (let ([rs (list (cons '(http) "resources"))])
-        (assert-equal rs (locked-dep-resources
-                          (ldr 'http '() '() rs)))))
+    ;; 我们自己写出的 lock 里不再出现 (resources …)
+    (written-lock-has-no-resources-field
+      (let ([txt (canonical-string
+                   (lock->datum (make-lock 1 "x" "0.1.0" (list (ld 'http '() '())))))])
+        (assert-false (substr? txt "resources"))))
 
     ;; ── v3 files 字段(D15)──
 
