@@ -407,6 +407,8 @@
 
   ;; .so 目标的拓扑序:依赖在前,入口在后。对非内建边做 DFS 后序;
   ;; 不认识的依赖(内建)跳过。
+  ;; 后序结果**逆序累积、末尾一次 reverse** —— 原先每收一个目标就
+  ;; (append out (list so)),把已排好的整段复制一遍(对节点数是平方级)。
   (define (topo-sort-sos nodes)
     (let ((by-so (make-hashtable string-hash string=?))
           (state (make-hashtable string-hash string=?))   ; so → 'done
@@ -424,9 +426,9 @@
                            (dn  (hashtable-ref by-so dso #f)))
                       (when dn (visit (list dn)))))
                   (non-builtin-edges n))
-                (set! out (append out (list so))))))
+                (set! out (cons so out)))))
           ns))
-      out))
+      (reverse out)))
 
   ;; 组装 .boot:基础 boot 在前,然后是拓扑排好的 .so 输入。
   (define (link-boot-file topo-sos target)

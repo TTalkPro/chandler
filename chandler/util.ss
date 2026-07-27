@@ -88,10 +88,16 @@
                  [else (loop (+ i 1))])))]))
 
   ;; ── 连接:以 sep 连接字符串列表 ──
+  ;; 走 string port 而非 fold-left + string-append:后者每接一段都重新分配并复制
+  ;; 已有前缀,对总长度是平方级。本函数在指纹计算、库名→路径、libdirs 串拼接
+  ;; 这些逐节点/逐边跑的地方都在用。
   (define (string-join lst sep)
-    (cond
-      [(null? lst) ""]
-      [else (fold-left (lambda (acc s) (string-append acc sep s)) (car lst) (cdr lst))]))
+    (if (null? lst)
+        ""
+        (let ([op (open-output-string)])
+          (display (car lst) op)
+          (for-each (lambda (s) (display sep op) (display s op)) (cdr lst))
+          (get-output-string op))))
 
   ;; ── alist 访问:(alist-ref al key [default]) ──
   (define alist-ref

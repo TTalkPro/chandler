@@ -45,24 +45,33 @@
   (define (ensure-parent path) (ensure-dir (parent-dir path)))
 
   ;; ── 目录枚举(原生 directory-list;不含 . ..)──
+  ;; 读不动(权限等)→ '():ignore-errors 给回 #f,直接喂 sort 会当场抛,
+  ;; 于是一个不可读的子目录能让整趟 files-under 崩掉。
   (define (dir-entries dir)
     (if (file-directory? dir)
-        (sort string<? (ignore-errors (directory-list dir)))
+        (sort string<? (or (ignore-errors (directory-list dir)) '()))
         '()))
 
   (define (dir-empty? dir) (null? (dir-entries dir)))
 
-  ;; 递归列出目录下所有普通文件(绝对路径)
+  ;; 递归列出目录下所有普通文件(绝对路径),深度优先、字典序。
+  ;;
+  ;; **单向累积,不用 append**:原实现是 (append acc (files-under full)),每遇到一个
+  ;; 子目录就把已累积的表整份复制一遍 —— 对文件数是平方级。而本函数是全仓最热的 FS
+  ;; 原语(pack 清单、verify、enumerate-lib、copy-tree!、native 扫描全走它),前缀一大
+  ;; 就很痛。改成把结果 cons 进同一个累积器、最后一次 reverse:线性,且顺序变得确定
+  ;; (先前是「同级文件逆序、子目录结果追加在后」的混合序,调用方普遍还得再 list-sort)。
   (define (files-under dir)
-    (if (file-directory? dir)
-        (fold-left
-          (lambda (acc name)
-            (let ([full (path-join* dir name)])
-              (if (file-directory? full)
-                  (append acc (files-under full))
-                  (cons full acc))))
-          '() (dir-entries dir))
-        '()))
+    (reverse (files-under/acc dir '())))
+
+  (define (files-under/acc dir acc)
+    (fold-left
+      (lambda (acc name)
+        (let ([full (path-join* dir name)])
+          (if (file-directory? full)
+              (files-under/acc full acc)
+              (cons full acc))))
+      acc (dir-entries dir)))
 
   ;; ── 删除(原生递归)──
   (define (rm-rf path)
