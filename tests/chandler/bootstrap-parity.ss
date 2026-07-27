@@ -211,15 +211,51 @@
       ;; 真实路径(仓库根、前缀、解释器、libdirs),含 $ / 空格 / 单引号的路径
       ;; 必须原样穿过 /bin/sh —— 先前两边都是「加双引号」,而双引号内 $ ` \ "
       ;; 对 sh 仍然特殊。
-      (let ([env (bootstrap-env '(q))])
+      (let ([env (bootstrap-env '(q q-sh q-cmd win? mt-string die))])
+        (eval '(define (win?) #f) env)          ; 钉在 POSIX 侧比
         (for-each
-          (lambda (s) (assert-string= (shell-quote s) (eval `(q ,s) env)))
+          (lambda (s)
+            (assert-string= (parameterize ([windows-shell? #f]) (shell-quote s))
+                            (eval `(q ,s) env)))
           (list "plain" "with space" "we$ird" "back`tick" "quo\"te" "sin'gle" ""))))
+
+    ;; **Windows 侧同样要 parity**(D33)。bootstrap 是 Windows 上装 chandler 的
+    ;; 唯一入口 —— 它的引用错了,后面什么都不用谈。两边都用 MSVCRT 反斜杠规则,
+    ;; 逐字比对生成的串。
+    (bootstrap-cmd-quote-parity
+      (let ([env (bootstrap-env '(q q-sh q-cmd win? mt-string die))])
+        (eval '(define (win?) #t) env)          ; 钉在 Windows 侧比
+        (for-each
+          (lambda (s)
+            (assert-string= (parameterize ([windows-shell? #t]) (shell-quote s))
+                            (eval `(q ,s) env)))
+          (list "plain"
+                "with space"
+                "C:\\Users\\t\\proj"           ; 普通 Windows 路径
+                "C:\\Program Files\\x"           ; 含空格
+                "ends\\with\\backslash\\"      ; 结尾反斜杠(要加倍,否则吃掉收尾引号)
+                "amp&ersand"                         ; cmd 元字符
+                "pipe|and>redirect<"
+                "caret^and(paren)"
+                "percent%20encoded"                  ; % 刻意放行,两侧都不拒
+                ""))))
+
+    ;; 两侧对**无法安全传递**的字符都硬错(一个 raise、一个 exit,故只比「拒不拒」)
+    (bootstrap-cmd-quote-rejects-same-inputs
+      (let ([env (bootstrap-env '(q q-sh q-cmd win? mt-string die))])
+        (eval '(define (win?) #t) env)
+        (eval '(define (die code fmt . args) (raise (cons (quote bootstrap-die) code))) env)
+        (for-each
+          (lambda (s)
+            (assert-raises (lambda () (parameterize ([windows-shell? #t]) (shell-quote s))))
+            (assert-raises (lambda () (eval `(q ,s) env))))
+          (list "quo\"te" "line\nbreak" "cr\rhere"))))
 
     (bootstrap-shell-quote-survives-sh
       ;; 端到端:引用后的串交 /bin/sh 必须原样回来
-      (let ([env (bootstrap-env '(q))]
+      (let ([env (bootstrap-env '(q q-sh q-cmd win? mt-string die))]
             [nasty "a b $HOME `id` \"d\" 'e'"])
+        (eval '(define (win?) #f) env)
         (let ([r (run-capture "sh" (list "-c" (string-append "printf %s "
                                                              (eval `(q ,nasty) env))))])
           (assert-equal 0 (proc-result-code r))
