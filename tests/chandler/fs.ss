@@ -30,6 +30,75 @@
       (assert-string= "c" (base-name "/a/b/c"))
       (assert-string= "solo" (base-name "solo")))
 
+    ;; ══════════════════════════════════════════════════════════════
+    ;; 反斜杠路径(D36)
+    ;;
+    ;; Chez 在 Windows 上返回反斜杠形路径(current-directory /
+    ;; library-object-filename / directory-list)。只认 `/` 的原语不会崩,
+    ;; 只会**悄悄给出错误答案** —— 下面每条都是那类静默错误的定位点。
+    ;; ══════════════════════════════════════════════════════════════
+
+    (parent-base-backslash
+      (assert-string= "C:\\a\\b" (parent-dir "C:\\a\\b\\c"))
+      (assert-string= "foo.ss" (base-name "C:\\proj\\foo.ss"))
+      ;; 混合分隔符(我们自己拼的 `/` 接上 Chez 给的 `\`)
+      (assert-string= "x" (base-name "C:/proj\\x"))
+      (assert-string= "C:/proj" (parent-dir "C:/proj\\x")))
+
+    ;; "C:/foo" 的父目录是 C 盘的**根**("C:/"),不是 "C:" ——
+    ;; 后者是 drive-relative 的「当前目录」,含义完全不同,ensure-dir 会往那上面递归
+    (parent-dir-of-drive-root
+      (assert-string= "C:/" (parent-dir "C:/foo"))
+      (assert-string= "C:\\" (parent-dir "C:\\foo")))
+
+    (path-join-respects-backslash-tail
+      ;; a 已以分隔符收尾(两种都算)就不再补
+      (assert-string= "C:\\a\\b" (path-join* "C:\\a\\" "b"))
+      (assert-string= "C:/a/b" (path-join* "C:/a/" "b"))
+      (assert-string= "C:\\a/b" (path-join* "C:\\a" "b")))
+
+    ;; **本次 Windows 工作里危害最大的一处**:认不出 `_build` / `.git` 段时
+    ;; unmanaged-path? 恒假,install 清单与 chandler verify 会把生成物和
+    ;; 仓库元数据当成受管文件收进去 —— 全程不报错。
+    (path-segments-and-unmanaged-with-backslash
+      (assert-true (path-has-segment? "a\\_build\\x.so" '("_build")))
+      (assert-true (path-has-segment? "C:\\proj\\.git\\config" '(".git")))
+      (assert-true (path-has-segment? "a/_build\\x" '("_build")))     ; 混合
+      (assert-false (path-has-segment? "a\\_buildx\\y" '("_build"))) ; 整段才算
+      (assert-true (unmanaged-path? "_vendor\\g\\_build\\o.so"))
+      (assert-true (unmanaged-path? "_vendor\\g\\.git\\HEAD"))
+      (assert-false (unmanaged-path? "_vendor\\g\\src\\g.ss")))
+
+    ;; relativize 不能做裸前缀匹配:root 是我们拼的(`/`)、abs 来自 Chez(`\`),
+    ;; 前缀对不上就会把绝对路径当成相对路径写进 lock
+    (relativize-across-separator-styles
+      (assert-string= "b/c.ss" (relativize "/a" "/a/b/c.ss"))
+      (assert-string= "b/c.ss" (relativize "C:\\a" "C:\\a\\b\\c.ss"))
+      (assert-string= "b/c.ss" (relativize "C:/a" "C:\\a\\b\\c.ss"))   ; 混合
+      (assert-string= "b/c.ss" (relativize "C:\\a\\" "C:\\a\\b\\c.ss")) ; root 带尾分隔符
+      ;; 结果的分隔符归一到 `/` —— 这些相对路径要写进 lock 并跨平台比对
+      (assert-false (has-path-sep? "nosep"))
+      (assert-string= "b/c" (relativize "C:\\a" "C:\\a\\b\\c")))
+
+    ;; 不在 root 之下 → 原样归还(只归一分隔符),不能悄悄剪出一个错的相对路径
+    (relativize-outside-root
+      (assert-string= "/other/x" (relativize "/a" "/other/x"))
+      (assert-string= "C:/other/x" (relativize "C:\\a" "C:\\other\\x"))
+      (assert-string= "/a" (relativize "/a/b" "/a")))          ; abs 比 root 短
+
+    ;; absolute-path? 收紧到「字母 + `:` + 分隔符」
+    (absolute-path-drive-forms
+      (assert-true (absolute-path? "/x"))
+      (assert-true (absolute-path? "\\x"))                    ; Windows 根相对
+      (assert-true (absolute-path? "C:\\x"))
+      (assert-true (absolute-path? "C:/x"))
+      ;; drive-relative:**不是**绝对路径(「C 盘当前目录下的 foo」)
+      (assert-false (absolute-path? "C:foo"))
+      ;; POSIX 上一个真的叫 a:b 的相对路径,先前会被误判成绝对
+      (assert-false (absolute-path? "a:b"))
+      (assert-false (absolute-path? "rel/x"))
+      (assert-false (absolute-path? "")))
+
     (ensure-and-entries
       (let* ([root (tmp)] [nested (string-append root "/x/y/z")])
         (ensure-dir nested)
@@ -85,6 +154,73 @@
         (assert-false (file-directory? (string-append root "/a")))
         ;; 幂等:删不存在的路径不报错
         (rm-rf (string-append root "/a"))))
+
+    ;; ══════════════════════════════════════════════════════════════
+    ;; rm-rf 的失败语义(C7)
+    ;;
+    ;; 先前每步都套 ignore-errors,于是 Windows 上「只读文件」与「被占用的
+    ;; DLL/exe」两类失败被完全吞掉,调用方以为清干净了 —— 残件要到下一次操作
+    ;; 才炸,报的错离现场很远。
+    ;; ══════════════════════════════════════════════════════════════
+
+    ;; 只读文件:清掉只读位后重试一次(Windows 上这是 git 的 .git/objects/**
+    ;; 删不掉的唯一原因)。POSIX 上本来就删得掉,这里验证重试路径不添乱。
+    (rm-rf-handles-read-only-files
+      (let ([root (tmp)])
+        (write-text (string-append root "/ro/a.txt") "x")
+        (chmod (string-append root "/ro/a.txt") #o444)
+        (rm-rf (string-append root "/ro"))
+        (assert-false (file-directory? (string-append root "/ro")))))
+
+    ;; 删不掉时**抛**,不再静默成功。用一个不可写的父目录制造真删不掉的情形。
+    (rm-rf-raises-when-it-cannot-delete
+      (let ([root (tmp)])
+        (write-text (string-append root "/locked/a.txt") "x")
+        (chmod (string-append root "/locked") #o500)          ; r-x:不能删其中的项
+        (let ([raised (guard (e (#t #t)) (rm-rf (string-append root "/locked/a.txt")) #f)])
+          (chmod (string-append root "/locked") #o700)        ; 先还原,好让 harness 清得掉
+          (assert-true raised))))
+
+    ;; 幂等语义不变:目标不存在 = 成功,不抛
+    (rm-rf-missing-is-still-silent
+      (rm-rf "/no/such/path/at/all"))
+
+    ;; move-file:目标已存在时也要成功。
+    ;;
+    ;; **这条在 POSIX 上验证不了它真正要防的东西** —— POSIX 的 rename 本来就
+    ;; 原子覆盖,把「先删目标」那行去掉,本测试照样绿。它守的是**契约**
+    ;; (目标存在时 move 必须成功),而「Windows 上 rename 不覆盖」这条只能等
+    ;; C9 的 Windows CI 才真正被跑到。不写成好像已经验证过了。
+    (move-file-overwrites-existing
+      (let* ([root (tmp)]
+             [a (string-append root "/a")] [b (string-append root "/b")])
+        (write-text a "new") (write-text b "old")
+        (move-file a b)
+        (assert-string= "new" (read-file-string b))
+        (assert-false (file-exists? a))))
+
+    ;; system-temp-dir 认三个变量,优先级 TMPDIR > TEMP > TMP
+    (system-temp-dir-honors-windows-vars
+      (let ([saved-tmpdir (getenv "TMPDIR")]
+            [saved-temp (getenv "TEMP")]
+            [saved-tmp (getenv "TMP")])
+        (dynamic-wind
+          (lambda () (void))
+          (lambda ()
+            (putenv "TMPDIR" "") (putenv "TEMP" "") (putenv "TMP" "")
+            (putenv "TMP" "/tmpvar-tmp")
+            (assert-string= "/tmpvar-tmp" (system-temp-dir))
+            (putenv "TEMP" "/tmpvar-temp")
+            (assert-string= "/tmpvar-temp" (system-temp-dir))   ; TEMP 压过 TMP
+            (putenv "TMPDIR" "/tmpvar-tmpdir")
+            (assert-string= "/tmpvar-tmpdir" (system-temp-dir)) ; TMPDIR 最优先
+            ;; 空串视为未设(Chez 的 putenv 删不掉变量,还原只能置 "")
+            (putenv "TMPDIR" "")
+            (assert-string= "/tmpvar-temp" (system-temp-dir)))
+          (lambda ()
+            (putenv "TMPDIR" (or saved-tmpdir ""))
+            (putenv "TEMP" (or saved-temp ""))
+            (putenv "TMP" (or saved-tmp ""))))))
 
     (sweep-empty
       (let ([root (tmp)])

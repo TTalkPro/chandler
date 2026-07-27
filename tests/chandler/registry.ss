@@ -544,6 +544,68 @@
         (let ([issues (doctor-global libdir)])
           (assert-true (member 'active-sidecar-drift (map car issues))))))
 
+    ;; ══════════════════════════════════════════════════════════════
+    ;; 名字可移植性(C7,designs/14 §10)
+    ;;
+    ;; 两条都**不自动改名** —— 改名会让包名与磁盘路径失去对应,
+    ;; `(import (foo))` 找不到自己的文件,错误现场离原因很远。
+    ;; ══════════════════════════════════════════════════════════════
+
+    ;; Windows 保留设备名:大小写不敏感,**带扩展名也算**(`aux.ss` 一样造不出来)
+    (windows-reserved-name-recognition
+      (for-each (lambda (n) (assert-true (windows-reserved-name? n)))
+                '("con" "CON" "Aux" "nul" "prn" "com1" "lpt9" "aux.ss" "NUL.txt"))
+      (for-each (lambda (n) (assert-false (windows-reserved-name? n)))
+                '("console" "auxiliary" "com" "com10" "lpt" "greet" "connect")))
+
+    ;; POSIX 上装得下 → 只警告,不拦。「这个包在 Windows 上装不了」是包作者
+    ;; 该知道的事,但不该由此拦住一次本地安装。
+    (reserved-name-warns-but-installs-on-posix
+      (let* ([libdir (mktmp)]
+             [src (make-lib-src "aux")]
+             [version "1.0.0"])
+        (silently (lambda () (install-global src libdir (mk-meta "aux" version) version '())))
+        (assert-true (registered? (read-registered libdir "aux")))))
+
+    ;; doctor 是可移植性审计 → 两个平台都报(Linux 上装好的前缀会被拷到
+    ;; Windows,或被 CI 在 Windows 上重建)
+    (doctor-reports-windows-reserved-name
+      (let* ([libdir (mktmp)]
+             [src (make-lib-src "aux")]
+             [version "1.0.0"])
+        (silently (lambda () (install-global src libdir (mk-meta "aux" version) version '())))
+        (assert-true (member 'windows-reserved-name (map car (doctor-global libdir))))))
+
+    ;; 大小写撞名:NTFS/APFS 上 Foo 与 foo 落到同一个目录,registry 里却是两条
+    ;; 记录 —— 继续装下去必然互相覆盖。**两个平台都硬错**(这不是「Windows 上
+    ;; 不行」,而是「这两个包在那里是同一个」)。
+    (case-insensitive-name-clash-is-rejected
+      (let* ([libdir (mktmp)]
+             [v "1.0.0"])
+        (install-global (make-lib-src "greet") libdir (mk-meta "greet" v) v '())
+        (assert-raises
+          (lambda ()
+            (install-global (make-lib-src "Greet") libdir (mk-meta "Greet" v) v '())))))
+
+    ;; 同名同大小写的重装当然照旧(不能把「覆盖装」误判成撞名)
+    (same-name-reinstall-is-not-a-clash
+      (let* ([libdir (mktmp)] [v1 "1.0.0"] [v2 "2.0.0"])
+        (install-global (make-lib-src "greet") libdir (mk-meta "greet" v1) v1 '())
+        (install-global (make-lib-src "greet") libdir (mk-meta "greet" v2) v2 '())
+        (assert-true (registered-has-version? (read-registered libdir "greet") v2))))
+
+    ;; doctor 报已经躺在盘上的撞名(比如两个包分别在两台机器上装的,前缀合并过来)
+    (doctor-reports-case-insensitive-clash
+      (let ([libdir (mktmp)])
+        (for-each
+          (lambda (n)
+            (write-registered! libdir n
+              (registered-add-version (make-registered (string->symbol n) 'lib)
+                                      (make-version-entry "1.0.0" "t" '(path "/x") 'test)))
+            (ensure-dir (join-paths libdir n "1.0.0")))
+          '("Foo" "foo"))
+        (assert-true (member 'case-insensitive-name-clash (map car (doctor-global libdir))))))
+
     ;; sidecar 不能被当成 registry 文件扫进来(只认 .ss 后缀)
     (active-sidecar-not-listed-as-registry
       (let* ([libdir (mktmp)]
