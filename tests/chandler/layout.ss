@@ -52,11 +52,6 @@
       (assert-true (native-so? "x/native/foo.so"))
       (assert-false (native-so? "x/foo.ss")))
 
-    (library-name-to-path
-      (assert-string= "a/b.ss" (library-name->path '(a b)))
-      (assert-string= "http/client.ss" (library-name->path '(http client)))
-      (assert-string= "foo.ss" (library-name->path '(foo))))
-
     (srcdir-join-default
       (assert-string= "lib/http" (srcdir-join "lib/http" "."))
       (assert-string= "lib/http" (srcdir-join "lib/http" ""))

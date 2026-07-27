@@ -62,15 +62,6 @@
         (assert-true (registered-has-version? r "1.0.0"))
         (assert-false (registered-has-version? r "2.0.0"))))
 
-    (version-entry-lookup
-      (let* ([e1 (make-version-entry "1.0.0" "t1" '(path "/a") 'chandler)]
-             [e2 (make-version-entry "2.0.0" "t2" '(git "https://x") 'chandler)]
-             [r (make-registered 'myapp 'app
-                                 (list (cons "1.0.0" e1) (cons "2.0.0" e2)))])
-        (assert-equal e1 (registered-version-entry r "1.0.0"))
-        (assert-equal e2 (registered-version-entry r "2.0.0"))
-        (assert-false (registered-version-entry r "3.0.0"))))
-
     ;; ── 函数式更新:add ──
 
     (add-version-new-appends
@@ -90,7 +81,7 @@
              [r1 (registered-add-version r0 e2)])
         (assert-equal 1 (length (registered-versions r1)))
         (assert-string= "new" (version-entry-installed-at
-                                (registered-version-entry r1 "1.0.0")))))
+                                (cdar (registered-versions r1))))))
 
     (add-version-preserves-active
       (let* ([e1 (make-version-entry "1.0.0" "..." '(path "/x") 'chandler)]
@@ -157,12 +148,6 @@
       (let* ([e (make-version-entry "1.0.0" "..." '(path "/x") 'chandler)]
              [r0 (make-registered 'mylib 'lib (list (cons "1.0.0" e)))])
         (assert-raises (lambda () (registered-set-active r0 "1.0.0")))))
-
-    (clear-active-basic
-      (let* ([e1 (make-version-entry "1.0.0" "..." '(path "/x") 'chandler)]
-             [r0 (make-registered 'myapp 'app (list (cons "1.0.0" e1)) "1.0.0")])
-        (let ([r1 (registered-clear-active r0)])
-          (assert-false (registered-active r1)))))
 
     ;; ── 序列化 ──
 

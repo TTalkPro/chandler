@@ -150,17 +150,17 @@
         (manifest? (m '(manifest (name "a") (version "0.1.0")
                          (resources ((mylib) "p1") ((mylib) "p2")))))))
 
-    ;; ── (runtime-subset ...) 字段 ──
-    (runtime-subset-basic
+    ;; ── (runtime-subset ...) 字段:已删,旧 manifest 仍须解析成功 ──
+    ;; 消费侧读的一直是 (chandler install) 里硬编码的 chandler-runtime-sublibs,
+    ;; manifest 那个字段零引用。这里只钉「写了也不报错」。
+    (runtime-subset-silently-ignored
       (let ([x (m '(manifest (name "chandler") (version "0.2.0")
                       (runtime-subset hash util fs)))])
-        (assert-equal '(hash util fs) (manifest-runtime-subset x))))
+        (assert-string= "chandler" (manifest-name x))
+        (assert-string= "0.2.0" (manifest-version x))))
 
-    (runtime-subset-absent
-      (let ([x (m '(manifest (name "a") (version "0.1.0")))])
-        (assert-false (manifest-runtime-subset x))))
-
-    (runtime-subset-non-symbol
-      (assert-raises
-        (lambda () (m '(manifest (name "a") (version "0.1.0")
-                        (runtime-subset hash "util"))))))))
+    ;; 该字段不再被解析,故其内容也不再被校验 —— 非 symbol 项不再报错
+    (runtime-subset-no-longer-validated
+      (assert-true
+        (manifest? (m '(manifest (name "a") (version "0.1.0")
+                         (runtime-subset hash "util"))))))))

@@ -6,6 +6,7 @@
 
 (library (tests chandler fixtures)
   (export mktmp write-file read-file trim substr?
+          lock-ref
           git-init! git-commit! git-in
           manifest-text lib-umbrella-text
           make-lib-repo make-native-lib make-app)
@@ -13,7 +14,14 @@
           (tests chandler harness)
           (chandler util)
           (chandler fs)
+          (chandler lock)
           (chandler proc))
+
+  ;; ── lock 里按名取一条依赖 ──
+  ;; 曾是 (chandler lock) 的导出,但生产代码从不用它 —— 只有断言在用。
+  ;; 收进夹具:它是测试脚手架,不是产品 API。
+  (define (lock-ref lk name)
+    (find (lambda (d) (eq? (locked-dep-name d) name)) (lock-deps lk)))
 
   ;; ── 临时目录 / 文件 ──
   ;; 登记进 harness,由 run-suites 逐用例清。空串(mktemp 失败,如磁盘满)当场报错 ——

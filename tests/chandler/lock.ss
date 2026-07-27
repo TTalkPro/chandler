@@ -131,19 +131,6 @@
         (assert-equal 2 (length (lock-files lk)))
         (assert-equal fls (lock-files lk))))
 
-    (files-with-files
-      (let* ([lk0 (make-lock 1 "x" "0.1.0" '())]
-             [fls (list (cons "src/a.ss" "h1"))]
-             [lk1 (with-files lk0 fls)])
-        (assert-equal fls (lock-files lk1))))
-
-    (files-sha256-lookup
-      (let* ([fls (list (cons "src/a.ss" "h1") (cons "ta6le/a.so" "h2"))]
-             [lk (make-lock 1 "x" "0.1.0" '() fls)])
-        (assert-string= "h1" (lock-file-sha256 lk "src/a.ss"))
-        (assert-string= "h2" (lock-file-sha256 lk "ta6le/a.so"))
-        (assert-false (lock-file-sha256 lk "missing"))))
-
     (files-roundtrip
       (let* ([fls (list (cons "src/myapp.ss" "deadbeef")
                           (cons "ta6le/myapp.so" "cafebabe")
