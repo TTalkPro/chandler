@@ -1,12 +1,14 @@
 # 14 — Windows 可移植性
 
-> 状态: **大部分实现**。本文是 Windows 支持的权威设计。
-> 已落地:**D33**(子进程引用层)、**D34**(`.cmd` 启动器)、**D35**(active sidecar)、
-> **D37**(`-j` 退化串行)、**D38**(换行/字节一致),以及 §6 的 `\` 穿越校验(P1-2)
-> —— 对应 TASK.md 的 C1–C5。
-> 未落地:**D36**(路径原语认 `\`)与 §7/§10 的其余条目,即 TASK.md 的 C6–C7、C9。
-> **在 C9 的 Windows CI 跑绿前,Windows 支持一律「未验证」** ——
-> 已落地的部分全部由平台参数化测试在 Linux 上逐字断言,但没有一行在真 Windows 上跑过。
+> 状态: **代码侧已完成,尚未在 Windows 上验证**。本文是 Windows 支持的权威设计。
+> D33–D38 **全部落地**(TASK.md 的 C1–C8);只剩 **C9**:测试套件去 shell 依赖
+> \+ Windows CI。
+>
+> **在 C9 跑绿前,Windows 支持一律标注「未验证」。** 已落地的部分由平台参数化
+> 测试在 Linux 上逐字断言(cmd 引用规则另与 MSVCRT 参考实现交叉验证过),
+> 但**没有一行在真 Windows 上跑过**。少数条目连断言都做不到 ——
+> 比如「Windows 的 rename 不覆盖既有目标」,POSIX 上把补丁去掉测试照样绿,
+> 那条只能等 CI。这类地方在测试注释里逐条写明了,没有假装已经验证。
 > 来源:2026-07-27 全库平台相关代码走查(`proc` / `fs` / `layout` / `compile` /
 > `native-build` / `pack` / `registry` / `bootstrap` / 启动器)。
 
@@ -43,7 +45,7 @@
 | # | 位置 | 问题 |
 |---|------|------|
 | P0-1 ✅ | `proc.ss` 全文 | 整层假设 `/bin/sh`。`shell-quote` 是 POSIX 单引号、`env-prefix` 生成 `K=v cmd` 前缀、`cd d && `、`which` 用 `command -v`、`real-path` 用 `readlink -f`。**git / native / pack / run / exec 全线经此**。`bootstrap.ss:91` 的 `q` 是同一份实现的副本 |
-| P0-2 ⚠️ 半 | `fs.ss` `system-temp-dir` | 两半:①`make-temp-dir` 的**死循环**已修(C5)—— 现在只在目标已存在时换名重试,其余原样抛,并先确保 temp 根存在;②`system-temp-dir` 仍只认 `TMPDIR`,不认 `TEMP`/`TMP`,留给 **C7** |
+| P0-2 ✅ | `fs.ss` `system-temp-dir` | 两半都已修:①`make-temp-dir` 的**死循环**(C5);②`system-temp-dir` 现在依次认 `TMPDIR` → `TEMP` → `TMP` → 平台默认,空串视为未设(C7) |
 | P0-3 ✅ | `cli/commands.ss:325` | `Join-Path $LibDir $Name $Active …` 是 PowerShell 6+ 语法;Windows 预装的是 **5.1**,该行直接报错 → 现有 `.ps1` 启动器在裸机上必挂 |
 | P0-4 ✅ | 启动器格式 | `.PS1` 不在默认 `PATHEXT` 里 → cmd 中敲 `chandler` 找不到,被别的程序 spawn 也找不到;叠加 ExecutionPolicy |
 | P0-5 ✅ | `bin/chandler` | 只有 sh 版,Windows 上没有开发期入口 |
@@ -52,12 +54,12 @@
 
 | # | 位置 | 问题 |
 |---|------|------|
-| P1-1 | `fs.ss:32` `last-slash` 及其下游 | 只扫 `#\/`。Chez 在 Windows 上返回反斜杠路径,一旦混入 `\`:`base-name` 返回整串;`path-has-segment?`(:166)认不出 `_build`/`.git` 段 → **install 清单与 `chandler verify` 会把生成物和 `.git` 当受管文件**;`relativize`(:180)纯前缀匹配失败 |
+| P1-1 ✅ | `fs.ss:32` `last-slash` 及其下游 | 只扫 `#\/`。Chez 在 Windows 上返回反斜杠路径,一旦混入 `\`:`base-name` 返回整串;`path-has-segment?`(:166)认不出 `_build`/`.git` 段 → **install 清单与 `chandler verify` 会把生成物和 `.git` 当受管文件**;`relativize`(:180)纯前缀匹配失败 |
 | P1-2 ✅ | `runtime-paths.ss:25` | `validate-resource-segment` 只拒含 `/` 的 segment。Windows 上 `\` 同样是分隔符 → `(resource-path '(app) "..\\..\\secret")` **绕过全部四条校验**。安全相关 |
 | P1-3 ✅ | `lock.ss:134` / `install.ss:109` | `sha256-file` 读原始字节;Windows 上 git 默认 `core.autocrlf=true` → Linux 生成的 lock 在 Windows 上 hash 必然失配,`lock-fresh?` 恒判 stale、`verify` 恒报文件被改 |
-| P1-4 | `fs.ss:88` `rm-rf` | 每步 `ignore-errors`。Windows 上 ① git 的 `.git/objects/**` 只读 → 删不掉;② 已 `load-shared-object` 的 DLL / 运行中的 exe 不能删也不能改名。**失败被吞,调用方以为清干净了** |
-| P1-5 | `pack/core.ss:183` | `copy-exe!` 无条件 `chmod +x`,没有 win 分支(`launchers.ss:90` 与 `commands.ss:359` 有) |
-| P1-6 | `fs.ss:110` `move-file` | 唯一没做「rename 不覆盖」处理的搬运函数;调用点 `compile.ss:295` `touch-file!` 套了 `ignore-errors` → **Windows 上 touch 静默失效**,mtime 不更新 |
+| P1-4 ✅ | `fs.ss:88` `rm-rf` | 每步 `ignore-errors`。Windows 上 ① git 的 `.git/objects/**` 只读 → 删不掉;② 已 `load-shared-object` 的 DLL / 运行中的 exe 不能删也不能改名。**失败被吞,调用方以为清干净了** |
+| P1-5 ✅ | `pack/core.ss:183` | `copy-exe!` 无条件 `chmod +x`,没有 win 分支(`launchers.ss:90` 与 `commands.ss:359` 有) |
+| P1-6 ✅ | `fs.ss:110` `move-file` | 唯一没做「rename 不覆盖」处理的搬运函数;调用点 `compile.ss:295` `touch-file!` 套了 `ignore-errors` → **Windows 上 touch 静默失效**,mtime 不更新 |
 | P1-7 ✅ | `compile.ss:588` `run-chunk` | `-j N` 并行编译生成 `cmd & pN=$!` / `wait $pN` 的 sh 脚本再 `system "sh …"` |
 
 ### 2.4 边角(P2)
@@ -150,7 +152,7 @@ Chez 的 `system` 走 `%COMSPEC%`,即 `cmd.exe`。所以:
 **生成结果**(字符串比对),Windows 上再做端到端穿 cmd 的实跑。这与
 `bootstrap-parity` / `pack-verifier-parity` 已有的「把代码当数据测」路子一致。
 
-## 6. 路径层(D36)
+## 6. 路径层(D36)—— ✅ 已实现
 
 `fs.ss` 加一个**单一出处**的分隔符谓词,下游全部改走它:
 
@@ -169,7 +171,7 @@ Chez 的 `system` 走 `%COMSPEC%`,即 `cmd.exe`。所以:
 **`runtime-paths.ss:25` 的 `\` 穿越校验独立于本节优先修**(P1-2)—— 一行的事,
 且是安全边界,不该等整个 Windows 计划落地。
 
-## 7. 环境与临时目录
+## 7. 环境与临时目录 —— ✅ 已实现
 
 - `system-temp-dir`(`fs.ss:188`):`TMPDIR` → `TEMP` → `TMP` → 平台默认。
 - `fetch.ss:24` `default-cache-root`:Windows 上走 `%LOCALAPPDATA%\chandler\cache`,
@@ -336,11 +338,11 @@ Windows 上也接受 `/`,把 prefix 传 `%HERE%` 即可,不必为 `.cmd` 再写�
 `sha256-file` **不做任何归一化** —— 它是「文件真实字节的指纹」,归一化会让
 `chandler verify` 失去意义。
 
-## 10. 文件系统语义
+## 10. 文件系统语义 —— ✅ 已实现
 
 | 问题 | 处理 |
 |------|------|
-| `rm-rf` 遇只读文件(git 的 `.git/objects/**`) | 删除失败时先清只读属性再重试一次;**仍失败则不再吞** —— 改为可选的严格模式或至少记录,让调用方知道没清干净(P1-4) |
+| `rm-rf` 遇只读文件(git 的 `.git/objects/**`) | 清只读位(Chez 自带 `chmod`,不 shell-out)后重试一次;仍失败则**抛**。**实测发现**:Chez 的 `delete-file`/`delete-directory` 失败时**返回 `#f` 而不抛**(要抛得传 `error?` 第二参),所以原先那圈 `ignore-errors` 其实什么都没接住 —— 静默不是它造成的,是这条默认语义造成的,而 `ignore-errors` 让代码**看起来**已经考虑过失败了(P1-4) |
 | `rm-rf` / rename 遇被占用文件(已加载的 DLL、运行中的 exe) | 无法回避,但要**响亮失败**并给可操作提示(「有进程正在使用 X,关闭后重试」),而不是静默留残件 |
 | `move-file`(`fs.ss:110`) | 与 `sexp.ss` / `pack/core.ss` / `staging.ss` 对齐:目标存在先删再 rename。修掉 `touch-file!` 在 Windows 上静默失效(P1-6) |
 | `copy-exe!`(`pack/core.ss:183`) | 补 win 分支,不调 `chmod`(P1-5) |

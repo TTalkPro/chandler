@@ -4,9 +4,12 @@
 基线版本：0.1.6（d4965cf）。
 
 - **A / B 部分**（算法性能、公共代码提取）：已完成，见 [完成情况](#完成情况)。
-- **C 部分**（Windows 可移植性）：未开始。设计见
+- **C 部分**（Windows 可移植性）：**C1–C8 已完成，只剩 C9**（测试套件去 shell
+  依赖 + Windows CI）。设计见
   [designs/14-windows-portability.md](designs/14-windows-portability.md)，
-  编号 C1–C9 与该文 §13 的落地顺序一一对应。
+  编号与该文 §13 的落地顺序一一对应。
+  **在 C9 跑绿前，Windows 支持一律标注「未验证」** —— 已落地的部分由平台参数化
+  测试在 Linux 上逐字断言，但没有一行在真 Windows 上跑过。
 
 ---
 
@@ -386,41 +389,64 @@ cmd 的 `where <cand>` 行）。
 - [x] 端到端回归：install / pack / doctor / bootstrap 自举 / fetch(git) suite /
       **含 `$` 与空格的路径下 build**（B4 修过的那类）
 - [x] 测试 548 → 561，0 failed；`scheme` 与 `petite` 都跑；清空 `_build` 从零重编亦通过
-### C6. 路径原语认 `\`（D36，P1-1）
-> 设计 §6。依赖 C5 的实跑才能验证。**这是静默错误**，比崩溃危险。
+### C6. 路径原语认 `\`（D36，P1-1）✅ 已完成
+> 设计 §6。**这是静默错误**，比崩溃危险。
 
-- [ ] `fs.ss` 加单一出处的 `path-sep-char?`（`/` 或 `\`），下游全改走它：
-      `last-slash`(:32) → `parent-dir` / `base-name`、`path-join*`(:26)、
-      `path-has-segment?`(:166)、`relativize`(:180)、`rel-files-under`
-- [ ] `path-has-segment?` 修好后，`unmanaged-path?` 才能认出 `_build` / `.git`
-      —— 否则 install 清单与 `chandler verify` 会把生成物和 `.git` 当受管文件
-- [ ] `relativize` 处理**分隔符不一致**的前缀匹配：按段拆分比较，
-      不做裸字符串前缀比较
-- [ ] `absolute-path?`(:45) 收紧：`[A-Za-z]` + `:` + 后跟分隔符
-      （当前只要第二字符是 `:` 就算绝对，POSIX 上 `a:b` 会误判）
-- [ ] 测试：混合分隔符路径穿过全部六个函数
+- [x] `fs.ss` 的 `path-sep-char?`（C2 已加）下游全部改走它：`last-slash` →
+      `parent-dir` / `base-name`、`path-join*`、`path-has-segment?`、`relativize`
+- [x] 新增 `path-segments`（按任一分隔符切段）与 `normalize-seps`（归一到 `/`）
+- [x] **`path-has-segment?` 是危害最大的一处**：先前只按 `/` 切，Windows 上
+      `C:\proj\_build\x.so` 是**一整段** → `unmanaged-path?` 恒假 →
+      install 清单与 `chandler verify` 把生成物和 `.git` 收成受管文件，全程不报错
+- [x] `relativize` 改**按段比较**，不做裸字符串前缀匹配（root 是我们拼的 `/` 形、
+      abs 来自 Chez 的 `\` 形，前缀必然对不上，"相对路径"其实是绝对路径）。
+      返回值分隔符归一到 `/` —— 这些路径要写进 lock 并**跨平台比对**，
+      一边 `_vendor/g/g.ss`、一边 `_vendor\g\g.ss` 的话同一棵树算出两份清单
+- [x] `parent-dir` 补盘符根:`"C:/foo"` 的父目录是 `"C:/"`（盘根），不是 `"C:"`
+      （drive-relative 的「当前目录」，含义完全不同，`ensure-dir` 会往那上面递归）
+- [x] `absolute-path?` 收紧为「字母 + `:` + 分隔符」
+- [x] **顺带堵上收紧带来的洞**：`runtime-paths` 原先靠 `absolute-path?` 拒
+      `C:foo`；收紧后 `C:foo` 不再算绝对，会从检查之间漏过去。改为在资源段里
+      **一律拒 `:`**（顺带挡住 NTFS 的备用数据流 `file:stream`）
+- [x] 测试 7 条，覆盖纯反斜杠 / 混合分隔符 / 盘符根 / 段判定 / relativize 四态 /
+      absolute-path? 六种形态
+- [x] **验证非空转**：四处故意分叉各自变红 —— `path-has-segment?` 退回只按 `/`、
+      `last-slash` 退回只认 `/`、`relativize` 退回裸前缀、`absolute-path?` 退回宽判
 
-### C7. 环境、临时目录、文件系统语义
+### C7. 环境、临时目录、文件系统语义 ✅ 已完成
 > 设计 §7、§10。
 
-- [ ] `system-temp-dir`（`fs.ss:188`）：`TMPDIR` → `TEMP` → `TMP` → 平台默认
-      （当前 Windows 上全部临时文件写向不存在的 `/tmp`）。
-      **另一半已在 C5 修掉**：`make-temp-dir` 撞上不存在的 temp 根不再死循环，
-      而是给出「设 TMPDIR / TEMP / TMP」的可操作错误 —— 于是这条即便没做完，
-      失败方式也已经从「转到天荒地老」变成「一句话说清」
-- [ ] `fetch.ss:24` `default-cache-root`：Windows 走 `%LOCALAPPDATA%\chandler\cache`，
-      与 `registry.ss` 的 `default-user-libdir` 同一套判别
-- [ ] `move-file`（`fs.ss:110`）：目标存在先删再 rename，与 `sexp.ss` /
-      `pack/core.ss` / `staging.ss` 对齐。修掉 `touch-file!`
-      （`compile.ss:295`）在 Windows 上被 `ignore-errors` 吞掉的静默失效
-- [ ] `copy-exe!`（`pack/core.ss:183`）补 win 分支，不调 `chmod`
-- [ ] `rm-rf`（`fs.ss:88`）：遇只读文件（git 的 `.git/objects/**`）先清只读属性
-      再重试一次；**仍失败不再吞** —— 让调用方知道没清干净
-- [ ] 被占用文件（已 `load-shared-object` 的 DLL、运行中的 exe）：
-      **响亮失败** + 可操作提示（「有进程正在使用 X，关闭后重试」），不留静默残件
-- [ ] NTFS 大小写不敏感 / 保留名（`aux`/`con`/`nul`/`prn`）：
-      `install` 与 `doctor` 报错，**不自动改名**（改名会让库名与磁盘路径失去对应）
-- [ ] `.env` 键大小写差异：记录已知行为，不做归一化
+- [x] `system-temp-dir`：`TMPDIR` → `TEMP` → `TMP` → 平台默认，空串视为未设
+- [x] `fetch.ss` `default-cache-root`：Windows 走 `%LOCALAPPDATA%\chandler\cache`，
+      与 `registry.ss` 的 `default-user-libdir` 同一套判别；`XDG_CACHE_HOME`
+      显式设置时仍优先（两平台一致）
+- [x] `move-file`：目标存在先删再 rename，与 `sexp.ss` / `pack/core.ss` /
+      `staging.ss` 对齐
+- [x] `copy-exe!`（`pack/core.ss`）：Windows 上不设执行位（那里没有执行位）；
+      POSIX 侧改用 Chez 自带的 `chmod`，少起一个进程也不再经过 shell
+- [x] `rm-rf`：只读文件清只读位后重试一次（用 Chez 自带 `chmod`，**不 shell-out**
+      —— fs 是最底层库不能 import proc，手拼 `system` 等于把 B4 修掉的
+      「自己写一份引用」重新引进最底层）；仍失败则**抛**，并说明「只读或被占用」
+- [x] NTFS 名字可移植性，**不自动改名**（改名会让包名与磁盘路径失去对应）：
+      保留设备名（`con`/`prn`/`aux`/`nul`/`com1-9`/`lpt1-9`，大小写不敏感、
+      **带扩展名也算**）在 Windows 上 install 硬错、POSIX 上警告；
+      大小写撞名（`Foo` vs `foo`）**两平台都硬错**（那不是「Windows 上不行」，
+      是「这两个包在那里是同一个」）。`doctor` 两条都报（它是可移植性审计）
+- [x] `.env` 键大小写：记录已知行为，不做归一化（归一化会让 `.env` 在两个平台上
+      行为不同，而显式声明的键本就该原样使用）
+- [x] 测试 11 条（fs 5 + registry 6）
+- [x] **验证非空转**：`rm-rf` 吞失败 / `system-temp-dir` 只认 `TMPDIR` /
+      install 不查名字，三处各自变红
+
+**实测发现，值得单独记**:Chez 的 `delete-file` / `delete-directory` **失败时
+返回 `#f` 而不抛**（要抛得传 `error?` 第二参）。所以 `rm-rf` 里原先那圈
+`ignore-errors` 其实什么都没接住 —— 静默不是它造成的，是这条默认语义造成的，
+而 `ignore-errors` 让代码**看起来**已经考虑过失败了。这类「防御性代码防了个寂寞」
+比没有防御更难发现。
+
+**一条 POSIX 上验证不了的**:`move-file` 先删目标那行，去掉后测试照样绿
+（POSIX 的 rename 本来就原子覆盖）。测试注释里写明了它守的是契约、
+而非 Windows 那条语义 —— 那条只能等 C9。**没有假装已经验证过。**
 
 ### C8. 文档修正（大部分随 C3 一起做了）
 > 原计划单列，但 C3 改完之后 README 的 Windows 一节就**是错的** ——
