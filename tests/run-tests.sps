@@ -34,7 +34,8 @@
           (prefix (tests chandler registered) registered:)
           (prefix (tests chandler cli-runtime-env) cli-runtime-env:)
           (prefix (tests chandler pack-verifier-parity) pack-verifier-parity:)
-          (prefix (tests chandler bootstrap-parity) bootstrap-parity:))
+          (prefix (tests chandler bootstrap-parity) bootstrap-parity:)
+          (prefix (tests chandler launcher-parity) launcher-parity:))
 
 (define all-suites
   (list
@@ -67,6 +68,7 @@
     (cons 'registered registered:suite)
     (cons 'cli-runtime-env cli-runtime-env:suite)
     (cons 'pack-verifier-parity pack-verifier-parity:suite)
-    (cons 'bootstrap-parity bootstrap-parity:suite)))
+    (cons 'bootstrap-parity bootstrap-parity:suite)
+    (cons 'launcher-parity launcher-parity:suite)))
 
 (exit (if (run-suites all-suites) 0 1))

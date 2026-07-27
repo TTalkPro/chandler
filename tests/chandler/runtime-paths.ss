@@ -148,6 +148,19 @@
       (assert-raises (lambda () (resource-path '(mylib) "a/b")))
       (assert-raises (lambda () (find-resource-path '(mylib) "a/b"))))
 
+    ;; 反斜杠在 Windows 上同样是分隔符。先前只拒 `/`,于是这四种写法能绕过
+    ;; **全部**四条检查:不含 `/`、整串不等于 ".."、不是绝对路径、非空。
+    ;; 两个 API 都要拒 —— 路径穿越不该因为「可选版本」而降级成静默 #f。
+    (rejects-backslash-separator-in-segment
+      (for-each
+        (lambda (seg)
+          (assert-raises (lambda () (resource-path '(mylib) seg)))
+          (assert-raises (lambda () (find-resource-path '(mylib) seg))))
+        (list "a\\b"                     ; 普通反斜杠分隔
+              "..\\..\\secret"           ; 纯反斜杠穿越
+              "..\\../secret"            ; 混合分隔符穿越
+              "\\etc\\passwd")))         ; 反斜杠打头(Windows 上是根相对)
+
     (rejects-empty-and-dot-segment
       (assert-raises (lambda () (resource-path '(mylib) "")))
       (assert-raises (lambda () (resource-path '(mylib) "."))))

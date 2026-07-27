@@ -501,6 +501,27 @@
           (assert-equal 0 rc)
           (assert-true (substr? out (join-paths libdir "myapp" "1.0.0" ".chandler" "run.sps"))))))
 
+    ;; ── uninstall 清掉三种形态的 launcher(含 D34 之前的 .ps1)──
+    ;; 旧安装留下的 `.ps1` 若不带走,PATH 上就躺着一个指向已删包的僵尸启动器 ——
+    ;; 而且它比 sh 版更隐蔽:POSIX 机器上没人会去看有没有 .ps1。
+    (uninstall-removes-all-launcher-forms
+      (let* ([prefix (mktmp)]
+             [bindir (join-paths prefix "bin")]
+             [reg (registered-set-active
+                    (registered-add-version (make-registered 'myapp 'app)
+                                            (make-version-entry "1.0.0" "t" '(path "/x") 'test))
+                    "1.0.0")])
+        (write-registered! prefix 'myapp reg)
+        (write-text (join-paths prefix "myapp" "1.0.0" ".chandler" "run.sps") "#!chezscheme\n")
+        ;; 三种形态都摆上:POSIX、当前 Windows(.cmd)、旧 Windows(.ps1)
+        (for-each (lambda (f) (write-text (join-paths bindir f) "stale"))
+                  '("myapp" "myapp.cmd" "myapp.ps1"))
+        (assert-equal 0 (main (list "uninstall" "--name=myapp"
+                                    (string-append "--prefix=" prefix))))
+        (for-each (lambda (f)
+                    (assert-false (file-exists? (join-paths bindir f))))
+                  '("myapp" "myapp.cmd" "myapp.ps1"))))
+
     ;; ── usage 含 test 行(可发现性)──
     (usage-lists-test-command
       (let ([op (open-output-string)])
