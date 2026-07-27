@@ -21,8 +21,7 @@
           path-sep split-pair version-root entry->arg libdirs->arg
           resources-dirname lib-resource-dir
           native-so? lib-native-dir lib-native-path native-so-name
-          library-name->path srcdir-join
-          rel-to)
+          library-name->path srcdir-join)
   (import (chezscheme)
           (chandler util))
 
@@ -34,12 +33,6 @@
 
   (define (windows-mt? mt)
     (string-suffix? "nt" mt))
-
-  ;; ── rel-to:求 path 相对于 root 的路径 ──
-  (define (rel-to root path)
-    (if (or (string=? root ".") (string=? root ""))
-        path
-        (strip-leading path (string-append root "/"))))
 
   ;; native C 库扩展名随 OS(Chez 编译产物恒 .so,那是另一回事,见 pack 规范 §2)
   (define (so-ext)

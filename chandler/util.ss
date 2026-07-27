@@ -9,7 +9,7 @@
           char-index strip-prefix strip-suffix string-join
           alist-ref getenv* ignore-errors plural
           chandler-version
-          format-object eprintf datum->string string-subst strip-leading
+          format-object eprintf datum->string
           filter-map short-rev)
   (import (chezscheme))
 
@@ -113,23 +113,6 @@
   ;; s-expression → 其书面文本(用于生成代码/清单)
   (define (datum->string d)
     (let ([p (open-output-string)]) (write d p) (get-output-string p)))
-
-  ;; 替换字符串中每一处 from 为 to(无正则)
-  (define (string-subst s from to)
-    (let ([lf (string-length from)])
-      (let loop ([i 0] [acc '()])
-        (cond
-          [(> (+ i lf) (string-length s))
-           (apply string-append (reverse (cons (substring s i (string-length s)) acc)))]
-          [(string=? (substring s i (+ i lf)) from)
-           (loop (+ i lf) (cons to acc))]
-          [else (loop (+ i 1) (cons (string (string-ref s i)) acc))]))))
-
-  ;; 剥掉前缀(不存在则原样返回)
-  (define (strip-leading s pre)
-    (if (string-prefix? pre s)
-        (substring s (string-length pre) (string-length s))
-        s))
 
   ;; ── filter-map:map 并跳过 #f 结果(各模块自写一份的统一出处)──
   (define (filter-map f lst)
