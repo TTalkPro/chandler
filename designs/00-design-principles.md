@@ -293,7 +293,7 @@ Chandler **不依赖** R6RS library version reference 语法。版本选择完�
 |---|------|------|------|
 | D33 | `proc.ss` 改平台派发的**引用/环境层**,不追求 shell-free | 设计中 | 实测 Chez 的 `open-process-ports` 与 `system` 一样只收 shell 命令串(`&&` 会被解释)—— stock Chez 没有 argv spawn,绕不开;做对 cmd 的引用规则是唯一的路 |
 | D34 | 启动器改 **`.cmd`**,`.ps1` 下线 | 设计中 | 只依赖 cmd.exe(Windows 必有);`.CMD` 在默认 PATHEXT 里;无 ExecutionPolicy 门槛。现有 `.ps1` 用了 PS6+ 的 `Join-Path` 多段形式,在预装的 PS 5.1 上**本来就是坏的** |
-| D35 | 新增 `.registry/<name>.active` **纯文本 sidecar** | 设计中 | 启动器复杂度的唯一来源是「解析 s-expr 找 active」(sh 用 awk、ps1 用正则,两份实现两份 bug 面)。派生单行文本后两边都是一行读取,并切断「shim 需要理解 registry 格式」的耦合。`.ss` 仍是权威,`.active` 是派生,drift 由 `doctor` 检测 |
+| D35 | 新增 `.registry/<name>.active` **纯文本 sidecar** | ✅ | 启动器复杂度的唯一来源是「解析 s-expr 找 active」(sh 用 awk、ps1 用正则,两份实现两份 bug 面)。派生单行文本后两边都是一行读取,并切断「shim 需要理解 registry 格式」的耦合。`.ss` 仍是权威,`.active` 是派生,drift 由 `doctor` 检测 |
 | D36 | 路径原语同时认 `/` 与 `\`,单一出处 | 设计中 | 当前 `path-has-segment?` 只按 `/` 切段 → `unmanaged-path?` 在 Windows 上恒假 → install 清单与 `verify` 会把 `_build`/`.git` 当受管文件。**静默错误**,比崩溃危险 |
 | D37 | `-j` 并行编译在 Windows 上退化为**串行 + 提示** | 设计中 | `run-chunk` 的 sh 脚本是在补 Chez 缺失的「等多个子进程」原语,cmd 无等价物。`-j` 是开发者便利,不值得为它把 pwsh 拉进依赖 |
 | D38 | 跨平台字节一致靠 `.gitattributes` + 二进制写,**不**在 hash 时归一化 | 设计中 | 归一化会让 `sha256-file` 不再是「文件真实字节的指纹」,`chandler verify` 的语义就废了。源头钉死换行才是对的 |

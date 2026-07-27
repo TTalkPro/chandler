@@ -170,18 +170,29 @@ Chez 的 `system` 走 `%COMSPEC%`,即 `cmd.exe`。所以:
 
 ## 8. 启动器(D34 + D35)
 
-### 8.1 `.registry/<name>.active` sidecar(D35)
+### 8.1 `.registry/<name>.active` sidecar(D35)—— ✅ 已实现
 
 `install` / `switch` 在写 `.registry/<name>.ss`(**权威**)的同时,派生一个单行文本
 `.registry/<name>.active`,内容就是版本号 + **结尾换行**(POSIX `read` 需要它才返回成功;
 cmd 的 `set /p` 两种都吃)。
 
-- 写入受 **D21 per-prefix 进程锁**保护,且走 **D20 式原子写**(同目录 temp + rename)。
-- 与 `.ss` 的关系:**派生,不是真相**。`doctor` 增加一条 issue:
-  `active-sidecar-drift`(`.active` 缺失、或与 `.ss` 的 `(active …)` 不一致)。
-- `uninstall` 一并删除。
+- 唯一写入点是 `(chandler registry io)` 的 `write-registered!` / `remove-registered!`
+  —— 三个业务入口(install / uninstall / switch)都经它们,故 sidecar 不可能漏更新,
+  且天然落在 **D21 per-prefix 进程锁**内;写入走 **D20 式原子写**
+  (`fs.ss` 的 `write-text-atomic`,与 `write-canonical-file` 同一份实现)。
+- 顺序:**先写权威 `.ss`,再写 sidecar**。两者之间崩溃 → sidecar 陈旧,由 doctor 报出;
+  权威文件始终完整。反过来会出现「registry 说 v1、启动器跑 v2」且无人知晓。
+- 与 `.ss` 的关系:**派生,不是真相**。`doctor` 新增 issue
+  `active-sidecar-drift`(缺失、陈旧、或 lib 上有多余 sidecar 三种形态)。
+- lib 不写 sidecar(无 active、无启动器);`uninstall` 一并删除。
 
 **这是让 `.cmd` 可行的前提** —— 没有它,批处理要解析 s-expr,那才是真正「复杂的 shell 脚本」。
+
+**迁移**:D35 之前装的包没有 sidecar,启动器会退 70 并提示
+`not installed, or installed by an older chandler; run: chandler install`。
+`doctor` 会把它报成 `active-sidecar-drift`;重装或 `chandler switch` 一次即修复。
+不做读路径上的自愈 —— `read-registered` 在 `run`/`build`/`repl` 的热路径上,
+且不在锁内,让它写文件是错的。
 
 ### 8.2 POSIX shim(简化后)
 

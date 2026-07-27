@@ -7,12 +7,18 @@
 ## 1. 一句话目标
 
 生成两种形态的启动器,**都是稳定 shim**(D17):模板里**不嵌入 version**,
-version 由启动器运行时读 `<libdir>/.registry/<name>.ss` 的 `(active ...)` 决定;
+version 由启动器运行时读 `<libdir>/.registry/<name>.active` 决定;
 `chandler switch` 改 active,shim 文件永不重写。
+
+> **v4(D35)**:shim 读的是 `.registry/<name>.active` **纯文本 sidecar**(单行版本号
+> \+ 结尾换行),不是权威的 `<name>.ss`。先前 sh 侧用 awk、ps1 侧用正则各解析一遍
+> s-expr —— 两份实现、两份 bug 面,还让 shim 与 registry 的文件格式绑死。
+> sidecar 的写入点、顺序与 drift 检测见 `chandler/registry/io.ss`;
+> 动机见 [14-windows-portability.md §8.1](14-windows-portability.md)。
 
 | 模式 | 启动器位置 | runtime 来源 | 找 run.sps 的依据 |
 |------|----------|------------|------------------|
-| **install** | `~/.local/bin/<app>`(POSIX)/ `%LOCALAPPDATA%\chez\bin\<app>.ps1`(Windows) | 系统 runtime(运行时发现,skiff 优先) | `.registry/<app>.ss` 的 `(active "<v>")` → `<libdir>/<app>/<v>/.chandler/run.sps` |
+| **install** | `~/.local/bin/<app>`(POSIX)/ `%LOCALAPPDATA%\chez\bin\<app>.ps1`(Windows) | 系统 runtime(运行时发现,skiff 优先) | `.registry/<app>.active` 的单行版本号 → `<libdir>/<app>/<v>/.chandler/run.sps` |
 | **pack** | `<pack>/bin/<app>`(POSIX)/ `<pack>/bin/<app>.ps1`(Windows) | bundled `<pack>/bin/<runtime>` | `<pack>/share/chez/<app>/<v>/.chandler/run.sps`(同 layout) |
 | **dev** | (无独立启动器) | — | `chandler run` 子进程:实时算 `resolved-libdirs`,不走 shim |
 
@@ -21,16 +27,16 @@ version 由启动器运行时读 `<libdir>/.registry/<name>.ss` 的 `(active ...
 ```sh
 #!/bin/sh
 # <name> launcher — chandler v3 stable shim; do not edit.
-# Reads active version from .registry/<name>.ss at runtime.
+# Reads active version from .registry/<name>.active at runtime.
 NAME="<name>"
 LIBDIR="<libdir>"
-REGFILE="$LIBDIR/.registry/$NAME.ss"
+REGFILE="$LIBDIR/.registry/$NAME.active"
 
-[ -f "$REGFILE" ] || { echo "$NAME: not registered (run chandler install)" 1>&2; exit 70; }
+[ -f "$REGFILE" ] || { echo "$NAME: not installed, or installed by an older chandler; run: chandler install" 1>&2; exit 70; }
 
-# Parse (active "<version>") from the s-expr file (single awk, no Scheme needed)
-ACTIVE=$(awk '/^[[:space:]]*\(active/ { gsub(/["()]/, "", $2); print $2; exit }' "$REGFILE")
-[ -n "$ACTIVE" ] || { echo "$NAME: no active version (run chandler switch)" 1>&2; exit 70; }
+# Plain-text sidecar: one line, the active version. No s-expr parsing needed.
+IFS= read -r ACTIVE < "$REGFILE"
+[ -n "$ACTIVE" ] || { echo "$NAME: no active version; run: chandler switch" 1>&2; exit 70; }
 
 RUNNER="$LIBDIR/$NAME/$ACTIVE/.chandler/run.sps"
 [ -f "$RUNNER" ] || { echo "$NAME: active version $ACTIVE missing runner (reinstall)" 1>&2; exit 70; }
@@ -74,13 +80,12 @@ $ErrorActionPreference = 'Continue'
 $AppArgs = $args
 $Name = '<name>'
 $LibDir = '<libdir>'
-$RegFile = Join-Path $LibDir '.registry' "$Name.ss"
+$RegFile = Join-Path $LibDir '.registry' "$Name.active"
 
-if (-not (Test-Path $RegFile)) { [Console]::Error.WriteLine("$Name: not registered"); exit 70 }
+if (-not (Test-Path $RegFile)) { [Console]::Error.WriteLine("$Name: not installed, or installed by an older chandler; run: chandler install"); exit 70 }
 
-$content = Get-Content $RegFile -Raw
-if ($content -match '\(\s*active\s+"([^"]+)"\)') { $Active = $Matches[1] }
-else { [Console]::Error.WriteLine("$Name: no active version"); exit 70 }
+$Active = (Get-Content $RegFile -TotalCount 1).Trim()
+if (-not $Active) { [Console]::Error.WriteLine("$Name: no active version; run: chandler switch"); exit 70 }
 
 $Runner = Join-Path $LibDir $Name $Active '.chandler' 'run.sps'
 if (-not (Test-Path $Runner)) { [Console]::Error.WriteLine("$Name: active $Active missing runner"); exit 70 }
