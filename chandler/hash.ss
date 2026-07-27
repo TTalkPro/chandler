@@ -10,26 +10,65 @@
 
   (define mask32 #xffffffff)
 
-  (define (u32 x) (bitwise-and x mask32))
-  (define (add . xs) (u32 (apply + xs)))
-
-  (define (rotr x n)
-    (u32 (bitwise-ior (bitwise-arithmetic-shift-right x n)
-                      (bitwise-arithmetic-shift-left x (- 32 n)))))
-  (define (shr x n) (bitwise-arithmetic-shift-right x n))
+  ;; ── 32 位字运算 ──
+  ;; 每 64 字节的分块要跑约 500 次字运算,这里是全库最热的循环。用 fx* 定点运算
+  ;; 取代通用 bitwise-*,省掉泛型数值派发 —— 实测 2.7×。
+  ;;
+  ;; fx 路径要求 fixnum 容得下 5 个 32 位字之和(< 2^35),即宽度 ≥ 37 位。64 位
+  ;; Chez 是 61 位,满足;32 位构建(30 位)容不下,回落通用整数运算 —— 慢,但结果
+  ;; 逐位相同。meta-cond 在展开期决断,而 chandler 按 machine-type 分别编译,
+  ;; 故展开机即目标机。
+  (meta-cond
+    [(>= (fixnum-width) 37)
+     (define-syntax w+       (syntax-rules () [(_ x ...) (fxand (fx+ x ...) #xffffffff)]))
+     (define-syntax wxor     (syntax-rules () [(_ x ...) (fxlogxor x ...)]))
+     (define-syntax wand     (syntax-rules () [(_ x y)   (fxand x y)]))
+     (define-syntax wandnot  (syntax-rules () [(_ x y)   (fxand (fxnot x) y)]))
+     (define-syntax wor      (syntax-rules () [(_ x ...) (fxlogor x ...)]))
+     (define-syntax wshl     (syntax-rules () [(_ x n)   (fxsll x n)]))
+     (define-syntax wshr     (syntax-rules () [(_ x n)   (fxsrl x n)]))
+     ;; 左半必须先掩掉低 n 位再左移:fixnum 容不下 (fxsll x (- 32 n)) 的 2^62。
+     (define-syntax wrotr
+       (syntax-rules ()
+         [(_ x n) (let ([v x])
+                    (fxlogor (fxsrl v n)
+                             (fxsll (fxand v (fx- (fxsll 1 n) 1)) (fx- 32 n))))]))
+     (define-syntax words-ref  (syntax-rules () [(_ v i)   (fxvector-ref v i)]))
+     (define-syntax words-set! (syntax-rules () [(_ v i x) (fxvector-set! v i x)]))
+     (define (make-words n) (make-fxvector n 0))
+     (define (words xs) (list->fxvector xs))]
+    [else
+     (define-syntax w+       (syntax-rules () [(_ x ...) (bitwise-and (+ x ...) #xffffffff)]))
+     (define-syntax wxor     (syntax-rules () [(_ x ...) (bitwise-xor x ...)]))
+     (define-syntax wand     (syntax-rules () [(_ x y)   (bitwise-and x y)]))
+     (define-syntax wandnot  (syntax-rules () [(_ x y)   (bitwise-and (bitwise-not x) y)]))
+     (define-syntax wor      (syntax-rules () [(_ x ...) (bitwise-ior x ...)]))
+     (define-syntax wshl     (syntax-rules () [(_ x n)   (bitwise-arithmetic-shift-left x n)]))
+     (define-syntax wshr     (syntax-rules () [(_ x n)   (bitwise-arithmetic-shift-right x n)]))
+     (define-syntax wrotr
+       (syntax-rules ()
+         [(_ x n) (let ([v x])
+                    (bitwise-and (bitwise-ior (bitwise-arithmetic-shift-right v n)
+                                              (bitwise-arithmetic-shift-left v (- 32 n)))
+                                 #xffffffff))]))
+     (define-syntax words-ref  (syntax-rules () [(_ v i)   (vector-ref v i)]))
+     (define-syntax words-set! (syntax-rules () [(_ v i x) (vector-set! v i x)]))
+     (define (make-words n) (make-vector n 0))
+     (define (words xs) (list->vector xs))])
 
   (define K
-    '#(#x428a2f98 #x71374491 #xb5c0fbcf #xe9b5dba5 #x3956c25b #x59f111f1 #x923f82a4 #xab1c5ed5
-       #xd807aa98 #x12835b01 #x243185be #x550c7dc3 #x72be5d74 #x80deb1fe #x9bdc06a7 #xc19bf174
-       #xe49b69c1 #xefbe4786 #x0fc19dc6 #x240ca1cc #x2de92c6f #x4a7484aa #x5cb0a9dc #x76f988da
-       #x983e5152 #xa831c66d #xb00327c8 #xbf597fc7 #xc6e00bf3 #xd5a79147 #x06ca6351 #x14292967
-       #x27b70a85 #x2e1b2138 #x4d2c6dfc #x53380d13 #x650a7354 #x766a0abb #x81c2c92e #x92722c85
-       #xa2bfe8a1 #xa81a664b #xc24b8b70 #xc76c51a3 #xd192e819 #xd6990624 #xf40e3585 #x106aa070
-       #x19a4c116 #x1e376c08 #x2748774c #x34b0bcb5 #x391c0cb3 #x4ed8aa4a #x5b9cca4f #x682e6ff3
-       #x748f82ee #x78a5636f #x84c87814 #x8cc70208 #x90befffa #xa4506ceb #xbef9a3f7 #xc67178f2))
+    (words
+      '(#x428a2f98 #x71374491 #xb5c0fbcf #xe9b5dba5 #x3956c25b #x59f111f1 #x923f82a4 #xab1c5ed5
+        #xd807aa98 #x12835b01 #x243185be #x550c7dc3 #x72be5d74 #x80deb1fe #x9bdc06a7 #xc19bf174
+        #xe49b69c1 #xefbe4786 #x0fc19dc6 #x240ca1cc #x2de92c6f #x4a7484aa #x5cb0a9dc #x76f988da
+        #x983e5152 #xa831c66d #xb00327c8 #xbf597fc7 #xc6e00bf3 #xd5a79147 #x06ca6351 #x14292967
+        #x27b70a85 #x2e1b2138 #x4d2c6dfc #x53380d13 #x650a7354 #x766a0abb #x81c2c92e #x92722c85
+        #xa2bfe8a1 #xa81a664b #xc24b8b70 #xc76c51a3 #xd192e819 #xd6990624 #xf40e3585 #x106aa070
+        #x19a4c116 #x1e376c08 #x2748774c #x34b0bcb5 #x391c0cb3 #x4ed8aa4a #x5b9cca4f #x682e6ff3
+        #x748f82ee #x78a5636f #x84c87814 #x8cc70208 #x90befffa #xa4506ceb #xbef9a3f7 #xc67178f2)))
 
   (define H0
-    '#(#x6a09e667 #xbb67ae85 #x3c6ef372 #xa54ff53a #x510e527f #x9b05688c #x1f83d9ab #x5be0cd19))
+    '(#x6a09e667 #xbb67ae85 #x3c6ef372 #xa54ff53a #x510e527f #x9b05688c #x1f83d9ab #x5be0cd19))
 
   ;; padding:附 0x80,补 0 到 56 mod 64,末尾 64-bit 大端位长
   (define (pad bv)
@@ -47,63 +86,59 @@
 
   (define (sha256-bytevector bv)
     (let ([msg (pad bv)]
-          [h (list->vector (vector->list H0))])   ; 可变副本
+          [h (words H0)]            ; 可变副本
+          [w (make-words 64)])      ; 消息调度表,跨分块复用
       (let ([nchunks (div (bytevector-length msg) 64)])
         (do ([c 0 (+ c 1)]) ((= c nchunks))
-          (process-chunk! h msg (* c 64))))
+          (process-chunk! h w msg (* c 64))))
       (hash->hex h)))
 
-  (define (process-chunk! h msg off)
-    (let ([w (make-vector 64 0)])
-      ;; 前 16 字:大端读入
-      (do ([i 0 (+ i 1)]) ((= i 16))
-        (let ([b (+ off (* i 4))])
-          (vector-set! w i
-            (u32 (bitwise-ior
-                   (bitwise-arithmetic-shift-left (bytevector-u8-ref msg b) 24)
-                   (bitwise-arithmetic-shift-left (bytevector-u8-ref msg (+ b 1)) 16)
-                   (bitwise-arithmetic-shift-left (bytevector-u8-ref msg (+ b 2)) 8)
-                   (bytevector-u8-ref msg (+ b 3)))))))
-      ;; 扩展 16..63
-      (do ([i 16 (+ i 1)]) ((= i 64))
-        (let* ([s0 (bitwise-xor (rotr (vector-ref w (- i 15)) 7)
-                                (rotr (vector-ref w (- i 15)) 18)
-                                (shr (vector-ref w (- i 15)) 3))]
-               [s1 (bitwise-xor (rotr (vector-ref w (- i 2)) 17)
-                                (rotr (vector-ref w (- i 2)) 19)
-                                (shr (vector-ref w (- i 2)) 10))])
-          (vector-set! w i (add (vector-ref w (- i 16)) s0 (vector-ref w (- i 7)) s1))))
-      ;; 压缩
-      (let loop ([i 0]
-                 [a (vector-ref h 0)] [b (vector-ref h 1)] [c (vector-ref h 2)] [d (vector-ref h 3)]
-                 [e (vector-ref h 4)] [f (vector-ref h 5)] [g (vector-ref h 6)] [hh (vector-ref h 7)])
-        (if (= i 64)
-            (begin
-              (vector-set! h 0 (add (vector-ref h 0) a))
-              (vector-set! h 1 (add (vector-ref h 1) b))
-              (vector-set! h 2 (add (vector-ref h 2) c))
-              (vector-set! h 3 (add (vector-ref h 3) d))
-              (vector-set! h 4 (add (vector-ref h 4) e))
-              (vector-set! h 5 (add (vector-ref h 5) f))
-              (vector-set! h 6 (add (vector-ref h 6) g))
-              (vector-set! h 7 (add (vector-ref h 7) hh)))
-            (let* ([S1 (bitwise-xor (rotr e 6) (rotr e 11) (rotr e 25))]
-                   [ch (bitwise-xor (bitwise-and e f) (bitwise-and (bitwise-not e) g))]
-                   [temp1 (add hh S1 ch (vector-ref K i) (vector-ref w i))]
-                   [S0 (bitwise-xor (rotr a 2) (rotr a 13) (rotr a 22))]
-                   [maj (bitwise-xor (bitwise-and a b) (bitwise-and a c) (bitwise-and b c))]
-                   [temp2 (add S0 maj)])
-              (loop (+ i 1)
-                    (add temp1 temp2) a b c
-                    (add d temp1) e f g))))))
+  (define (process-chunk! h w msg off)
+    ;; 前 16 字:大端读入
+    (do ([i 0 (+ i 1)]) ((= i 16))
+      (let ([b (+ off (* i 4))])
+        (words-set! w i
+          (wor (wshl (bytevector-u8-ref msg b) 24)
+               (wshl (bytevector-u8-ref msg (+ b 1)) 16)
+               (wshl (bytevector-u8-ref msg (+ b 2)) 8)
+               (bytevector-u8-ref msg (+ b 3))))))
+    ;; 扩展 16..63
+    (do ([i 16 (+ i 1)]) ((= i 64))
+      (let* ([w15 (words-ref w (- i 15))]
+             [w2  (words-ref w (- i 2))]
+             [s0 (wxor (wrotr w15 7) (wrotr w15 18) (wshr w15 3))]
+             [s1 (wxor (wrotr w2 17) (wrotr w2 19) (wshr w2 10))])
+        (words-set! w i (w+ (words-ref w (- i 16)) s0 (words-ref w (- i 7)) s1))))
+    ;; 压缩
+    (let loop ([i 0]
+               [a (words-ref h 0)] [b (words-ref h 1)] [c (words-ref h 2)] [d (words-ref h 3)]
+               [e (words-ref h 4)] [f (words-ref h 5)] [g (words-ref h 6)] [hh (words-ref h 7)])
+      (if (= i 64)
+          (begin
+            (words-set! h 0 (w+ (words-ref h 0) a))
+            (words-set! h 1 (w+ (words-ref h 1) b))
+            (words-set! h 2 (w+ (words-ref h 2) c))
+            (words-set! h 3 (w+ (words-ref h 3) d))
+            (words-set! h 4 (w+ (words-ref h 4) e))
+            (words-set! h 5 (w+ (words-ref h 5) f))
+            (words-set! h 6 (w+ (words-ref h 6) g))
+            (words-set! h 7 (w+ (words-ref h 7) hh)))
+          (let* ([S1 (wxor (wrotr e 6) (wrotr e 11) (wrotr e 25))]
+                 [ch (wxor (wand e f) (wandnot e g))]
+                 [temp1 (w+ hh S1 ch (words-ref K i) (words-ref w i))]
+                 [S0 (wxor (wrotr a 2) (wrotr a 13) (wrotr a 22))]
+                 [maj (wxor (wand a b) (wand a c) (wand b c))]
+                 [temp2 (w+ S0 maj)])
+            (loop (+ i 1)
+                  (w+ temp1 temp2) a b c
+                  (w+ d temp1) e f g)))))
 
   (define (hash->hex h)
     (let ([op (open-output-string)])
       (do ([i 0 (+ i 1)]) ((= i 8))
-        (let ([x (vector-ref h i)])
+        (let ([x (words-ref h i)])
           (do ([s 24 (- s 8)]) ((< s 0))
-            (let ([byte (bitwise-and (bitwise-arithmetic-shift-right x s) #xff)])
-              (display (hex2 byte) op)))))
+            (display (hex2 (bitwise-and (bitwise-arithmetic-shift-right x s) #xff)) op))))
       (get-output-string op)))
 
   (define hex-digits "0123456789abcdef")
