@@ -91,18 +91,28 @@
 
   ;; ── 逐个依赖:在**它自己的 _vendor/ 树里**就地编译,产物留在原地 ──
   ;; **拓扑序**要紧:A 依赖 B 时,编 A 需要 B 的对象已就位。故按 lock 的 topo-order
-  ;; 逐个编,已编好的上游作为**预构建对象根**挂进去(见 upstream-prebuilt-roots)。
+  ;; 逐个编,已编好的上游作为**预构建对象根**挂进去(见 build-deps 的增量累积)。
   ;;
   ;; gate 根与 fallback 根在整趟里是常量,故**提到循环外算一次**:先前每个依赖都要
   ;; 重新读一遍项目 manifest(gate-prebuilt-roots),并重新扫一遍整个全局前缀的
-  ;; .registry/(fallback-roots → global-libdir)。upstream-prebuilt-roots 同理 ——
-  ;; 它先前对每个依赖都把 lock 重读 + 重做一次 topo-order,而 order 就在手边。
+  ;; .registry/(fallback-roots → global-libdir)。
+  ;;
+  ;; upstream 根则**随构建推进增量累积**:topo 序保证排在前面的都已建好,故建完一个
+  ;; 就把它的预构建根接到尾巴上给后面用。先前每个依赖都要重扫一遍 order 的前缀、
+  ;; 对每个前驱做一次 file-directory? —— n 个依赖 n²/2 次 stat。结果集完全相同:
+  ;; 一个依赖的 _build/<mt> 只会在它自己建完时出现,建完之后不再变。
   (define (build-deps root order verbose?)
     (let ([gate (gate-prebuilt-roots root)]
           [fallback (fallback-roots root)])
-      (for-each (lambda (d) (build-one-dep root d order gate fallback verbose?)) order)))
+      (let loop ([ds order] [upstream '()])     ; upstream 逆序累积
+        (unless (null? ds)
+          (let ([d (car ds)])
+            (build-one-dep root d (reverse upstream) gate fallback verbose?)
+            (loop (cdr ds)
+                  (let ([r (dep-prebuilt-root root d)])
+                    (if r (cons r upstream) upstream))))))))
 
-  (define (build-one-dep root d order gate fallback verbose?)
+  (define (build-one-dep root d upstream gate fallback verbose?)
     (let* ([name   (symbol->string (locked-dep-name d))]
            [srcdir (vendor-dir root (locked-dep-name d))])
       (unless (file-directory? srcdir)
@@ -115,9 +125,7 @@
         ;; gate-prebuilt-roots 排在 upstream 与 fallback 之间:chandler 运行时门的对象
         ;; 在 _vendor/chandler/_build/<mt>/(build-chandler-runtime! 编的),优先于
         ;; 全局前缀(避免实例分歧,BUG-1)。
-        (cons "." (append gate
-                          (upstream-prebuilt-roots root d order)
-                          fallback))
+        (cons "." (append gate upstream fallback))
         (lambda ()
           ;; 顺序与旧的生成 recipe 一致:native 先(它把 _build/.gen 挂进搜索根,
           ;; 随后的 library-task 才解析得到生成的 (<lib> native-loader)),库在后。
@@ -132,17 +140,6 @@
     (let* ([src (vendor-dir root (locked-dep-name u))]
            [obj (join-paths src "_build" (current-machine-type))])
       (and (file-directory? obj) (prebuilt src obj))))
-
-  ;; 本依赖之前(topo 序)那些依赖的预构建根 —— 编 d 时它们必须已就位。
-  ;; order 由调用方传入(build-deps 手里就有那份 topo-order),不再自己重读 lock。
-  (define (upstream-prebuilt-roots root d order)
-    (let loop ([ds order] [acc '()])
-      (cond
-        [(null? ds) (reverse acc)]
-        [(eq? (locked-dep-name (car ds)) (locked-dep-name d)) (reverse acc)]
-        [else (loop (cdr ds)
-                    (let ([r (dep-prebuilt-root root (car ds))])
-                      (if r (cons r acc) acc)))])))
 
   ;; 全部依赖的预构建根 —— 编项目自身时用(它可能 import 任何一个)。
   (define (all-dep-prebuilt-roots root)
@@ -209,7 +206,7 @@
   (define (gate-prebuilt-roots root)
     (let* ([vdir (vendor-dir root 'chandler)]
            [obj  (join-paths vdir "_build" (current-machine-type))]
-           [mpath (join-paths root "chandler-manifest.ss")])
+           [mpath (project-manifest-path root)])
       (if (and (file-directory? obj)
                (file-exists? mpath)
                (manifest-chandler (read-manifest mpath)))
@@ -315,7 +312,7 @@
                        (lambda () (load-recipe default-tasks-file))
                        (lambda () (select-targets '()))
                        verbose? "project recipe")
-          (let ([mpath (join-paths root "chandler-manifest.ss")])
+          (let ([mpath (project-manifest-path root)])
             (when (file-exists? mpath)
               (let* ([mf (read-manifest mpath)]
                      [name (manifest-name mf)]
@@ -351,12 +348,15 @@
     (let ([rels (tree-library-files (srcdir-join root sd) name)])
       (if (string=? sd ".") rels (map (lambda (r) (join-paths sd r)) rels))))
 
+  ;; manifest 路径 → 它的 (native …) 子句,缺则 '(native)。
+  ;; 取**原始 sexpr** 而非 manifest record:哈希更稳(record 化会丢子句原貌)。
+  (define (manifest-native-spec mpath)
+    (if (file-exists? mpath)
+        (or (assq 'native (cdr (read-datum-file mpath))) '(native))
+        '(native)))
+
   (define (project-native-spec root)
-    (let ([mpath (join-paths root "chandler-manifest.ss")])
-      (if (file-exists? mpath)
-          (let ([datum (read-datum-file mpath)])
-            (or (assq 'native (cdr datum)) '(native)))
-          '(native))))
+    (manifest-native-spec (project-manifest-path root)))
 
   ;; ── 一棵库树里的全部库文件(相对该树根的路径,给 library-task 当 entry)──
   ;; 只收**真的是库**的文件:首个 datum 为 (library …)。包里也会有测试程序、脚本,
@@ -382,11 +382,13 @@
   (define (library-source? path)
     (and (or (string-suffix? ".ss" path) (string-suffix? ".sls" path)
              (string-suffix? ".sc" path))
+         ;; 走 parse-source 而非自己读首个 datum:库文件的首个 datum **就是**
+         ;; 整个 (library …) 形式,即读一遍全文 —— 与随后 build-graph 的解析
+         ;; 完全重复。经 parse-source 则结果进解析缓存,那一遍白拿。
          ;; ignore-errors = (guard (e [#t #f]) body ...) —— body 的**最后一个**
          ;; 表达式是它的值,所以这里不能再跟一个 #f 兜底,那会让它恒假。
          (ignore-errors
-           (let ([d (call-with-input-file path read)])
-             (and (pair? d) (eq? 'library (car d)))))))
+           (and (lib-node-name (parse-source path)) #t))))
 
   ;; 路径 → 合法且唯一的任务名片段:非字母数字一律 "-"
   (define (task-suffix rel)
@@ -406,13 +408,8 @@
 
   ;; ── native 构建描述:读依赖 lib/<name>/chandler-manifest.ss 的 native 项 ──
   (define (dep-native-spec root name)
-    (let ([mpath (join-paths (vendor-dir root (string->symbol name)) "chandler-manifest.ss")])
-      (if (file-exists? mpath)
-          (let ([mf (read-manifest mpath)])
-            ;; 用原始 native sexpr(而非 record)哈希更稳:重读 datum 取 native 字段
-            (let ([datum (read-datum-file mpath)])
-              (or (assq 'native (cdr datum)) '(native))))
-          '(native))))
+    (manifest-native-spec
+      (project-manifest-path (vendor-dir root (string->symbol name)))))
 
   ;; ── 授权文件:((name . hash) …)──
   (define (read-approvals path)
@@ -428,7 +425,7 @@
       `(approvals ,@(map (lambda (p) (list (car p) (cdr p)))
                          (list-sort (lambda (a b) (string<? (car a) (car b))) approvals)))))
 
-  (define (approval-hash spec) (sha256-string (canonical-inline spec)))
+  (define (approval-hash spec) (sha256-string (datum->string spec)))
 
   (define (approved? approvals name h)
     (let ([p (assoc name approvals)]) (and p (string=? (cdr p) h))))
@@ -441,9 +438,4 @@
     (cond
       [(eq? allow #t) #t]
       [(string? allow) (and (member name (string-split allow #\,)) #t)]
-      [else #f]))
-
-  ;; ── 工具 ──
-  (define (canonical-inline datum)
-    ;; 单行 canonical 串(授权哈希用);复用 write 到 string
-    (let ([op (open-output-string)]) (write datum op) (get-output-string op))))
+      [else #f])))
