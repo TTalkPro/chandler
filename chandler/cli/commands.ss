@@ -68,6 +68,11 @@
         (error 'verify "lock not found; run `chandler deps` first"))
       (let* ([lk (read-lock lpath)]
              [declared (lock-files lk)]
+             ;; rel → #t 索引:EXTRA 检查要对 _vendor/ 下**每个**文件查一次
+             ;;「lock 里声明过没有」,拿 assoc 线性扫 declared 就是 N×M。
+             [declared-index (let ([h (make-hashtable string-hash string=?)])
+                               (for-each (lambda (f) (hashtable-set! h (car f) #t)) declared)
+                               h)]
              [bad 0])
         (for-each
           (lambda (f)
@@ -86,7 +91,7 @@
             (for-each
               (lambda (abs)
                 (let ([rel (strip-prefix abs (string-append root "/"))])
-                  (unless (assoc rel declared)
+                  (unless (hashtable-ref declared-index rel #f)
                     (set! bad (+ bad 1))
                     (fprintf (current-error-port) "  EXTRA ~a (not in lock)~%" rel))))
               (files-under vdir))))

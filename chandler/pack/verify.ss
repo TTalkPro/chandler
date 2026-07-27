@@ -66,12 +66,14 @@
 
   ;; 完整性:MISSING/CHANGED/INVALID(schema)/EXTRA 全部记 bad(致命)。返回 bad 计数。
   (define (verify-pack-integrity! root files)
-    (let ([declared '()] [ok 0] [bad 0] [extra 0])
+    ;; declared 是 rel → #t 索引而非表:下面 EXTRA 那一趟要对包里**每个**文件查一次
+    ;; 「清单声明过没有」,而清单条目数 = 包内文件数,拿 member 线性扫就是平方级。
+    (let ([declared (make-hashtable string-hash string=?)] [ok 0] [bad 0] [extra 0])
       (for-each
         (lambda (e)
           ;; rel 可辨即先登记:schema 不合格的 entry 不该再让同名文件被二次计 EXTRA
           (when (and (pair? e) (string? (car e)))
-            (set! declared (cons (car e) declared)))
+            (hashtable-set! declared (car e) #t))
           (let ([schema-bad (verify-entry-schema e)])
             (if schema-bad
                 (begin
@@ -94,7 +96,7 @@
       (for-each
         (lambda (abs)
           (let ([rel (strip-prefix abs (string-append root "/"))])
-            (unless (or (string=? rel "pack.manifest") (member rel declared))
+            (unless (or (string=? rel "pack.manifest") (hashtable-ref declared rel #f))
               (set! extra (+ extra 1))
               (set! bad (+ bad 1))
               (fprintf (current-error-port) "  EXTRA ~a (not in manifest)~%" rel))))
