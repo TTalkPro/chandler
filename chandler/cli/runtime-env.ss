@@ -7,7 +7,8 @@
 ;;;
 ;;; collect-dotenv 在 v3 增加 `.env.tests` 覆盖:.env 是项目默认值,.env.tests 在
 ;;; 跑测试时按需覆盖个别键(如把 LOG_LEVEL 调到 debug,或换测试数据库 DSN)。
-;;; 仅有 .env 时行为完全同前;新增 .env.tests 是纯叠加。
+;;; 它是**按调用方索取**的(三参形 tests? = #t,只有 cmd-test 传),不是「文件在就读」
+;;; —— 否则 cmd-run / cmd-repl / cmd-exec 会跟着吃到测试配置。
 
 (library (chandler cli runtime-env)
   (export choose-interp interp-kind make-preamble collect-dotenv)
@@ -68,22 +69,29 @@
       tmp))
 
   ;; ── .env 收集(C3 + v3 .env.tests 覆盖)──
-  ;; 加载顺序(后者覆盖前者):<root>/.env → <root>/.env.tests(若存在)→ --env-file <path>
-  ;; (显式指定,后到者同键覆盖)。依赖树里的 .env 一概不读(见 (chandler env) 头注:
-  ;; 信任模型)。返回有序 alist;同名键多次出现时,后面的覆盖前面的(覆盖语义由调用方
-  ;; 在 env-prefix / export 时实现 —— 这里只把覆盖项追加到末尾,shell `env KEY=a KEY=b cmd`
-  ;; 里后者生效)。
+  ;; 加载顺序(后者覆盖前者):<root>/.env → <root>/.env.tests(仅 tests? 为真时)
+  ;; → --env-file <path>(显式指定,后到者同键覆盖)。依赖树里的 .env 一概不读
+  ;; (见 (chandler env) 头注:信任模型)。返回有序 alist;同名键多次出现时,后面的
+  ;; 覆盖前面的(覆盖语义由调用方在 env-prefix / export 时实现 —— 这里只把覆盖项追加
+  ;; 到末尾,shell `env KEY=a KEY=b cmd` 里后者生效)。
   ;;
-  ;; .env.tests 是 v3 新增:仅在跑 `chandler test` 时由 cmd-test 经本函数加载;
-  ;; cmd-run / cmd-repl / cmd-exec 同样经此函数,故行为**完全不变**(没有 .env.tests
-  ;; 就走原路径)。--env-file 仍可再覆盖 .env.tests(显式优先于约定)。
-  (define (collect-dotenv root flags)
-    (let* ([base (read-dotenv (dotenv-file-path root))]
-           [tests-extra (read-dotenv (join-paths root ".env.tests"))]
-           [cli-extra  (let ([f (flag flags 'env-file)])
-                         (if (string? f)
-                             (read-dotenv (if (string-prefix? "/" f) f (join-paths root f)))
-                             '()))])
-      (append base tests-extra cli-extra)))
+  ;; **`.env.tests` 必须显式索取**(tests? = #t,只有 cmd-test 传):它是「跑测试时
+  ;; 的覆盖层」(测试库 DSN、LOG_LEVEL=debug…)。先前本函数无条件读它,于是项目一旦
+  ;; 建了 .env.tests,`chandler run` / `repl` / `exec` 会静默用上测试配置 —— 对着测试
+  ;; 数据库跑生产脚本这种事,不该由一个约定文件的存在与否悄悄决定。
+  ;; --env-file 仍可再覆盖 .env.tests(显式优先于约定)。
+  (define collect-dotenv
+    (case-lambda
+      [(root flags) (collect-dotenv root flags #f)]
+      [(root flags tests?)
+       (let* ([base (read-dotenv (dotenv-file-path root))]
+              [tests-extra (if tests?
+                               (read-dotenv (join-paths root ".env.tests"))
+                               '())]
+              [cli-extra  (let ([f (flag flags 'env-file)])
+                            (if (string? f)
+                                (read-dotenv (if (string-prefix? "/" f) f (join-paths root f)))
+                                '()))])
+         (append base tests-extra cli-extra))]))
 
   )

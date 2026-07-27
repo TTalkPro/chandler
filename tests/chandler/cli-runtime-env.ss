@@ -57,11 +57,12 @@
         (assert-equal '() (collect-dotenv root (test-flags "run")))))
 
     ;; ── .env.tests 覆盖 .env(同键后者胜 —— 末位 export 在 shell 里生效)──
+    ;; 三参形 tests? = #t:只有 cmd-test 这样调。
     (collect-dotenv-env-tests-overrides-env
       (let ([root (proj-with-files
                     '((".env"       . "MODE=base\nKEEP=keep\n")
                       (".env.tests" . "MODE=override\n")))])
-        (let ([e (collect-dotenv root (test-flags "test"))])
+        (let ([e (collect-dotenv root (test-flags "test") #t)])
           ;; 末匹配 = override(覆盖语义由 shell export 后到者胜实现)
           (assert-string= "override" (last-val e "MODE"))
           ;; .env.tests 没声明的键,.env 的保留
@@ -70,10 +71,20 @@
           (let ([modes (filter (lambda (kv) (equal? (car kv) "MODE")) e)])
             (assert-equal 2 (length modes))))))
 
+    ;; **不索取则不读**:run/repl/exec 走两参形,.env.tests 在盘上也不生效。
+    ;; (先前无条件读它 —— 项目一建 .env.tests,`chandler run` 就静默吃到测试配置。)
+    (collect-dotenv-env-tests-ignored-without-optin
+      (let ([root (proj-with-files
+                    '((".env"       . "MODE=base\n")
+                      (".env.tests" . "MODE=override\n")))])
+        (let ([e (collect-dotenv root (test-flags "run"))])
+          (assert-string= "base" (last-val e "MODE"))
+          (assert-equal 1 (length e)))))
+
     ;; 仅有 .env.tests(无 .env)也能用(cmd-test 不必先有 .env)
     (collect-dotenv-env-tests-without-env
       (let ([root (proj-with-files '((".env.tests" . "X=1\n")))])
-        (let ([e (collect-dotenv root (test-flags "test"))])
+        (let ([e (collect-dotenv root (test-flags "test") #t)])
           (assert-string= "1" (val e "X"))
           (assert-equal 1 (length e)))))
 
@@ -83,7 +94,7 @@
                     '((".env"       . "MODE=base\n")
                       (".env.tests" . "MODE=tests\n")
                       ("custom.env" . "MODE=cli\n")))])
-        (let ([e (collect-dotenv root (test-flags "run" "--env-file" "custom.env"))])
+        (let ([e (collect-dotenv root (test-flags "test" "--env-file" "custom.env") #t)])
           ;; 三者都在,cli 末位 → env-prefix 时覆盖前面
           (let ([modes (filter (lambda (kv) (equal? (car kv) "MODE")) e)])
             (assert-equal 3 (length modes))))))

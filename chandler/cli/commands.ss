@@ -102,7 +102,6 @@
               0)))))
 
   ;; ── init ──
-  ;; ── init ──
   ;; --lib:  显式声明这是 lib(顺带按[库布局规范]出目录骨架)
   ;; --app:  显式声明这是 app(写 (app (entry …)) 到 manifest);默认 entry = (name),--entry 覆盖
   ;; --lib / --app 互斥;都不传 = 默认 lib(无 (app …))
@@ -309,8 +308,9 @@
 
   ;; write-app-launcher! : 写 run.sps + 稳定 shim launcher
   ;; v3(D17):shim 只需 name + libdir(version 在运行时读 .registry)。
-  ;; run.sps 仍需 entry/main(运行时逻辑);version 在 lock 里。
-  (define (write-app-launcher! name version entry main libdir bindir deps)
+  ;; run.sps 仍需 entry/main(运行时逻辑);version 在 lock 里 —— 故本函数**不收**
+  ;; 依赖表(D18 之后 run.sps 自己在启动时读 .chandler/chandler-manifest.lock)。
+  (define (write-app-launcher! name version entry main libdir bindir)
     (let* ([mt (current-machine-type)]
            [win? (windows-mt? mt)]
            [runner-dir (join-paths (version-root libdir name version) ".chandler")])
@@ -357,8 +357,7 @@
           ;; 5. P3:app 生成命令行入口(runner + launcher),用本机运行时
           (when mapp
             (write-app-launcher! name version (app-entry mapp) (app-main mapp)
-                                 libdir (target-bindir flags)
-                                 (project-locked-deps root))))
+                                 libdir (target-bindir flags))))
         (printf "installed ~a ~a + dependencies to ~a~%" name version libdir)
         0)))
 
@@ -397,8 +396,8 @@
   ;; v3: chandler list — 列出全局已装包(多版本,active 标记)
   ;; row = (name-str version-str tag installer-symbol);tag = "active" 或 ""
   (define (cmd-list root flags)
-    (let ([libdir (target-libdir flags)]
-          [rows (list-global (target-libdir flags))])
+    (let* ([libdir (target-libdir flags)]
+           [rows (list-global libdir)])
       (if (null? rows)
           (printf "no packages installed in ~a~%" libdir)
           (begin
@@ -489,13 +488,17 @@
     0)
 
   ;; ── .env 收集(C3 + v3 .env.tests 覆盖)──
-  ;; 实现已移到 (chandler cli runtime-env):.env → .env.tests(若存在)→ --env-file,
-  ;; 后者覆盖前者。这里仅保留 env-with-dotenv 这层包装(子进程 env 末位 = 覆盖式)。
+  ;; 实现已移到 (chandler cli runtime-env):.env → .env.tests(**仅 cmd-test**,四参形
+  ;; tests? = #t)→ --env-file,后者覆盖前者。这里仅保留 env-with-dotenv 这层包装
+  ;; (子进程 env 末位 = 覆盖式)。
 
   ;; .env 覆盖进程环境 —— 故在传给子进程的 env alist 里排在**最后**(env-prefix
   ;; 是 shell 变量前缀,同名后者胜)。
-  (define (env-with-dotenv root flags base-env)
-    (append base-env (collect-dotenv root flags)))
+  (define env-with-dotenv
+    (case-lambda
+      [(root flags base-env) (env-with-dotenv root flags base-env #f)]
+      [(root flags base-env tests?)
+       (append base-env (collect-dotenv root flags tests?))]))
 
   ;; ── env:输出依赖环境变量(eval "$(chandler env)")──
   ;;   库搜索路径 + .env(D8:APP_ROOT 已去除,路径定位统一走 library-directories)。
@@ -648,8 +651,9 @@
                      (append (list "-q" "--libdirs" (path-list dirs)
                                    "--script" preamble)
                              test-args)))])
+        ;; tests? = #t:只有本命令加载 .env.tests(run/repl/exec 不吃测试配置)
         (run-foreground interp invocation
-                        (list (cons 'env (env-with-dotenv root flags '())))))))
+                        (list (cons 'env (env-with-dotenv root flags '() #t)))))))
 
   ;; ── exec:设 CHEZSCHEMELIBDIRS(+ .env)后透传任意命令 ──
   ;;   chandler exec -- <cmd> [args...]
@@ -706,15 +710,17 @@
     (if (string-prefix? "/" p) p (join-paths root p)))
 
 ;; ── .gitignore / scaffold / basename(init 用)──
-;; 生成物:依赖 checkout(vendor/)、编译产物(_build/<mt>/)、各临时 recipe。
+;; 生成物:依赖 checkout(_vendor/)、编译产物(_build/<mt>/)、各临时 recipe。
 ;; 注:`.chandler-approvals`(native 构建授权记录)**不**入此列——它是信任决定,
 ;; 提交与否属项目策略(提交=团队共享授权;不提交=各人各自授权),由用户自决。
-;; `.chandler-build.ss` / `.chandler-install.ss` 是**已作废**的生成物:build
-;; 直接在进程内排单编译,不再往依赖树里写临时 recipe。
-;; 仍留在列表里 —— 老项目的 .gitignore 已经有这两行,删掉只会让它们变成噪声;
-;; 新项目多两行无害。`.chandler-run.ss` / `.chandler-repl.ss` 仍在用(run/repl 的
-;; native preamble)。
-  (define gitignore-entries '("/vendor/" "/lib/" "/_build/"
+;; `/vendor/` `/lib/` `.chandler-build.ss` `.chandler-install.ss` 是**已作废**的
+;; 生成物名:C0 之后依赖 checkout 落 `_vendor/`(不再有汇总的 lib/),build 也
+;; 直接在进程内排单编译、不再往依赖树里写临时 recipe。仍留在列表里 —— 老项目的
+;; .gitignore 已经有这几行,删掉只会让它们变成噪声;新项目多几行无害。
+;; **`/_vendor/` 是真正生效的那条**(先前漏掉,新项目会把整棵依赖 checkout 提交进
+;; git);`.chandler-run.ss` / `.chandler-repl.ss` 仍在用(run/repl 的 native preamble)。
+  (define gitignore-entries '("/_vendor/" "/_build/"
+                              "/vendor/" "/lib/"
                               ".chandler-run.ss" ".chandler-repl.ss"
                               ".chandler-install.ss" ".chandler-build.ss"))
   (define (ensure-gitignore-lib root)
