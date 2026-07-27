@@ -713,9 +713,11 @@
 ;; 生成物名:C0 之后依赖 checkout 落 `_vendor/`(不再有汇总的 lib/),build 也
 ;; 直接在进程内排单编译、不再往依赖树里写临时 recipe。仍留在列表里 —— 老项目的
 ;; .gitignore 已经有这几行,删掉只会让它们变成噪声;新项目多几行无害。
-;; **`/_vendor/` 是真正生效的那条**(先前漏掉,新项目会把整棵依赖 checkout 提交进
-;; git);`.chandler-run.ss` / `.chandler-repl.ss` 仍在用(run/repl 的 native preamble)。
-  (define gitignore-entries '("/_vendor/" "/_build/"
+;; **`/_vendor/` 与 `/dist/` 是真正生效的两条**(先前都漏掉:前者会让新项目把整棵
+;; 依赖 checkout 提交进 git,后者是 `chandler pack` 的默认输出目录,见 pack/core.ss
+;; 的 out 缺省值);`.chandler-run.ss` / `.chandler-repl.ss` 仍在用(run/repl 的
+;; native preamble)。
+  (define gitignore-entries '("/_vendor/" "/_build/" "/dist/"
                               "/vendor/" "/lib/"
                               ".chandler-run.ss" ".chandler-repl.ss"
                               ".chandler-install.ss" ".chandler-build.ss"))
