@@ -18,7 +18,11 @@
 ;;;   (chandler runtime)/(chandler version);决策表是同一份)。
 
 (library (chandler pack verify)
-  (export verify-pack)
+  ;; verify-pack-target! 导出**仅为 parity 测试**:它与 (chandler pack run-sps) 的
+  ;; full-target-check-src 是同一张决策表的两份实现(一份进程内跑、一份生成成部署侧
+  ;; 源码串),代码无法合并 —— 部署态没有 chandler 可 import。故靠
+  ;; tests/chandler/pack-verifier-parity.ss 逐行比对两者判定,防止改一处漏一处。
+  (export verify-pack verify-pack-target!)
   (import (chezscheme)
           (chandler fs)
           (chandler sexp)

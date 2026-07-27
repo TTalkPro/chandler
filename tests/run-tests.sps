@@ -32,7 +32,8 @@
           (prefix (tests chandler cli-make) cli-make:)
           (prefix (tests chandler env) env:)
           (prefix (tests chandler registered) registered:)
-          (prefix (tests chandler cli-runtime-env) cli-runtime-env:))
+          (prefix (tests chandler cli-runtime-env) cli-runtime-env:)
+          (prefix (tests chandler pack-verifier-parity) pack-verifier-parity:))
 
 (define all-suites
   (list
@@ -63,6 +64,7 @@
     (cons 'cli-make cli-make:suite)
     (cons 'env env:suite)
     (cons 'registered registered:suite)
-    (cons 'cli-runtime-env cli-runtime-env:suite)))
+    (cons 'cli-runtime-env cli-runtime-env:suite)
+    (cons 'pack-verifier-parity pack-verifier-parity:suite)))
 
 (exit (if (run-suites all-suites) 0 1))
