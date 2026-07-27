@@ -21,7 +21,7 @@
           path-sep split-pair version-root entry->arg libdirs->arg
           resources-dirname lib-resource-dir
           native-so? lib-native-dir lib-native-path native-so-name
-          library-name->path srcdir-join)
+          srcdir-join)
   (import (chezscheme)
           (chandler util))
 
@@ -136,11 +136,6 @@
   ;; 文件名/路径是否 native 动态库(按 OS 扩展名;供扫描 obj 树时甄别编译 .so 与 native)
   (define (native-so? path)
     (string-suffix? (string-append "." (so-ext)) path))
-
-  ;; 库名 (a b c) → 相对路径 "a/b/c.ss"(用 .ss;Chez 亦认 .sls/.scm,读取时另探)
-  (define (library-name->path name)
-    (let ([parts (map symbol->string name)])
-      (string-append (fold-left path-join "" parts) ".ss")))
 
   ;; 依赖库根:<lib-dir>/<name>/<srcdir>(srcdir 默认 ".")
   (define (srcdir-join dep-root srcdir)

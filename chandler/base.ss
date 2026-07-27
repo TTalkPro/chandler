@@ -43,7 +43,7 @@
     path-sep split-pair entry->arg libdirs->arg
     resources-dirname lib-resource-dir
     native-so? lib-native-dir lib-native-path native-so-name
-    library-name->path srcdir-join
+    srcdir-join
     ;; runtime-detector(designs/06 §3-4)
     current-runtime runtime-version chez-version-string verify-runtime!
     runtime-env-var preferred-runtime parse-runtime-kind

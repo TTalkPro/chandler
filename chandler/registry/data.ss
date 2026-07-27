@@ -17,7 +17,6 @@
           registered-versions
           registered-active
           registered-has-version?
-          registered-version-entry
           version-entry-version
           version-entry-installed-at
           version-entry-source
@@ -25,7 +24,6 @@
           registered-add-version
           registered-remove-version
           registered-set-active
-          registered-clear-active
           registered->datum
           datum->registered)
   (import (chandler registered)))

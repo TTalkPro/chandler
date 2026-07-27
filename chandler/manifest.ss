@@ -10,7 +10,6 @@
           manifest-chez manifest-skiff manifest-chandler manifest-srcdir
           manifest-deps manifest-dev-deps manifest-native
           manifest-overrides
-          manifest-runtime-subset
           manifest-app app? app-entry app-main
           dep? dep-name dep-source-kind dep-source-loc
           dep-pin-kind dep-pin-val
@@ -35,10 +34,13 @@
   ;; 与库源码同居。旧 manifest 里的该字段解析时**静默忽略**(见 parse-manifest),
   ;; 但不再有 manifest-resources 访问器 —— 它曾恒返回 #f,而 resolve 还老老实实把这个
   ;; #f 一路传进 lock 的 resources 字段,是一整条不产出任何东西的死管道。
+  ;; **无 runtime-subset 字段**:`(runtime-subset …)` 曾用于让 chandler 自己声明
+  ;; runtime 子集,但消费侧从来读的是 (chandler install) 里硬编码的
+  ;; chandler-runtime-sublibs,访问器零引用。旧 manifest 写了此字段仍解析成功
+  ;; (未知字段一律忽略),只是不再被读取。
   (define-record-type manifest
     (fields format name version chez skiff chandler srcdir
-            deps dev-deps native overrides scripts app
-            runtime-subset))
+            deps dev-deps native overrides scripts app))
 
   ;; app:这个包是**可分发的应用**时声明入口(designs/09 §CLI)。
   ;;   (app (entry (mdserver)) (main main))
@@ -76,25 +78,11 @@
         (map parse-native (field-ref* body 'native))
         (parse-overrides (field-ref* body 'overrides))
         (field-ref* body 'scripts)
-        (parse-app (field-ref* body 'app))
-        (parse-runtime-subset (field-ref* body 'runtime-subset)))))
+        (parse-app (field-ref* body 'app)))))
 
   ;; v3(D13):资源 method B —— 删 manifest (resources ...) 字段。
   ;; 旧 parse-resources / check-resource-path / check-unique-librefs 全部作废。
   ;; 资源约定:<src>/<libpath>/resources/<file>(见 layout.ss:lib-resource-dir)。
-
-  ;; (runtime-subset name1 name2 ...) —— designs/06 §6.3(chandler 自身用)
-  ;; 字段缺省 → #f。每一项必须是 symbol。
-  (define (parse-runtime-subset items)
-    (and (not (null? items))
-         (begin
-           (for-each
-             (lambda (it)
-               (unless (symbol? it)
-                 (error 'parse-manifest
-                        "(runtime-subset …) entries must be symbols" it)))
-             items)
-           items)))
 
   ;; (app (entry (a b)) (main main)) → app record;缺省 main = `main`
   (define (parse-app body)

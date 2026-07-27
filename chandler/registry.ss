@@ -12,7 +12,7 @@
     make-registered registered? registered-name registered-kind
     registered-versions registered-active registered-has-version?
     registered-add-version registered-remove-version registered-set-active
-    registered-clear-active registered->datum datum->registered
+    registered->datum datum->registered
     make-version-entry version-entry? version-entry-version
     version-entry-installed-at version-entry-source version-entry-installer
     registry-dir registry-file

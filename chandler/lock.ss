@@ -13,10 +13,10 @@
           locked-dep-rev locked-dep-deps locked-dep-natives
           locked-dep-scope
           make-lock lock? lock-format lock-manifest-sha256 lock-chandler lock-deps
-          lock-files with-files lock-file-sha256
+          lock-files with-files
           lock->datum datum->lock write-lock read-lock
           manifest-content-sha256 lock-fresh?
-          topo-order lock-ref)
+          topo-order)
   (import (chezscheme)
           (chandler sexp)
           (chandler hash))
@@ -44,17 +44,12 @@
       [(fmt sha ch deps)            (make-lock-rec fmt sha ch deps '())]
       [(fmt sha ch deps files)      (make-lock-rec fmt sha ch deps files)]))
 
-  ;; ── files 字段访问(辅助) ──
+  ;; 换掉 files 字段,其余原样(函数式更新)。
+  ;; `chandler deps` 用它:lock 先由 resolve 产出(那时还没 vendor,无从哈希),
+  ;; 依赖铺完之后再把文件清单填回去(见 (chandler install) 的 record-vendor-files!)。
   (define (with-files lk files)
     (make-lock-rec (lock-format lk) (lock-manifest-sha256 lk) (lock-chandler lk)
                    (lock-deps lk) files))
-
-  (define (lock-file-sha256 lk rel)
-    (let loop ([fs (lock-files lk)])
-      (cond
-        [(null? fs) #f]
-        [(string=? (caar fs) rel) (cdar fs)]
-        [else (loop (cdr fs))])))
 
   ;; ── 序列化 ──
   (define (lock->datum lk)
@@ -142,9 +137,6 @@
     (and (lock-manifest-sha256 lk)
          (string=? (lock-manifest-sha256 lk)
                    (manifest-content-sha256 manifest-path))))
-
-  (define (lock-ref lk name)
-    (find (lambda (d) (eq? (locked-dep-name d) name)) (lock-deps lk)))
 
   ;; ── 拓扑序:被依赖者先(designs/03 §3);成环则任意一致断环 + 该实现返回可用序 ──
   ;; 返回 locked-dep 列表,依赖在前。图信息取 locked-dep-deps。

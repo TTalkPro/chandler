@@ -31,7 +31,6 @@
     registered-versions
     registered-active
     registered-has-version?
-    registered-version-entry
     ;; version-entry accessors
     version-entry-version
     version-entry-installed-at
@@ -41,7 +40,6 @@
     registered-add-version
     registered-remove-version
     registered-set-active
-    registered-clear-active
     ;; 序列化
     registered->datum
     datum->registered)
@@ -129,10 +127,6 @@
   (define (registered-has-version? reg version-str)
     (and (find-version-entry reg version-str) #t))
 
-  ;; registered-version-entry : reg string → version-entry | #f
-  (define (registered-version-entry reg version-str)
-    (find-version-entry reg version-str))
-
   (define (find-version-entry reg version-str)
     (let loop ([vs (registered-versions reg)])
       (cond
@@ -182,12 +176,6 @@
                 (registered-kind reg)
                 (registered-versions reg)
                 version-str))
-
-  (define (registered-clear-active reg)
-    (make-registered-rec (registered-rec-name reg)
-                (registered-kind reg)
-                (registered-versions reg)
-                #f))
 
   ;; alist 助手:string key
   (define (alist-set alist k v)
