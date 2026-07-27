@@ -39,7 +39,7 @@
 | `verify` | **CI 校验**(只读):① **git 态** —— 每个 git 依赖的 checkout 在否、HEAD == lock 的 `rev`、工作区无脏改动;② **内容哈希** —— 逐文件比对 `lock.(files ...)` sha256,MISSING/CHANGED/EXTRA。任一不符 → 65(D25) |
 
 > **①、② 的分工(2026-07-27)**:① 一直是实现好的,先前只是没接进任何命令。
-> ② 的**生产侧同日补齐**:`chandler deps` 铺完依赖后逐文件取 sha256 写回 lock
+> ② 的**生产侧同日补齐**:`chandler deps` 铺完依赖后逐文件取 sha256 写回 lock(D32)
 > (`(chandler install)` 的 `record-vendor-files!`)。lock 没有 `(files …)` 时跳过 ②
 > —— v2 老 lock 与尚未重跑 deps 的工作副本属于此类,此时空声明配上 EXTRA 扫描会给出
 > 一屏假失败,不如只报 ① 的结论并提示重跑 deps。

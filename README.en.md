@@ -2,7 +2,7 @@
 
 > A git-first Chez Scheme package manager **and build tool** — the **purveyor** of the **Skiff** runtime ecosystem. Reads `chandler-manifest.ss`, installs R6RS libraries from git repositories into your project, and a single `chandler run` mounts the whole dependency environment and runs it. Works with **both** stock Chez and Skiff runtimes.
 
-**[中文](README.md) | English** — Design docs in [designs/](designs/) (in Chinese).
+**[中文](README.md) | English** — Design docs in [designs/](designs/) (in Chinese); release notes in [CHANGELOG.md](CHANGELOG.md) (in Chinese).
 
 > **Note:** the design documents under [`designs/`](designs/) are written in Chinese — they are dense, internal design reasoning. This README is the English mirror of the user-facing [README.md](README.md); the Chinese version is the canonical source.
 
@@ -35,7 +35,7 @@ scheme --script bootstrap.ss               # libraries → ~/.local/share/chez/{
 skiff --script bootstrap.ss --system       # install to /usr/local (needs root)
 
 export PATH="$HOME/.local/bin:$PATH"   # if not already on PATH (the script prints this hint)
-chandler --version                     # → chandler 0.1.5 (skiff 0.1.2) (chez 10.4.1)
+chandler --version                     # → chandler 0.1.6 (skiff 0.1.2) (chez 10.4.1)
 ```
 
 ### Windows (PowerShell)
@@ -239,9 +239,9 @@ skiff --script bootstrap.ss                          # run the install with skif
 
 ```sh
 $ chandler --version
-chandler 0.1.5 (skiff 0.1.1) (chez 10.4.1)   # running on skiff
+chandler 0.1.6 (skiff 0.1.1) (chez 10.4.1)   # running on skiff
 $ CHANDLER_RUNTIME=chez chandler --version
-chandler 0.1.5 (chez 10.4.1)                 # running on stock Chez
+chandler 0.1.6 (chez 10.4.1)                 # running on stock Chez
 ```
 
 > **Explicit overrides are taken literally**: if you set `CHANDLER_SKIFF` / `CHANDLER_SCHEME`, only that one is used — if missing, it fails (exit code 127), **never** silently falling back to another runtime (silent fallback would defeat the override). Likewise, an explicitly chosen runtime skips capability probing.

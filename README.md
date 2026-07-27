@@ -2,7 +2,7 @@
 
 > git-first 的 Chez Scheme 包管理器 + 构建器,**Skiff** 运行时生态里的包供应商(船具商)。读 `chandler-manifest.ss`,把 git 仓库里的 R6RS 库装进项目,一行 `chandler run` 挂载整个依赖环境并运行。标准 Chez 与 Skiff **双运行时**皆可用。
 
-**中文 | [English](README.en.md)** — 设计文档见 [designs/](designs/)。
+**中文 | [English](README.en.md)** — 设计文档见 [designs/](designs/),变更记录见 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 定位
 
@@ -33,7 +33,7 @@ scheme --script bootstrap.ss               # chandler 铺库 → ~/.local/share/
 skiff --script bootstrap.ss --system        # 装到 /usr/local(需 root)
 
 export PATH="$HOME/.local/bin:$PATH"        # 若尚未在 PATH 上(脚本会提示这行)
-chandler --version                          # → chandler 0.1.5 (skiff 0.1.2) (chez 10.4.1)
+chandler --version                          # → chandler 0.1.6 (skiff 0.1.2) (chez 10.4.1)
 ```
 
 ### Windows(PowerShell)
@@ -214,9 +214,9 @@ skiff --script bootstrap.ss                            # 用 skiff 跑安装(默
 
 ```sh
 $ chandler --version
-chandler 0.1.5 (skiff 0.1.1) (chez 10.4.1)   # 跑在 skiff 上
+chandler 0.1.6 (skiff 0.1.1) (chez 10.4.1)   # 跑在 skiff 上
 $ CHANDLER_RUNTIME=chez chandler --version
-chandler 0.1.5 (chez 10.4.1)                 # 跑在标准 Chez 上
+chandler 0.1.6 (chez 10.4.1)                 # 跑在标准 Chez 上
 ```
 
 > **显式覆盖照单执行**:指定了 `CHANDLER_SKIFF`/`CHANDLER_SCHEME` 就只用它——找不到即失败(退出码 127),**不**静默回退到别的运行时(静默回退等于否定了覆盖)。同理,显式指定的运行时不再跑能力探测。

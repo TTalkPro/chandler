@@ -21,7 +21,7 @@
 | D17 | 启动器 = 稳定 shim,运行时读 `.registry/` | switch 不需重写 launcher;切换瞬时生效 |
 | D18 | `run.sps` lock 驱动 library-directories | 多版本 lib 共存时,各 app 用自己 lock 声明的版本,互不干扰 |
 | D19 | `chandler switch` 命令 | 多版本管理的用户入口 |
-| D20 | dev 期全局兜底每包只挂一个版本(app 取 active,lib 取最高 semver) | 先前挂全部版本,生效的是「最后登记的那个」——偶然结果,且让 `switch` 在 dev 期失效(见 §9.5) |
+| D31 | dev 期全局兜底每包只挂一个版本(app 取 active,lib 取最高 semver) | 先前挂全部版本,生效的是「最后登记的那个」——偶然结果,且让 `switch` 在 dev 期失效(见 §9.5) |
 
 ## 3. 术语
 
@@ -290,7 +290,7 @@ install 模式之上追加:
 
 `.registry/` 允许 `mylib/1.0.0/` 与 `mylib/2.0.0/` 同时存在。app A 的 lock 指向 1.0.0,app B 指向 2.0.0 —— 各自 run.sps 只挂自己 lock 声明的版本,Chez 不会看到冲突版本。
 
-### 9.5 dev 期全局兜底的选版规则(D20,2026-07-27)
+### 9.5 dev 期全局兜底的选版规则(D31,2026-07-27)
 
 `run.sps` 靠 lock 精确挂载,但 **dev 期**(`chandler run` / `repl` / `build` / `test`)的
 全局兜底段走 `global-libdir`,它没有 lock 可依。规则是**每个包只挂一个版本**:

@@ -282,6 +282,8 @@ Chandler **不依赖** R6RS library version reference 语法。版本选择完�
 | D28 | 重写本文档(00-design-principles.md)对齐 v3+v4 | ✅ | 本任务 |
 | D29 | pack 创建改 temp sibling + rename | ✅ | 包构建中崩溃不污染同名旧包;与 D20 同思路 |
 | D30 | registry 格式迁移路径(D8 范畴) | 暂缓 | 目前只认 `format 1`;升级函数占位,实现推 v5 |
+| D31 | dev 期全局兜底每包只挂一个版本(app 取 `active`,lib 取最高 semver) | ✅ | 先前挂全部版本,生效的是「最后登记的那个」——偶然结果,且让 `chandler switch` 在 dev 期完全失效(见 [06 §9.5](06-installed-layout.md)) |
+| D32 | D15 生产侧:`chandler deps` 写 lock 的 `(files …)`,基准 = 项目根 | ✅ | 依赖树校验没有单一 `<vroot>` 可作基准;`.git/` 与 `_build/` 三处排除规则必须一致(见 [11 §verify](11-cli.md)) |
 
 ## 11. 不在本设计范围
 
