@@ -25,7 +25,7 @@
     ensure-dir ensure-parent
     dir-entries files-under dir-empty?
     rm-rf copy-file move-file
-    read-file-string read-lines write-text
+    read-file-string read-lines write-text write-text-atomic
     sweep-empty-parents home-dir
     write-text-if-changed file-byte-size mtime
     path-swap-ext

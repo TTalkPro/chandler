@@ -15,7 +15,7 @@
     registered->datum datum->registered
     make-version-entry version-entry? version-entry-version
     version-entry-installed-at version-entry-source version-entry-installer
-    registry-dir registry-file
+    registry-dir registry-file active-file read-active-sidecar
     read-registered write-registered! remove-registered!
     list-registered list-registered-names list-registry-files
     with-registry-lock!
@@ -237,7 +237,15 @@
                 (let ([active (registered-active reg)])
                   (when (and active
                              (not (file-directory? (version-root libdir file-name active))))
-                    (add! (list 'missing-active file-name active))))))))
+                    (add! (list 'missing-active file-name active))))
+                ;; sidecar 与权威 .ss 一致(D35)。drift 说明:写入中途崩溃、
+                ;; 手工改过 .active、或旧版 chandler 装的包还没有 sidecar ——
+                ;; 三种情况下启动器都会跑到与 `chandler list` 所示不同的版本。
+                ;; #f(lib / 无 active)与「文件不存在」同形,故直接 equal? 比。
+                (let ([expected (registered-active reg)]
+                      [actual (read-active-sidecar libdir file-name)])
+                  (unless (equal? expected actual)
+                    (add! (list 'active-sidecar-drift file-name expected actual))))))))
         (list-registry-files libdir))
       ;; ── orphan-vroot:盘上有 <libdir>/<name>/<version>/ 但 registry 未登记 ──
       (for-each

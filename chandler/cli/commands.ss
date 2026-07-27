@@ -7,7 +7,10 @@
 (library (chandler cli commands)
   (export cmd-init cmd-deps cmd-install cmd-add cmd-remove cmd-run cmd-env cmd-repl
           cmd-build cmd-pack cmd-verify-pack cmd-deps-tree cmd-verify cmd-exec
-          cmd-uninstall-global cmd-doctor cmd-list cmd-switch cmd-test)
+          cmd-uninstall-global cmd-doctor cmd-list cmd-switch cmd-test
+          ;; 启动器模板:导出供测试**实跑**渲染结果(光比字符串证明不了
+          ;; `IFS= read -r` 真能读出 sidecar)。C3 的 launcher parity 测试也要它们。
+          app-launcher-sh app-launcher-ps1)
   (import (chezscheme)
           (chandler util)
           (chandler fs)
@@ -284,20 +287,26 @@
   ;; 对称于 chandler 自己的启动器(bootstrap.ss 生成的,也是"本机运行时 + 挂前缀"模式)。
   ;; 方案 A:launcher 模板在此重写一份,不提取 bootstrap.ss 的(保其自含红线,designs/06)。
 
-  ;; v3(D17):启动器 = 稳定 shim,运行时读 .registry/<name>.ss 找 active version。
+  ;; v3(D17):启动器 = 稳定 shim,运行时读 active version。
   ;; 不再在 launcher 里硬编码 VERSION —— switch 只改 .registry,所有新进程自动用新版本。
+  ;;
+  ;; v4(D35):读的是 `.registry/<name>.active` **纯文本 sidecar**,不是权威的
+  ;; `<name>.ss`。先前 sh 侧用 awk、ps1 侧用正则各解析一遍 s-expr —— 两份实现、
+  ;; 两份 bug 面,还让 shim 与 registry 的文件格式绑死。sidecar 之后两边各一行读取
+  ;; (`read` / `Get-Content -TotalCount 1`),shim 不再需要理解 registry 格式。
+  ;; 写入与 drift 检测见 (chandler registry io)。
   (define (app-launcher-sh name libdir)
     (string-append
       "#!/bin/sh\n"
       "# " name " launcher — chandler v3 stable shim; do not edit.\n"
-      "# Reads active version from .registry/<name>.ss at runtime.\n"
+      "# Reads active version from .registry/<name>.active at runtime.\n"
       "NAME=\"" name "\"\n"
       "LIBDIR=\"" libdir "\"\n"
-      "REGFILE=\"$LIBDIR/.registry/$NAME.ss\"\n"
-      "[ -f \"$REGFILE\" ] || { echo \"$NAME: not registered (run chandler install)\" 1>&2; exit 70; }\n"
-      "# Parse (active \"<version>\") from the s-expr file (single awk, no Scheme needed)\n"
-      "ACTIVE=$(awk '/^[[:space:]]*\\(active/ { gsub(/[\"()]/, \"\", $2); print $2; exit }' \"$REGFILE\")\n"
-      "[ -n \"$ACTIVE\" ] || { echo \"$NAME: no active version (run chandler switch)\" 1>&2; exit 70; }\n"
+      "REGFILE=\"$LIBDIR/.registry/$NAME.active\"\n"
+      "[ -f \"$REGFILE\" ] || { echo \"$NAME: not installed, or installed by an older chandler; run: chandler install\" 1>&2; exit 70; }\n"
+      "# Plain-text sidecar: one line, the active version. No s-expr parsing needed.\n"
+      "IFS= read -r ACTIVE < \"$REGFILE\"\n"
+      "[ -n \"$ACTIVE\" ] || { echo \"$NAME: no active version; run: chandler switch\" 1>&2; exit 70; }\n"
       "RUNNER=\"$LIBDIR/$NAME/$ACTIVE/.chandler/run.sps\"\n"
       "[ -f \"$RUNNER\" ] || { echo \"$NAME: active version $ACTIVE missing runner (reinstall)\" 1>&2; exit 70; }\n"
       "case \"${CHANDLER_RUNTIME:-}\" in\n"
@@ -319,11 +328,10 @@
       "$AppArgs = $args\n"
       "$Name = '" name "'\n"
       "$LibDir = '" libdir "'\n"
-      "$RegFile = Join-Path $LibDir \".registry\" \"$Name.ss\"\n"
-      "if (-not (Test-Path $RegFile)) { [Console]::Error.WriteLine(\"$Name: not registered\"); exit 70 }\n"
-      "$content = Get-Content $RegFile -Raw\n"
-      "if ($content -match '\\(\\s*active\\s+\"([^\"]+)\"\\)') { $Active = $Matches[1] }\n"
-      "else { [Console]::Error.WriteLine(\"$Name: no active version\"); exit 70 }\n"
+      "$RegFile = Join-Path $LibDir \".registry\" \"$Name.active\"\n"
+      "if (-not (Test-Path $RegFile)) { [Console]::Error.WriteLine(\"$Name: not installed, or installed by an older chandler; run: chandler install\"); exit 70 }\n"
+      "$Active = (Get-Content $RegFile -TotalCount 1).Trim()\n"
+      "if (-not $Active) { [Console]::Error.WriteLine(\"$Name: no active version; run: chandler switch\"); exit 70 }\n"
       "$Runner = Join-Path $LibDir $Name $Active \".chandler\" \"run.sps\"\n"
       "if (-not (Test-Path $Runner)) { [Console]::Error.WriteLine(\"$Name: active $Active missing runner\"); exit 70 }\n"
       "switch ($env:CHANDLER_RUNTIME) {\n"

@@ -10,7 +10,7 @@
            ensure-dir ensure-parent
            dir-entries files-under dir-empty?
            rm-rf copy-file move-file
-           read-file-string read-lines write-text
+           read-file-string read-lines write-text write-text-atomic
            sweep-empty-parents home-dir
            write-text-if-changed file-byte-size mtime
            path-swap-ext
@@ -130,6 +130,28 @@
   (define (write-text path s)
     (ensure-parent path)
     (call-with-output-file path (lambda (p) (display s p)) 'truncate))
+
+  ;; ── 原子落盘(D20):temp 文件(与目标**同目录** —— 跨目录 rename 不保证原子)
+  ;; → 关端口 → rename 覆盖目标。崩溃只留 .tmp 残件;目标要么是旧内容、要么是
+  ;; 完整新内容,绝不半截。
+  ;;
+  ;; Windows 下 rename 不覆盖既有目标:先删(不存在则静默)。POSIX rename 本身
+  ;; 原子覆盖,该分支在 POSIX 下不触发;删除引入的竞态窗口由「先写完整 temp」
+  ;; 兜底 —— 崩溃至多回到「目标缺失」,而非半截文件。
+  ;;
+  ;; 全仓单一出处:先前 sexp.ss 的 write-canonical-file 里内联了一份,registry
+  ;; sidecar(D35)需要同样的语义但写的是纯文本而非 s-expr。
+  (define (write-text-atomic path s)
+    (ensure-parent path)
+    (let ([tmp (path-join* (parent-dir path)
+                           (string-append "." (base-name path) ".tmp."
+                                          (number->string (get-process-id))))])
+      (guard (e [else (guard (e2 (#t (void))) (delete-file tmp))
+                      (raise e)])
+        (call-with-output-file tmp (lambda (p) (display s p)) 'truncate)
+        (when (file-exists? path)
+          (guard (e (#t (void))) (delete-file path)))
+        (rename-file tmp path))))
 
   (define (home-dir) (or (getenv "HOME") (getenv "USERPROFILE") "."))
 

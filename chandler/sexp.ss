@@ -88,24 +88,12 @@
       (newline op)                     ; 文件尾恒一个换行
       (get-output-string op)))
 
-  ;; ── 原子落盘:temp 文件(与目标同目录,跨目录 rename 不保证原子)→ 关端口 →
-  ;; rename 覆盖目标。崩溃只留 .tmp 残件;目标要么旧版本要么完整新版本,绝不半截。
+  ;; ── 原子落盘:canonical 串 → (chandler fs) write-text-atomic ──
+  ;; 原先此处内联了一份 temp + rename 逻辑;registry sidecar(D35)需要同样的语义
+  ;; 但写的是纯文本,故提到 fs.ss 作单一出处(temp 与目标同目录、Windows 先删、
+  ;; 失败清残件的理由都在那边的注释里)。
   (define (write-canonical-file path datum)
-    (ensure-parent path)
-    (let ([tmp (path-join* (parent-dir path)
-                           (string-append "." (base-name path) ".tmp."
-                                          (number->string (get-process-id))))])
-      (guard (e [else (guard (e2 (#t (void))) (delete-file tmp))
-                      (raise e)])
-        (call-with-output-file tmp
-          (lambda (p) (display (canonical-string datum) p))
-          'truncate)
-        ;; Windows 下 rename 不覆盖既有目标:先删(不存在则静默);
-        ;; POSIX rename 本身原子覆盖,此分支在 POSIX 下不触发删除的竞态窗口由
-        ;; 「先写完整 temp」兜底——崩溃至多回到「目标缺失」,而非半截文件。
-        (when (file-exists? path)
-          (guard (e (#t (void))) (delete-file path)))
-        (rename-file tmp path))))
+    (write-text-atomic path (canonical-string datum)))
 
   ;; 打印一个 datum,col = 当前列(即左括号所在缩进)
   (define (print-datum x op col)
