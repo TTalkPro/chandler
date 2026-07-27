@@ -6,7 +6,7 @@
 ;;; 退出码;system 返回码可靠)。纯 POSIX;Windows 适配留待跨平台阶段。
 
 (library (chandler proc)
-  (export run-capture run-check run-status run-foreground shell-quote
+  (export run-capture run-check run-status run-foreground shell-quote env-prefix
            proc-result-code proc-result-out proc-result-err
            which real-path)
   (import (chezscheme)
@@ -61,9 +61,15 @@
              (rm-rf dir)
              (make-proc-result code out err))))]))
 
+  ;; ("K" . "v") 表 → sh 的 "K='v' K='v' " 变量前缀(Chez 的 system 只收一条命令
+  ;; 串,交 /bin/sh,故环境靠前缀注入)。**值为 #f 的项跳过** —— 调用方常把
+  ;; 「可选环境变量」直接写成 (cons "K" 或许是 #f 的东西)。
   (define (env-prefix env)
     (fold-left
-      (lambda (acc kv) (string-append acc (car kv) "=" (shell-quote (cdr kv)) " "))
+      (lambda (acc kv)
+        (if (cdr kv)
+            (string-append acc (car kv) "=" (shell-quote (cdr kv)) " ")
+            acc))
       "" env))
 
   ;; run-check:成功返回 stdout;失败抛(带 prog/args/退出码/stderr 上下文)
