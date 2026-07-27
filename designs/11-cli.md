@@ -36,7 +36,25 @@
 | `doctor` | 体检:见 §6 |
 | `pack [--runtime r] [--out dir] [--name N] [--version V] [--entry '(<lib>…)'] [--main N] [--lib]` | 组装自包含分发包(app pack:payload + envelope;`--lib` 只打 payload) |
 | `verify-pack [--target] <dir>` | 校验分发包(D24 严格化:files 字段必须含 `sha256`+`size`,EXTRA 致命) |
-| `verify` | **CI 校验**:读 lock,扫 `_vendor/`,逐文件比对 `lock.(files ...)` sha256;MISSING/CHANGED/EXTRA → 65(D25 补实现) |
+| `verify` | **CI 校验**(只读):① **git 态** —— 每个 git 依赖的 checkout 在否、HEAD == lock 的 `rev`、工作区无脏改动;② **内容哈希** —— 逐文件比对 `lock.(files ...)` sha256,MISSING/CHANGED/EXTRA。任一不符 → 65(D25) |
+
+> **①、② 的分工(2026-07-27)**:① 一直是实现好的,先前只是没接进任何命令。
+> ② 的**生产侧同日补齐**:`chandler deps` 铺完依赖后逐文件取 sha256 写回 lock
+> (`(chandler install)` 的 `record-vendor-files!`)。lock 没有 `(files …)` 时跳过 ②
+> —— v2 老 lock 与尚未重跑 deps 的工作副本属于此类,此时空声明配上 EXTRA 扫描会给出
+> 一屏假失败,不如只报 ① 的结论并提示重跑 deps。
+>
+> **`(files …)` 的路径基准 = 项目根**(`_vendor/greet/greet.ss`)。注意
+> [06 §6.1](06-installed-layout.md) 描述的是另一条用法(相对 `<vroot>`,供
+> registry/uninstall 校验**已装包**);依赖树校验这条通路必须取项目根 —— 它覆盖的是
+> 「多个依赖 + 运行时门」这一整棵树,没有单一 `<vroot>` 可作基准。两者是同名字段的
+> 两种用途,各自的基准由所在文件决定(项目 lock vs `<vroot>/.chandler/` 里的快照)。
+>
+> **三处必须用同一条排除规则**:`.git/`(checkout 自带的仓库元数据,git 自己会改它,
+> 且工作区是否干净由 ① 管)与 `_build/`(`chandler build` 的产物,写清单时还不存在)——
+> 生产侧 `vendor-unmanaged-path?`、EXTRA 扫描 `generated-path?`、以及 ① 的 `dirty?`
+> (`(chandler fetch)`,过滤 `git status --porcelain` 里 `_build/` 下的条目)。
+> 任一处漏掉,`chandler build` 之后 `verify` 就恒失败。
 
 ### 2.1 命令语义
 

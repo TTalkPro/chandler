@@ -57,54 +57,90 @@
       (verify-pack (if (absolute-path? target) target (join-paths root target))
                    (flag? flags 'target))))
 
-  ;; ── verify:校验 _vendor/ 与 lock 的 (files ...) 一致(CI;纯只读,不写任何文件)──
-  ;; lock 的 files 是 (rel . sha256) 列表,rel 相对项目根(如 "_vendor/greet/greet.ss")。
-  ;; 双向比对:MISSING(声明了但盘上没有)/ CHANGED(sha256 不符)/ EXTRA(盘上有但
-  ;; lock 未声明,扫 _vendor/ 得)任一即 65;全干净 → 0。hash 算法与 verify-pack 同一份
-  ;; ((chandler hash) sha256-file);文件枚举同 pack.ss 的 files-under 模式。
+  ;; ── verify:校验 _vendor/ 与 lock 一致(CI;纯只读,不写任何文件)──
+  ;;
+  ;; 两道检查,都过才 0:
+  ;;
+  ;;   ① **git 态**((chandler install) 的 verify):每个 git 依赖的 checkout 在不在、
+  ;;      HEAD 是否正是 lock 记的 rev、工作区有没有脏改动。这是**当前真正生效**的那道,
+  ;;      诊断也最可操作("rev mismatch: at X, lock says Y")。
+  ;;      它此前已实现但没接进任何命令 —— 只有测试在调。
+  ;;
+  ;;   ② **内容哈希**(lock 的 `(files …)`,rel . sha256):MISSING / CHANGED / EXTRA。
+  ;;      清单由 `chandler deps` 在铺完依赖后写入(D15 生产侧,见 (chandler install)
+  ;;      的 record-vendor-files!),路径**相对项目根**(`_vendor/greet/greet.ss`)。
+  ;;
+  ;;      lock 没有 `(files …)` 时**跳过 ②**:v2 老 lock、以及 deps 尚未重跑过的
+  ;;      工作副本都属于这种。此时空声明配上 EXTRA 扫描会把 `_vendor/` 下每个文件
+  ;;      都判成「不在 lock 里」,给出一屏假失败 —— 不如只报 ① 的结论并提示重跑 deps。
+  ;;
+  ;; EXTRA 扫描排除 `.git/` 与 `_build/`,与生产侧 vendor-unmanaged-path? 同一规则:
+  ;; 前者是 checkout 自带的仓库元数据,后者是 `chandler build` 的产物(deps 写清单时
+  ;; 还不存在)。两侧的排除规则必须一致,否则 build 之后 verify 立刻假失败。
+  ;;
+  ;; hash 算法与 verify-pack 同一份((chandler hash) sha256-file)。
   (define (cmd-verify root flags)
     (let ([lpath (project-lock-path root)])
       (unless (file-exists? lpath)
         (error 'verify "lock not found; run `chandler deps` first"))
-      (let* ([lk (read-lock lpath)]
-             [declared (lock-files lk)]
-             ;; rel → #t 索引:EXTRA 检查要对 _vendor/ 下**每个**文件查一次
-             ;;「lock 里声明过没有」,拿 assoc 线性扫 declared 就是 N×M。
-             [declared-index (let ([h (make-hashtable string-hash string=?)])
-                               (for-each (lambda (f) (hashtable-set! h (car f) #t)) declared)
-                               h)]
-             [bad 0])
-        (for-each
-          (lambda (f)
-            (let* ([rel (car f)]
-                   [abs (join-paths root rel)])
-              (cond
-                [(not (file-exists? abs))
-                 (set! bad (+ bad 1))
-                 (fprintf (current-error-port) "  MISSING ~a~%" rel)]
-                [(not (string=? (cdr f) (sha256-file abs)))
-                 (set! bad (+ bad 1))
-                 (fprintf (current-error-port) "  CHANGED ~a (sha256 mismatch)~%" rel)])))
-          declared)
-        (let ([vdir (join-paths root "_vendor")])
-          (when (file-directory? vdir)
-            (for-each
-              (lambda (abs)
-                (let ([rel (strip-prefix abs (string-append root "/"))])
-                  (unless (hashtable-ref declared-index rel #f)
-                    (set! bad (+ bad 1))
-                    (fprintf (current-error-port) "  EXTRA ~a (not in lock)~%" rel))))
-              (files-under vdir))))
-        (if (> bad 0)
-            (begin
-              (fprintf (current-error-port)
-                       "verify: ~a ~a out of sync with lock; run `chandler deps`~%"
-                       bad (plural bad "file" "files"))
-              65)
-            (begin
-              (printf "verify: _vendor/ matches lock (~a ~a checked)~%"
-                      (length declared) (plural (length declared) "file" "files"))
-              0)))))
+      (let* ([declared (lock-files (read-lock lpath))]
+             [git-ok?  (verify root)]                        ; ① git 态
+             [files-bad (verify-declared-files root declared)])   ; ② 内容哈希
+        (cond
+          [(or (not git-ok?) (> files-bad 0))
+           (when (> files-bad 0)
+             (fprintf (current-error-port)
+                      "verify: ~a ~a out of sync with lock; run `chandler deps`~%"
+                      files-bad (plural files-bad "file" "files")))
+           65]
+          [else
+           (if (null? declared)
+               (printf "verify: git revs clean; lock has no (files ...) -- re-run `chandler deps` to record file hashes~%")
+               (printf "verify: _vendor/ matches lock (git revs clean; ~a ~a hashed)~%"
+                       (length declared) (plural (length declared) "file" "files")))
+           0]))))
+
+  ;; lock 的 (files …) 与盘上内容比对,返回不一致条数。declared 为空 → 0(不比,见上)。
+  (define (verify-declared-files root declared)
+    (if (null? declared)
+        0
+        (let ([bad 0]
+              ;; rel → #t 索引:EXTRA 检查要对 _vendor/ 下**每个**文件查一次
+              ;;「lock 里声明过没有」,拿 assoc 线性扫 declared 就是 N×M。
+              [declared-index (let ([h (make-hashtable string-hash string=?)])
+                                (for-each (lambda (f) (hashtable-set! h (car f) #t)) declared)
+                                h)])
+          (for-each
+            (lambda (f)
+              (let* ([rel (car f)]
+                     [abs (join-paths root rel)])
+                (cond
+                  [(not (file-exists? abs))
+                   (set! bad (+ bad 1))
+                   (fprintf (current-error-port) "  MISSING ~a~%" rel)]
+                  [(not (string=? (cdr f) (sha256-file abs)))
+                   (set! bad (+ bad 1))
+                   (fprintf (current-error-port) "  CHANGED ~a (sha256 mismatch)~%" rel)])))
+            declared)
+          (let ([vdir (join-paths root "_vendor")])
+            (when (file-directory? vdir)
+              (for-each
+                (lambda (abs)
+                  (let ([rel (strip-prefix abs (string-append root "/"))])
+                    (unless (or (generated-path? rel)
+                                (hashtable-ref declared-index rel #f))
+                      (set! bad (+ bad 1))
+                      (fprintf (current-error-port) "  EXTRA ~a (not in lock)~%" rel))))
+                (files-under vdir))))
+          bad)))
+
+  ;; 路径里含 .git / _build 段 → 生成物或仓库元数据,不受 lock 文件清单管辖
+  (define (generated-path? rel)
+    (let loop ([segs (string-split rel #\/)])
+      (cond
+        [(null? segs) #f]
+        [(member (car segs) '(".git" "_build")) #t]
+        [else (loop (cdr segs))])))
 
   ;; ── init ──
   ;; --lib:  显式声明这是 lib(顺带按[库布局规范]出目录骨架)

@@ -143,9 +143,32 @@
     (string-trim (git (list "-C" dir "rev-parse" "HEAD"))))
 
   ;; 工作区是否有脏改动(verify / install 拒动用)
+  ;;
+  ;; **忽略 chandler 自己的产物**:`chandler build` 就地把对象编进
+  ;; `_vendor/<dep>/<srcdir>/_build/<mt>/` —— 那棵树在依赖仓库里没被 track,`git status`
+  ;; 照单报成 untracked。若把它算作「本地改动」,正常工作流会两处被卡住:
+  ;;   · `chandler deps` 在 build 之后报「has local changes; refusing to overwrite」;
+  ;;   · `chandler verify` 在 build 之后恒失败。
+  ;; 而那是**我们生成的**东西,不是用户的改动;它的一致性由 lock 的 `(files …)` 之外
+  ;; 那条规则管(生产与校验两侧都排除 `_build/`,见 install 的 vendor-unmanaged-path?)。
   (define (dirty? dir)
-    (> (string-length
-         (string-trim (git (list "-C" dir "status" "--porcelain")))) 0))
+    (exists (lambda (line) (not (generated-status-line? line)))
+            (filter (lambda (l) (> (string-length l) 0))
+                    (split-lines (git (list "-C" dir "status" "--porcelain"))))))
+
+  ;; porcelain 行形如 "?? _build/ta6le/x.so" / " M src/a.ss":前 2 列是状态码,
+  ;; 第 3 列起是路径(rename 形 "old -> new",取前一个即可判归属)。
+  (define (generated-status-line? line)
+    (and (> (string-length line) 3)
+         (let ([p (substring line 3 (string-length line))])
+           (build-tree-path? (car (string-split p #\space))))))
+
+  (define (build-tree-path? p)
+    (let loop ([segs (string-split p #\/)])
+      (cond
+        [(null? segs) #f]
+        [(string=? (car segs) "_build") #t]
+        [else (loop (cdr segs))])))
 
   ;; ── URL key 专用助手(通用字符串/FS 工具来自 util/fs)──
   (define (readable-tail norm)

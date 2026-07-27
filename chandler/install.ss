@@ -25,6 +25,7 @@
           (chandler sexp)
           (chandler manifest)
           (chandler lock)
+          (chandler hash)
           (chandler resolve)
           (chandler version)
           (chandler registry)
@@ -67,9 +68,56 @@
           ;; build 与 pack 同源 → 实例一致。cli 层(cmd-deps)在 install 后触发编译。
           ;; **不再往 lib/ 拷任何东西**(C0):依赖的源码、对象、资源各自 live 在
           ;; _vendor/<dep>/ 里,由 resolved-libdirs 逐依赖挂成 (src . obj) 对。
-          (printf "deps: ~a ~a vendored to _vendor/~%"
-                  (length deps-to-vendor) (plural (length deps-to-vendor) "dependency" "dependencies"))
+          ;;
+          ;; 2) D15 生产侧:铺完之后给 _vendor/ 逐文件取 sha256,写回 lock 的 (files …)。
+          ;;    **必须在这一步**——resolve 产出 lock 时依赖还没落盘,无从哈希。
+          (let ([files (record-vendor-files! root lpath lk)])
+            (printf "deps: ~a ~a vendored to _vendor/ (~a ~a hashed)~%"
+                    (length deps-to-vendor)
+                    (plural (length deps-to-vendor) "dependency" "dependencies")
+                    (length files) (plural (length files) "file" "files")))
           0))))
+
+  ;; ── D15 生产侧:_vendor/ 的文件清单 + sha256 写回 lock ──
+  ;;
+  ;; 路径**相对项目根**(`_vendor/greet/greet.ss`),与 `chandler verify` 的读法一致。
+  ;; 注:designs/06 §6.1 描述的是另一种用法(相对 <vroot>,供 registry/uninstall);
+  ;; 依赖树校验这条通路取项目根基准 —— 它要覆盖的是「多个依赖 + 运行时门」这一整棵树,
+  ;; 没有单一 <vroot> 可作基准。
+  ;;
+  ;; **排除 `.git/` 与 `_build/`**:前者是 checkout 自带的仓库元数据(git 自己会改它,
+  ;; 且 `git status --porcelain` 已经在管工作区是否干净),后者是 `chandler build` 的
+  ;; 产物——deps 跑完时它还不存在,build 之后才出现,记进清单只会让 verify 立刻失效。
+  ;; 这与 cmd-verify 的 EXTRA 扫描用的是同一条排除规则,两侧必须一致。
+  ;;
+  ;; 清单按路径升序(canonical 写要求确定性);内容不变则不重写 lock(免动 mtime)。
+  (define (record-vendor-files! root lpath lk)
+    (let* ([files (vendor-file-digests root)]
+           [lk* (with-files lk files)])
+      (unless (equal? files (lock-files lk))
+        (write-lock lpath lk*))
+      files))
+
+  (define (vendor-file-digests root)
+    (let ([vd (join-paths root "_vendor")]
+          [pre (string-append root "/")])
+      (if (not (file-directory? vd))
+          '()
+          (list-sort (lambda (a b) (string<? (car a) (car b)))
+            (filter-map
+              (lambda (abs)
+                (let ([rel (strip-prefix abs pre)])
+                  (and (not (vendor-unmanaged-path? rel))
+                       (cons rel (sha256-file abs)))))
+              (files-under vd))))))
+
+  ;; 路径里含 .git / _build 段 → 不受 lock 文件清单管辖(与 cmd-verify 同一规则)
+  (define (vendor-unmanaged-path? rel)
+    (let loop ([segs (string-split rel #\/)])
+      (cond
+        [(null? segs) #f]
+        [(member (car segs) '(".git" "_build")) #t]
+        [else (loop (cdr segs))])))
 
   ;; 取 lock:新鲜则用旧;否则解析 + 写(填 manifest-sha256)
   (define (obtain-lock root mf mpath lpath opts)

@@ -258,6 +258,105 @@
       (let ([app (mktmp)])
         (assert-equal 65 (main (list "-C" app "verify")))))
 
+    ;; ── verify 的 git 态检查(接自 (chandler install) 的 verify)──
+
+    ;; D15 生产侧:deps 铺完依赖后把 _vendor/ 的文件清单 + sha256 写回 lock。
+    ;; 路径相对项目根;`.git/` 与 `_build/` 不入清单。
+    (deps-records-vendor-file-digests
+      (parameterize ([cache-root (mktmp)])
+        (let* ([b (make-lib-repo "b" '())]
+               [app (make-app (list (cons 'b b)))])
+          (install app '())
+          (let ([fs (lock-files (read-lock (project-lock-path app)))])
+            (assert-true (pair? fs))
+            ;; 相对项目根 + 源文件在内
+            (assert-true (find (lambda (f) (string=? (car f) "_vendor/b/b.ss")) fs))
+            ;; .git/ 一条都不该有(git 自己会改它,且 dirty? 已在管工作区)
+            (assert-false (find (lambda (f) (substr? (car f) "/.git/")) fs))
+            ;; 升序,canonical 写要求确定性
+            (assert-equal (list-sort string<? (map car fs)) (map car fs))
+            ;; 记的是真 sha256
+            (assert-string= (sha256-file (string-append app "/_vendor/b/b.ss"))
+                            (cdr (find (lambda (f) (string=? (car f) "_vendor/b/b.ss")) fs)))))))
+
+    ;; deps → verify 闭环:刚铺完就该干净
+    (verify-passes-right-after-deps
+      (parameterize ([cache-root (mktmp)])
+        (let* ([b (make-lib-repo "b" '())]
+               [app (make-app (list (cons 'b b)))])
+          (install app '())
+          (assert-equal 0 (main (list "-C" app "verify"))))))
+
+    ;; 篡改 vendored 源文件 → CHANGED → 65
+    (verify-detects-tampered-vendor-file
+      (parameterize ([cache-root (mktmp)])
+        (let* ([b (make-lib-repo "b" '())]
+               [app (make-app (list (cons 'b b)))])
+          (install app '())
+          (write-file (string-append app "/_vendor/b/b.ss") ";; tampered\n")
+          (assert-equal 65 (main (list "-C" app "verify"))))))
+
+    ;; 多出一个未声明的源文件 → EXTRA → 65
+    (verify-detects-undeclared-vendor-file
+      (parameterize ([cache-root (mktmp)])
+        (let* ([b (make-lib-repo "b" '())]
+               [app (make-app (list (cons 'b b)))])
+          (install app '())
+          (write-file (string-append app "/_vendor/b/stray.ss") ";; stray\n")
+          (assert-equal 65 (main (list "-C" app "verify"))))))
+
+    ;; **`chandler build` 之后 verify 仍须通过**:产物落在 _vendor/<dep>/_build/,
+    ;; 生产侧不记它、EXTRA 侧不数它、git 的 dirty? 也不该把它算作本地改动。
+    ;; 回归:三者任一漏掉,build 之后 verify 就恒 65。
+    (verify-ignores-build-artifacts
+      (parameterize ([cache-root (mktmp)])
+        (let* ([b (make-lib-repo "b" '())]
+               [app (make-app (list (cons 'b b)))])
+          (install app '())
+          (write-text (string-append app "/_vendor/b/_build/" (current-machine-type) "/b.so")
+                      "FAKEOBJ")
+          (assert-equal 0 (main (list "-C" app "verify"))))))
+
+    ;; lock 没有 (files …)(v2 老 lock / deps 尚未重跑)→ 只报 git 态,不给一屏假 EXTRA
+    (verify-tolerates-lock-without-files
+      (parameterize ([cache-root (mktmp)])
+        (let* ([b (make-lib-repo "b" '())]
+               [app (make-app (list (cons 'b b)))])
+          (install app '())
+          ;; 把 files 抹掉,模拟老 lock
+          (let ([lk (read-lock (project-lock-path app))])
+            (write-lock (project-lock-path app) (with-files lk '())))
+          (assert-equal 0 (main (list "-C" app "verify"))))))
+
+    ;; git 依赖被切到别的 rev → rev mismatch → 65
+    (verify-detects-rev-mismatch
+      (parameterize ([cache-root (mktmp)])
+        (let* ([b (make-lib-repo "b" '())]
+               [app (make-app (list (cons 'b b)))])
+          (install app '())
+          (let ([lk (read-lock (project-lock-path app))])
+            ;; 把 lock 里的 rev 改成另一个值,checkout 就对不上了
+            (write-lock (project-lock-path app)
+              (make-lock 1 (lock-manifest-sha256 lk) (lock-chandler lk)
+                (map (lambda (d)
+                       (make-locked-dep (locked-dep-name d) (locked-dep-source-kind d)
+                                        (locked-dep-source-loc d) (locked-dep-pin-kind d)
+                                        (locked-dep-pin-val d)
+                                        "0000000000000000000000000000000000000000"
+                                        (locked-dep-deps d) (locked-dep-natives d)
+                                        (locked-dep-scope d) #f))
+                     (lock-deps lk)))))
+          (assert-equal 65 (main (list "-C" app "verify"))))))
+
+    ;; 依赖工作区有未提交改动 → dirty → 65
+    (verify-detects-dirty-checkout
+      (parameterize ([cache-root (mktmp)])
+        (let* ([b (make-lib-repo "b" '())]
+               [app (make-app (list (cons 'b b)))])
+          (install app '())
+          (write-file (string-append app "/_vendor/b/b.ss") ";; locally edited\n")
+          (assert-equal 65 (main (list "-C" app "verify"))))))
+
     ;; ── exec:设 CHEZSCHEMELIBDIRS(+ .env)后透传命令;退出码 = 子进程退出码 ──
     (exec-passthrough-echo
       (let ([app (mktmp)])
