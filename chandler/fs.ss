@@ -6,7 +6,7 @@
 ;;; (更快、可移植、无引用注入面)。
 
 (library (chandler fs)
-  (export parent-dir base-name path-join*
+  (export parent-dir base-name path-join* absolute-path?
            ensure-dir ensure-parent
            dir-entries files-under dir-empty?
            rm-rf copy-file move-file
@@ -35,6 +35,15 @@
     (cond [(string=? a "") b]
           [(char=? #\/ (string-ref a (- (string-length a) 1))) (string-append a b)]
           [else (string-append a "/" b)]))
+
+  ;; 路径是否绝对:POSIX 的前导 "/",或 Windows 的盘符 "C:"。
+  ;; 全仓单一出处 —— 先前 manifest / commands(两处)/ runtime-env / runtime-paths /
+  ;; native-build 各写一份,其中只有 manifest 那份认盘符,其余在 Windows 上会把
+  ;; "C:\proj" 当相对路径去拼接。
+  (define (absolute-path? p)
+    (and (string? p) (> (string-length p) 0)
+         (or (char=? #\/ (string-ref p 0))
+             (and (> (string-length p) 1) (char=? #\: (string-ref p 1))))))
 
   ;; ── 目录创建(递归,幂等)──
   (define (ensure-dir dir)

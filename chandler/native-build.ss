@@ -58,7 +58,7 @@
           (let* ((bin  (parent-dir-or-dot exe))              ; <...>/bin
                  (root (parent-dir-or-dot bin))              ; <...>
                 (dir  (string-append root "/lib/csv" (chez-version-string)
-                                     "/" (machine-type-string))))
+                                     "/" (current-machine-type))))
            (validated dir))))))
 
   ;; ====================================================================
@@ -121,7 +121,7 @@
            ;; 绝不会捎上 cmake 的缓存与中间 .so。它照样按 mt 分键、照样被 clean 扫掉。
            (outbase  (string-append (build-dir) "/" owner))
            (landing  (string-append outbase "/native"))
-           (bdir     (string-append "_build/.cmake/" (machine-type-string) "/" sname))
+           (bdir     (string-append "_build/.cmake/" (current-machine-type) "/" sname))
            (target   (string-append landing "/" soname "." (so-ext)))
            ;; 前置 = <dir> 下每个源文件。产物不再落在源码树里,故无需排除自产物。
            (prereqs  (files-under dir)))
@@ -173,7 +173,7 @@
         "\nCHEZAPI\n" (if chez-api "1" "0")
         "\nSONAME\n"  soname
         "\nCHEZ\n"    (scheme-version)
-        "\nMT\n"      (machine-type-string)
+        "\nMT\n"      (current-machine-type)
         "\nTOOL\n"    (toolchain-id build))))
 
   ;; ====================================================================
@@ -211,7 +211,7 @@
     (let ((cmd (string-append
                  "cd " (shq dir) " && "
                  (env-prefix (list (cons "NATIVE_OUT"   (%abs landing))
-                                   (cons "MACHINE_TYPE" (machine-type-string))
+                                   (cons "MACHINE_TYPE" (current-machine-type))
                                    (cons "SOEXT"        (so-ext))
                                    (cons "CHEZ_INCLUDE" inc)))
                  "sh " (shq script))))
@@ -229,7 +229,7 @@
                    ;; autotools 契约(PREFIX/DESTDIR)+ 与 script 后端同样的
                    ;; MACHINE_TYPE/SOEXT,好让 Makefile 可移植地命名输出
                    ;; (.so/.dylib/.dll)。
-                   (env-prefix (list (cons "MACHINE_TYPE" (machine-type-string))
+                   (env-prefix (list (cons "MACHINE_TYPE" (current-machine-type))
                                      (cons "SOEXT"        (so-ext))
                                      (cons "CHEZ_INCLUDE" inc)))
                    "make PREFIX=" (shq abs) " DESTDIR= install")))
@@ -391,9 +391,7 @@
   ;; 项目相对目录的绝对路径(env 变量传给的是已经 `cd` 进包目录的子 shell,
   ;; 相对落点会失效)。bake 那份 shell 出去跑 `pwd`;进程自己就知道 cwd。
   (define (%abs p)
-    (if (and (> (string-length p) 0) (char=? (string-ref p 0) #\/))
-        p
-        (string-append (current-directory) "/" p)))
+    (if (absolute-path? p) p (string-append (current-directory) "/" p)))
 
   ;; ── 装配 + 复位(与 (chandler compile) 同一套理由:Chez 惰性实例化库,
   ;;    而 recipe 求值前就得有 native-task;单二进制里同进程二次构建要复位)──

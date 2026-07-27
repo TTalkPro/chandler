@@ -54,7 +54,7 @@
   (define (cmd-verify-pack root flags pos)
     (let ([target (positional-ref pos 0 #f)])
       (unless target (error 'verify-pack "usage: chandler verify-pack [--target] <dir|pack.manifest>"))
-      (verify-pack (if (string-prefix? "/" target) target (join-paths root target))
+      (verify-pack (if (absolute-path? target) target (join-paths root target))
                    (flag? flags 'target))))
 
   ;; ── verify:校验 _vendor/ 与 lock 的 (files ...) 一致(CI;纯只读,不写任何文件)──
@@ -684,7 +684,7 @@
                "chandler repl: ~a mode, ~a library search entries, runtime ~a~%"
                (if project? "project" "global") (length dirs) interp)
       (let ([args (append (list "--libdirs" (path-list dirs))
-                          (if (null? natives) '() (list (make-repl-preamble root natives))))])
+                          (if (null? natives) '() (list (make-preamble root natives))))])
         (run-foreground interp args
                         (list (cons 'env (env-with-dotenv root flags '())))))))
 
@@ -692,19 +692,10 @@
   ;; repl 与 run/exec/test 同一套(interp-kind 已把"跟随当前运行时"的兜底内置进默认分支)。
   (define (repl-interp root flags) (choose-interp root flags))
 
-  ;; native 预载 preamble(仅项目有 native 时):加载各 .so 后落入 REPL
-  ;; 注:run/test 用共享的 make-preamble(在 runtime-env.ss);repl 因落点不同
-  ;; (.chandler-repl.ss,无目标脚本)保留自己的版本。
-  (define (make-repl-preamble root natives)
-    (let ([tmp (join-paths root ".chandler-repl.ss")])
-      (call-with-output-file tmp
-        (lambda (p)
-          (for-each (lambda (so)
-                      (when (file-exists? so) (fprintf p "(load-shared-object ~s)~%" so)))
-                    natives))
-        'truncate)
-      tmp))
-
+  ;; native 预载 preamble 由共享的 make-preamble 统一生成(runtime-env.ss):
+  ;; repl 走二参形(落 .chandler-repl.ss,装完 native 直接进 REPL),
+  ;; run/test 走三参形(落 .chandler-run.ss,末尾 load 目标脚本)。
+  ;;
   ;; choose-interp / interp-kind / make-preamble / collect-dotenv 自 v3 起抽到
   ;; (chandler cli runtime-env),由 cmd-run / cmd-repl / cmd-exec / cmd-test 共享。
 
@@ -712,7 +703,7 @@
   (define (path-list dirs) (libdirs->arg dirs))
 
   (define (abspath root p)
-    (if (string-prefix? "/" p) p (join-paths root p)))
+    (if (absolute-path? p) p (join-paths root p)))
 
 ;; ── .gitignore / scaffold / basename(init 用)──
 ;; 生成物:依赖 checkout(_vendor/)、编译产物(_build/<mt>/)、各临时 recipe。

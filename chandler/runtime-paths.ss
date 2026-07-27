@@ -15,7 +15,8 @@
        (error 'runtime-paths "resource segment must be a string" seg)]
       [(string=? seg "")
        (error 'runtime-paths "empty resource segment rejected")]
-      [(string-prefix? "/" seg)
+      ;; absolute-path? 而非裸 "/" 前缀:Windows 盘符形("C:foo")同样要拒
+      [(absolute-path? seg)
        (error 'runtime-paths "absolute resource segment rejected" seg)]
       [(string=? seg "..")
        (error 'runtime-paths "parent traversal rejected" seg)]

@@ -21,7 +21,7 @@
     format-object eprintf datum->string
     filter-map short-rev
     ;; fs
-    parent-dir base-name path-join*
+    parent-dir base-name path-join* absolute-path?
     ensure-dir ensure-parent
     dir-entries files-under dir-empty?
     rm-rf copy-file move-file
@@ -37,7 +37,7 @@
     alist->sorted
     check-format!
     ;; layout
-    current-machine-type machine-type-string so-ext
+    current-machine-type so-ext
     windows-mt?
     join-paths path-join
     path-sep split-pair entry->arg libdirs->arg

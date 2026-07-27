@@ -14,6 +14,7 @@
   (export choose-interp interp-kind make-preamble collect-dotenv)
   (import (chezscheme)
           (chandler util)
+          (chandler fs)
           (chandler layout)
           (chandler manifest)
           (chandler env)
@@ -55,16 +56,28 @@
                    [else (current-runtime)]))           ; 双跑 / 未声明 → 跟随当前(默认 skiff)
                (current-runtime)))])))                  ; 无 manifest → 跟随当前
 
-  ;; 生成 preamble 临时脚本:先 load 各 native,再 load 目标脚本
-  (define (make-preamble root natives script-abs)
-    (let ([tmp (string-append root "/.chandler-run.ss")])
+  ;; 生成 preamble 临时脚本:先 load 各 native,再(若有)load 目标脚本。
+  ;;
+  ;; 三参形 = run/test:落 <root>/.chandler-run.ss,末尾 (load <script>)。
+  ;; 二参形 = repl:落 <root>/.chandler-repl.ss,没有目标脚本(装完 native 就落进
+  ;;          REPL)。两者先前是两份几乎相同的函数(cmd-repl 自己抄了一份
+  ;;          make-repl-preamble),差别只有落点与末尾那一行 —— 合成一个,
+  ;;          省得改 native 预载逻辑时漏掉其中一边。
+  ;; 两个落点都在 `chandler init` 写的 .gitignore 里。
+  (define make-preamble
+    (case-lambda
+      [(root natives) (write-preamble root ".chandler-repl.ss" natives #f)]
+      [(root natives script-abs) (write-preamble root ".chandler-run.ss" natives script-abs)]))
+
+  (define (write-preamble root filename natives script-abs)
+    (let ([tmp (join-paths root filename)])
       (call-with-output-file tmp
         (lambda (p)
           (for-each (lambda (so)
                       (when (file-exists? so)
                         (fprintf p "(load-shared-object ~s)~%" so)))
                     natives)
-          (fprintf p "(load ~s)~%" script-abs))
+          (when script-abs (fprintf p "(load ~s)~%" script-abs)))
         'truncate)
       tmp))
 
@@ -90,7 +103,7 @@
                                '())]
               [cli-extra  (let ([f (flag flags 'env-file)])
                             (if (string? f)
-                                (read-dotenv (if (string-prefix? "/" f) f (join-paths root f)))
+                                (read-dotenv (if (absolute-path? f) f (join-paths root f)))
                                 '()))])
          (append base tests-extra cli-extra))]))
 

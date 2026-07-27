@@ -20,6 +20,7 @@
   (import (chezscheme)
           (chandler sexp)
           (chandler util)
+          (chandler fs)
           (chandler version))
 
   (define supported-format 1)
@@ -217,10 +218,6 @@
       (error 'validate-manifest "path native must use a relative path" (native-source-loc n))))
 
   ;; 内建库前缀:chezscheme / rnrs / skiff(designs/06 §3)
+  ;; absolute-path?(含 Windows 盘符)已收入 (chandler fs),全仓单一出处。
   (define (builtin-prefix? name)
-    (memq name '(chezscheme rnrs scheme skiff)))
-
-  (define (absolute-path? p)
-    (and (string? p) (> (string-length p) 0)
-         (or (char=? #\/ (string-ref p 0))
-             (and (> (string-length p) 1) (char=? #\: (string-ref p 1)))))))  ; C:
+    (memq name '(chezscheme rnrs scheme skiff))))
