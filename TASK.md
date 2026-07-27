@@ -272,34 +272,58 @@ EXTRA 文案、是否统计并打印 ok/extra 汇总。
 `active-sidecar-drift`，重装或 `chandler switch` 一次即修复。**不做读路径自愈** ——
 `read-registered` 在 `run`/`build`/`repl` 的热路径上且不在锁内，让它写文件是错的。
 
-### C2. 资源 segment 拒绝 `\`（P1-2，安全）
-> 设计 §6 末段。一行的事，且是安全边界，不该等整个 Windows 计划。
+### C2. 资源 segment 拒绝 `\`（P1-2，安全）✅ 已完成
+> 设计 §6 末段。一行的事，且是安全边界，不等整个 Windows 计划。
 
-- [ ] `runtime-paths.ss:25` 的 `validate-resource-segment` 同时拒 `/` 与 `\`
-      —— 当前 `(resource-path '(app) "..\\..\\secret")` **绕过全部四条校验**
-- [ ] 测试：`..\..\x`、`a\b`、混合分隔符各一条
+- [x] `fs.ss` 加 `path-sep-char?` / `has-path-sep?`（单一出处，C6 会接着用），
+      `runtime-paths.ss` 的 `validate-resource-segment` 改走它
+- [x] 测试 4 种绕过写法：`a\b`、`..\..\secret`、`..\../secret`（混合分隔符）、
+      `\etc\passwd`。**两个 API 都测** —— 路径穿越不该因为「可选版本」降级成静默 `#f`
+- [x] **验证非空转**：改回只拒 `/` → 变红
 
-### C3. 启动器 `.ps1` → `.cmd`（D34）
-> 设计 §8.2–8.7。依赖 C1。做完 Windows 就「装得上、发得出」。
+### C3. 启动器 `.ps1` → `.cmd`（D34）✅ 已完成
+> 设计 §8.2–8.7。依赖 C1。做完之后 Windows 就「装得上、发得出」。
 
-- [ ] install 模式 Windows shim 改 `.cmd`（模板见设计 §8.3）：
-      直线代码 + 底部错误标签，无内嵌块、无延迟展开、无正则；
+- [x] install 模式 Windows shim 改 `.cmd`（`app-launcher-cmd`）：直线代码 +
+      底部错误标签，无内嵌块、无延迟展开、无正则、**不 `cd`**（UNC 下可用）；
       退出码与 POSIX 侧逐条对齐（70 / 64 / 127）
-- [ ] pack 模式 Windows launcher 改 `.cmd`（§8.4）；
-      `boots-flags`（`pack/launchers.ss:70`）**原样共用**，prefix 传 `%HERE%`
-- [ ] **`.cmd` 必须写 CRLF** —— 加 `write-text-crlf`。§8.3 用了标签，
-      LF-only 下 `goto` 可能出错。**这是最容易漏的一条**
-- [ ] `launchers.ss:90` 的 win 分支去掉 `chmod`（`.cmd` 不需要）
-- [ ] `remove-app-launcher!`（`commands.ss:363`）补删 `.cmd`；
-      `.ps1` 的删除**保留**，让旧安装能干净卸载
-- [ ] `bin/chandler.cmd`（开发期 wrapper，P0-5）
-- [ ] 取消 `bootstrap.ss:287` 的「Windows 跳过冒烟测试」——
-      `.cmd` 可被 `system` 直接调起，补上这个覆盖缺口
-- [ ] **launcher parity 测试**：渲染 sh 与 cmd 两份，解析出
-      (registry 路径, runner 路径, runtime 候选序, 五个退出码) 五元组断言一致。
-      照 `bootstrap-parity` / `pack-verifier-parity` 的模式；
-      **必须验证非空转** —— 故意制造分叉确认它会红
-- [ ] 更新 `designs/08-launchers.md` §3（PowerShell 版被取代）
+- [x] pack 模式改 `.cmd`（`launcher-cmd-skiff` / `launcher-cmd-stock`）；
+      `boots-flags` **两侧共用同一个函数**，只在 cmd 侧出口把分隔符归一成 `\`
+- [x] **CRLF**：`fs.ss` 加 `write-text-crlf`（幂等，不重复转换），两族写入侧都走它；
+      模板里也直接写 `\r\n`，双保险
+- [x] **ASCII-only**：cmd.exe 按 OEM 代码页读批处理，不是 UTF-8 —— 生成的注释里
+      原本有个 em dash，会显示成乱码，改成 `--`
+- [x] `launchers.ss` 的 win 分支去掉 `chmod`（`.cmd` 不需要）
+- [x] `remove-app-launcher!` 改为删**三种**形态：sh / `.cmd` / **`.ps1`**。
+      旧安装的 `.ps1` 不带走，PATH 上就躺着一个指向已删包的僵尸启动器
+- [x] `bin/chandler.cmd`（开发期 wrapper，P0-5）。sh 版的 `_prog_ok` 能力探测
+      **刻意不实现**（要把一段 Scheme 源码经 stdin 喂进候选运行时，cmd 里得绕临时
+      文件，而它挡的是一个早已过期的 skiff stub）—— 差异是有意的，写在文件注释里
+- [x] 取消 `bootstrap.ss` 的「Windows 跳过冒烟测试」：`.cmd` 能被 `system` 直接调起，
+      于是自举的最后一环在 Windows 上也真的被验证，而不是印一行提示了事
+- [x] **launcher-parity 新 suite（14 条）**：sidecar 路径 / runner 路径拼法 /
+      运行时发现顺序 / 五个退出码 / 环境变量 / 不嵌 version / pack 的 boot 链 /
+      `.exe` 后缀 / CRLF / ASCII / 反斜杠路径 / `exit /b` 转发 / 不 `cd`，外加
+      `known-divergences` 一条**显式钉住有意的差异**（cmd 无 `exec`、`%*` vs `"$@"`）
+- [x] `uninstall-removes-all-launcher-forms` 端到端测试（经 `main`，三种形态都清）
+- [x] **验证非空转**：四处故意分叉各自变红 —— cmd shim 退回读 `.ss`、cmd 模板改回
+      LF、`boots-flags` 出口不归一、`remove-app-launcher!` 不删 `.ps1`
+- [x] 端到端手测：install → 启动器实跑 → doctor → **pack → pack 启动器实跑** →
+      uninstall 后 bindir 清空
+- [x] 测试 524 → 542，0 failed；清空 `_build` 从零重编亦通过
+- [x] 文档：`designs/08` §1/§3/§4/§6/§9 全面对齐；两个 README 的 Windows 段重写
+
+**parity 测试自己抓到的第一个问题**：初版按「候选名在全文首次出现的位置」排运行时
+发现顺序，sh 侧排出 `(chez skiff scheme)` —— 因为 `case` 分支里的 `chez)` 出现在
+发现循环之前。那测的是排版不是策略。改为各自认准发现构造本身（sh 的 `for _c in …`、
+cmd 的 `where <cand>` 行）。
+
+**顺带修的文档腐烂**（都不是本次改动引入的，但就在要改的段落里）：
+- `designs/08` §4 描述的 pack 启动器与实现早已对不上（文档写 `readlink -f` /
+  `PACK_ROOT` / `[ -x ]` 检查 / `boot/<mt>/`，实际是 `CDPATH= cd` / `HERE` /
+  无检查 / `lib/chez/`）。既然要改 §4.2，就把 §4.1–4.3 一并按代码校准
+- 两个 README 都还在推荐 `bash tests/powershell-run.sh`，而那文件在 `1e88e2d`
+  就被删了。改为指向新的 launcher-parity suite
 
 ### C4. 换行符与 hash 跨平台一致（D38，P1-3）
 > 设计 §9。独立于其它项，不做则跨平台协作随机报错。
@@ -369,14 +393,19 @@ EXTRA 文案、是否统计并打印 ok/extra 汇总。
       `install` 与 `doctor` 报错，**不自动改名**（改名会让库名与磁盘路径失去对应）
 - [ ] `.env` 键大小写差异：记录已知行为，不做归一化
 
-### C8. 文档修正
-> 现在 README 的 Windows 一节描述的是坏掉的路径。
+### C8. 文档修正（大部分随 C3 一起做了）
+> 原计划单列，但 C3 改完之后 README 的 Windows 一节就**是错的** ——
+> 留着等 C8 等于故意让文档说假话，所以随 C3 一起改了。
 
-- [ ] `README.md` / `README.en.md` 的前置环境表：PowerShell 从「仅 Windows 需要」
-      改为「不需要」（`.cmd` 只依赖 cmd.exe）
-- [ ] Windows 安装小节的启动器路径 `.ps1` → `.cmd`
-- [ ] 新增「Windows 已知限制」：`%` 参数失真、Ctrl+C 的
-      `Terminate batch job (Y/N)?`、`-j` 退化为串行
+- [x] `README.md` / `README.en.md` 前置环境表：PowerShell 划掉，改为「不需要」
+- [x] Windows 安装小节整段重写：代码块从 PowerShell 语法改成 cmd 语法
+      （原来写着 `$env:PATH = …`，在 cmd 里根本不成立），路径 `.ps1` → `.cmd`
+- [x] 「Windows 已知限制」：`%` 参数失真、未加引号的 `& | < > ^`、
+      Ctrl+C 的 `Terminate batch job (Y/N)?`
+- [x] 从旧版升级的说明（重装一次换成 `.cmd`；`uninstall` 会清 `.ps1`）
+- [x] 两个 README 里对已删文件 `tests/powershell-run.sh` 的引用 → launcher-parity
+- [ ] **留给 C5/C7**：`-j` 在 Windows 退化为串行的说明（D37 还没实现，
+      现在写上去就是提前描述一个不存在的行为）
 
 ### C9. 测试套件去 shell 依赖 + Windows CI
 > 设计 §12。**前面所有工作的验收关口** —— 不做这步，Windows 支持就是「没人跑过」。

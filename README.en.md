@@ -23,7 +23,7 @@
 |------|-------|
 | **Scheme runtime** | **skiff** (preferred) or **Chez Scheme ≥ 10.0**. Either is fine; if both are present, skiff is the default. **Petite is not enough** — it lacks the compiler, and `chandler build` / `chandler make` need to compile the library tree. |
 | **git** | Required for dependency acquisition (`git` must be on PATH). |
-| PowerShell | **Windows only** (launcher and install scripts are `.ps1`). Bundled with Windows 10/11; or `mise use powershell`. |
+| ~~PowerShell~~ | **Not needed.** Launchers are `.cmd` (D34), depending only on `cmd.exe`, which every Windows has — no ExecutionPolicy to fight, and `.CMD` is in the default `PATHEXT`. |
 
 If you don't have a runtime yet, install skiff or Chez first; `mise` users can `mise use chezscheme`.
 
@@ -38,21 +38,27 @@ export PATH="$HOME/.local/bin:$PATH"   # if not already on PATH (the script prin
 chandler --version                     # → chandler 0.1.6 (skiff 0.1.2) (chez 10.4.1)
 ```
 
-### Windows (PowerShell)
+### Windows
 
-```powershell
-git clone <this-repo> chandler; cd chandler
-scheme --script bootstrap.ss                 # launcher → %LOCALAPPDATA%\chez\bin\chandler.ps1
-scheme --script bootstrap.ss --system        # system-wide (needs admin)
+No PowerShell required — plain `cmd.exe` works (the snippet below is cmd syntax):
 
-$env:PATH = "$HOME\.local\bin;$env:PATH"
+```bat
+git clone <this-repo> chandler && cd chandler
+scheme --script bootstrap.ss                 :: launcher → %LOCALAPPDATA%\chez\bin\chandler.cmd
+scheme --script bootstrap.ss --system        :: system-wide (needs admin)
+
+set "PATH=%LOCALAPPDATA%\chez\bin;%PATH%"
 chandler --version
 ```
 
-> A `.ps1` on PATH can be invoked by its **bare** name `chandler`, so commands read identically on both platforms.
-> If PowerShell reports "running scripts is disabled", the execution policy is Restricted — pick one:
-> `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` (one-time), or
-> `pwsh -ExecutionPolicy Bypass -File <script>` (this run only).
+> **`.cmd` is invoked by its bare name.** `.CMD` is in the default `PATHEXT`, so `chandler` just works —
+> from cmd, from PowerShell, and when spawned by another program. No execution policy to fight.
+>
+> **Known limitations** (inherent to cmd; npm/yarn's Windows shims share them): a `%` inside an argument
+> gets variable-expanded, unquoted `& | < > ^` break the line, and `Ctrl+C` prompts `Terminate batch job (Y/N)?`.
+>
+> **Upgrading from 0.1.6 or earlier**: launchers were `.ps1` back then. Reinstall once to get the `.cmd`;
+> `chandler uninstall` removes any leftover `.ps1` too.
 
 > `bootstrap.ss` is a self-contained **three-stage bootstrap installer** (pure `(chezscheme)`, zero chandler
 > imports — so it still works when the chandler libraries themselves are broken):
@@ -68,7 +74,7 @@ chandler --version
 
 ### After installation
 
-The installed launcher is a **stable shim** (D17): at run time it reads `<libdir>/.registry/chandler.ss` to find the active version, hands over to `<vroot>/.chandler/run.sps` (which mounts library paths from the lock, D18), and then performs **runtime discovery** (prefer `skiff`, fall back to `scheme` / `chez`). On POSIX it's `chandler` (sh), on Windows it's `chandler.ps1` (PowerShell). With several versions installed side by side, `chandler switch` picks the active one — the shim itself is never rewritten.
+The installed launcher is a **stable shim** (D17): at run time it reads `<libdir>/.registry/chandler.active` to find the active version, hands over to `<vroot>/.chandler/run.sps` (which mounts library paths from the lock, D18), and then performs **runtime discovery** (prefer `skiff`, fall back to `scheme` / `chez`). On POSIX it's `chandler` (sh), on Windows it's `chandler.cmd` (batch). With several versions installed side by side, `chandler switch` picks the active one — the shim itself is never rewritten.
 
 To pin a specific runtime, see [Pin a runtime](#pinning-a-runtime-skiff--chez) below — the install script and the launcher honor the same set of variables.
 
@@ -195,7 +201,7 @@ The global fallback mounts **one version per installed package**: for an `app` t
 | `repl [--runtime skiff\|chez]` | Interactive shell with library paths auto-mounted (project first, global fallback) |
 | `make [task]` | Run a task from `chandler-tasks.ss` (default `build`); with no tasks file, derive from the manifest |
 | `test [args…]` | Run `tests/run-tests.sps` (mounts project library paths + loads `.env` / `.env.tests` + selects a runtime); exit code = test process exit code |
-| `install [--user\|--system\|--prefix=DIR]` | Install the project's libraries + dependencies into the global prefix (recorded in the central `.registry/`). **An app also gets a CLI entry point**: `~/.local/bin/<app>` (POSIX, stable shim) / `%LOCALAPPDATA%\chez\bin\<app>.ps1` (Windows). The first install sets active; several versions of one name coexist |
+| `install [--user\|--system\|--prefix=DIR]` | Install the project's libraries + dependencies into the global prefix (recorded in the central `.registry/`). **An app also gets a CLI entry point**: `~/.local/bin/<app>` (POSIX, stable shim) / `%LOCALAPPDATA%\chez\bin\<app>.cmd` (Windows). The first install sets active; several versions of one name coexist |
 | `uninstall --name=<n> [--version=<v>]` | Clean uninstall (`rm -rf <vroot>` + update `.registry/`); removing the active version clears active |
 | `switch <name> <version>` | **Switch an app's active version** (D19); `--latest` picks the highest by numeric semver; `--list` shows all active versions |
 | `doctor` | Health-check the global prefix: `missing-vroot` / `missing-active` / `missing-runner` / `malformed-registry` / `orphan-vroot` / `kind-mismatch` / `name-filename-mismatch` / `duplicate-version` / `stale-staging` |
@@ -262,10 +268,9 @@ chandler test                                       # canonical entry: mounts li
 scheme --libdirs . --program tests/run-tests.sps    # same, pure Chez, no external deps (manual: you mount paths yourself, no native fallback)
 petite  --libdirs . --program tests/run-tests.sps   # same (Petite-subset check)
 skiff   --libdirs . --program tests/run-tests.sps   # same (Skiff runtime)
-bash tests/powershell-run.sh                        # Windows launcher acceptance (needs pwsh; skipped if absent)
 ```
 
-`tests/powershell-run.sh` **renders the generated `chandler.ps1` and actually runs it under pwsh** (syntax / runtime enforcement / overrides / exit codes / arg passing / end-to-end launch) — because the generated script uses forward slashes and `[System.IO.Path]::PathSeparator` as the separator, the same script works under Linux's pwsh too. Install pwsh with `mise use powershell`.
+`tests/chandler/launcher-parity.ss` renders **both** the sh and `.cmd` launcher families and diffs them: the sidecar path they read, how the runner path is assembled, the runtime-discovery order, and all five exit codes must match; the deliberate divergences (cmd has no `exec`; `%*` vs `"$@"`) are pinned explicitly. **It runs as part of `run-tests.sps` — no Windows and no pwsh needed.**
 
 The library layout follows the [library layout spec](designs/13-library-source-layout.md): an umbrella `chandler.ss` + a same-named subtree `chandler/`, with the search root = the repo root. The core only `import (chezscheme)`, restricted to the Petite-runnable subset (portable across both runtimes).
 

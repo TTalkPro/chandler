@@ -21,7 +21,7 @@
 |------|------|
 | **Scheme 运行时** | **skiff**(优先)或 **Chez Scheme ≥ 10.0**。二者装一个即可;都在则默认用 skiff。**Petite 不够**——它没有编译器,而 `chandler build`/`chandler make` 要编译库树。 |
 | **git** | 依赖获取靠它(`git` 需在 PATH 上)。 |
-| PowerShell | **仅 Windows 需要**(启动器与安装脚本是 `.ps1`)。Windows 10/11 自带;或 `mise use powershell`。 |
+| ~~PowerShell~~ | **不需要**。启动器是 `.cmd`(D34),只依赖每台 Windows 必有的 `cmd.exe` —— 不受 ExecutionPolicy 管,`.CMD` 也在默认 `PATHEXT` 里。 |
 
 若尚无运行时,先装 skiff 或 Chez;`mise` 用户可 `mise use chezscheme`。
 
@@ -36,30 +36,37 @@ export PATH="$HOME/.local/bin:$PATH"        # 若尚未在 PATH 上(脚本会提
 chandler --version                          # → chandler 0.1.6 (skiff 0.1.2) (chez 10.4.1)
 ```
 
-### Windows(PowerShell)
+### Windows
 
-```powershell
-git clone <this-repo> chandler; cd chandler
-scheme --script bootstrap.ss                 # 启动器 → %LOCALAPPDATA%\chez\bin\chandler.ps1
-scheme --script bootstrap.ss --system        # 系统级(需管理员)
+不需要 PowerShell,`cmd.exe` 即可(下面是 cmd 语法):
 
-$env:PATH = "$HOME\.local\bin;$env:PATH"
+```bat
+git clone <this-repo> chandler && cd chandler
+scheme --script bootstrap.ss                 :: 启动器 → %LOCALAPPDATA%\chez\bin\chandler.cmd
+scheme --script bootstrap.ss --system        :: 系统级(需管理员)
+
+set "PATH=%LOCALAPPDATA%\chez\bin;%PATH%"
 chandler --version
 ```
+
+> **`.cmd` 用裸名调用**:`.CMD` 在默认 `PATHEXT` 里,故 `chandler` 直接可用 ——
+> cmd、PowerShell、被别的程序 spawn 三种情形都一样,也不会撞上 PowerShell 的执行策略。
+>
+> **已知限制**(cmd 固有,npm / yarn 的 Windows shim 同款):参数里含 `%` 会被变量展开、
+> 未加引号的 `& | < > ^` 会破;`Ctrl+C` 会弹 `Terminate batch job (Y/N)?`。
+>
+> **从 0.1.6 及更早升级**:那时的启动器是 `.ps1`,重装一次即换成 `.cmd`;
+> `chandler uninstall` 会把残留的 `.ps1` 一并带走。
 
 > `bootstrap.ss` 是自包含的**三段式自举安装器**(纯 `(chezscheme)`,零 chandler import,chandler 库坏了也能装):
 > ① 源码直载 CLI 跑 `deps` + `build` + `install --prefix=./_bootstrap`,产出一个与正常 `--user` 安装**完全同构**的 `_bootstrap/`(库树 + `.registry/` + 稳定 shim);
 > ② 用 `_bootstrap` 里的 chandler 重新 `build` 本仓库(自托管验证);
 > ③ 再用它 `install` 到最终前缀并冒烟启动器。安装逻辑全部复用 chandler 自己的 `cmd-install`,bootstrap 只做编排。
 > 用法:`scheme --script bootstrap.ss [--user|--system|--prefix=DIR] [--force] [--uninstall] [--bootstrap-only]`。`--user`(默认)装 `~/.local`;`--system` 装 `/usr/local`;`--prefix=DIR` 装 `DIR` + `DIR/bin`;`--bootstrap-only` 只跑①(调试自举用)。用户通过调用方式选择运行时(`scheme` vs `skiff`)。
->
-> 若 PowerShell 报「running scripts is disabled」,是执行策略为 Restricted,二选一:
-> `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`(一次性),或
-> `pwsh -ExecutionPolicy Bypass -File ...`(仅本次)。
 
 ### 装完之后
 
-安装出的启动器是**稳定 shim**(D17):运行时读 `<libdir>/.registry/chandler.ss` 找 active 版本,交接给 `<vroot>/.chandler/run.sps`(lock 驱动挂库路径,D18),再做**运行时发现**(优先 `skiff`,回退 `scheme`/`chez`)。POSIX 是 `chandler`(sh),Windows 是 `chandler.ps1`(PowerShell)。多版本共存时用 `chandler switch` 切换,shim 本身不变。
+安装出的启动器是**稳定 shim**(D17):运行时读 `<libdir>/.registry/chandler.active` 找 active 版本,交接给 `<vroot>/.chandler/run.sps`(lock 驱动挂库路径,D18),再做**运行时发现**(优先 `skiff`,回退 `scheme`/`chez`)。POSIX 是 `chandler`(sh),Windows 是 `chandler.cmd`(批处理)。多版本共存时用 `chandler switch` 切换,shim 本身不变。
 
 想固定用某个运行时,见下面[「指定运行时」](#指定运行时skiff--chez)——安装脚本与启动器认同一套变量。
 
@@ -170,7 +177,7 @@ chandler run --script main.ss [args...]
 | `repl [--runtime skiff\|chez]` | 交互 shell,自动挂库路径(项目优先 + 全局兜底) |
 | `make [task]` | 跑 `chandler-tasks.ss` 的任务(默认 `build`);无任务文件时从 manifest 推导 |
 | `test [args…]` | 跑 `tests/run-tests.sps`(挂项目库路径 + 加载 `.env`/`.env.tests` + 选择 runtime);退出码 = 测试进程退出码 |
-| `install [--user\|--system\|--prefix=DIR]` | 装项目库 + 依赖到全局前缀(中心 `.registry/` 登记)。**app 自动建命令行入口** `~/.local/bin/<app>`(POSIX,稳定 shim)/ `%LOCALAPPDATA%\chez\bin\<app>.ps1`(Windows)。首次 install 自动设 active;同 name 多 version 共存 |
+| `install [--user\|--system\|--prefix=DIR]` | 装项目库 + 依赖到全局前缀(中心 `.registry/` 登记)。**app 自动建命令行入口** `~/.local/bin/<app>`(POSIX,稳定 shim)/ `%LOCALAPPDATA%\chez\bin\<app>.cmd`(Windows)。首次 install 自动设 active;同 name 多 version 共存 |
 | `uninstall --name=<n> [--version=<v>]` | 干净卸载(`rm -rf <vroot>` + 更新 `.registry/`);删 active 自动清空 |
 | `switch <name> <version>` | **切换 app 的 active version**(D19);`--latest` 按 semver 数值序选最高;`--list` 列所有 active |
 | `doctor` | 体检全局前缀:`missing-vroot` / `missing-active` / `missing-runner` / `malformed-registry` / `orphan-vroot` / `kind-mismatch` / `name-filename-mismatch` / `duplicate-version` / `stale-staging` |
@@ -237,10 +244,9 @@ chandler test                                      # 规范入口:挂库路径 +
 scheme --libdirs . --program tests/run-tests.sps    # 同上,纯 Chez,无外部依赖(手写时:注意自己挂库路径,无 native 兜底)
 petite  --libdirs . --program tests/run-tests.sps   # 同上(Petite 子集校验)
 skiff   --libdirs . --program tests/run-tests.sps   # 同上(Skiff 运行时)
-bash tests/powershell-run.sh                        # Windows 启动器验收(需 pwsh,缺则跳过)
 ```
 
-`tests/powershell-run.sh` 把生成的 `chandler.ps1` **渲染后用 pwsh 真跑**(语法 / 运行时强制 / 覆盖 / 退出码 / 参数透传 / 端到端启动)——因为生成的脚本用正斜杠且分隔符取 `[System.IO.Path]::PathSeparator`,同一份脚本在 Linux 的 pwsh 下也成立。装 pwsh:`mise use powershell`。
+`tests/chandler/launcher-parity.ss` 把 sh 与 `.cmd` 两族启动器**都渲染出来对拍**:读的 sidecar 路径、runner 路径拼法、运行时发现顺序、五个退出码必须一致,刻意保留的差异(cmd 无 `exec`、`%*` vs `"$@"`)则显式钉住。**跑 `run-tests.sps` 就跑到,不需要 Windows,也不需要 pwsh。**
 
 库布局遵循[库布局规范](designs/13-library-source-layout.md):umbrella `chandler.ss` + 同名子库树 `chandler/`,搜索根 = 仓库根。核心只 `import (chezscheme)`,限 Petite 可跑子集(双运行时可移植)。
 
