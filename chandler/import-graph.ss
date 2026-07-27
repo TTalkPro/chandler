@@ -23,16 +23,15 @@
     ;; 解析
     parse-source parse-library parse-program
     normalize-libref extract-edges dedupe-edges collect-export-names
-    scan-includes level->phase
     ;; 库名 ↔ 路径 ↔ 归类
     ref->string ref->rel candidates candidates-in
-    resolve-lib-path own-source-path prebuilt-lib-obj
+    resolve-lib-path own-source-path
     builtin-lib? runtime-provided-lib? classify-libref external-libref?
     reset-classify-cache!
     ;; 可达图
     build-graph
     ;; 小工具
-    dep-read-all dep-find-clause dep-condition-message)
+    dep-read-all dep-find-clause)
   (import (chezscheme)
           (chandler base))
 

@@ -29,7 +29,7 @@
     flags-string needed-compile? needed-unit?
     fp-manifest-path load-fp-manifest! write-fp-manifest! reset-fingerprint-cache!
     ;; 并行构建(designs/11)
-    parallel-build! compile-units unit-deps unit-level
+    parallel-build!
     worker-runtime worker-script-path write-worker-script! worker-cmd
     ;; dev 态工效 / clean
     consumer-lib-roots libdirs-string cmd-clean
