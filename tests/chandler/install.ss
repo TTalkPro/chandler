@@ -11,9 +11,34 @@
           (chandler layout)
           (chandler lock)
           (chandler fetch)
+          (chandler registered)
+          (chandler registry)
           (chandler install))
 
   (define (names root) (map car (list-deps root)))
+
+  ;; ── global-libdir 用的假前缀:注册 name 的若干 version,并铺出 src/ 目录 ──
+  ;; versions 形如 (("1.0.0" . present?) …);active 为版本串或 #f。
+  (define (register-pkg! prefix name kind versions active)
+    (let ([reg (fold-left
+                 (lambda (r v)
+                   (registered-add-version
+                     r (make-version-entry (car v) "2026-07-27T00:00:00"
+                                           '(git "https://h/x") 'chandler)))
+                 (make-registered (string->symbol name) kind)
+                 versions)])
+      (for-each (lambda (v)
+                  (when (cdr v)
+                    (write-text (join-paths (version-root prefix name (car v))
+                                            "src" (string-append name ".ss"))
+                                ";; lib")))
+                versions)
+      (write-registered! prefix (string->symbol name)
+                         (if active (registered-set-active reg active) reg))))
+
+  ;; global-libdir 的条目 → 被选中的版本串(条目是 (<vroot>/src . <vroot>/<mt>))
+  (define (entry-version e) (base-name (parent-dir (car e))))
+  (define (entry-name e) (base-name (parent-dir (parent-dir (car e)))))
 
   ;; 假的全局前缀:装了 <version> 的 chandler,含 runtime 子集与 dev-only 两类库
   (define (make-fake-chandler-prefix! version)
@@ -212,6 +237,69 @@
           (assert-equal 1 (length paths))
           (assert-true  (find (lambda (p) (substr? p "/b/native/b.so")) paths)))
         (rm-rf root)))
+
+    ;; ══ global-libdir:每个包只挂一个版本(designs/06 §5)══
+    ;; 先前把每个包的每个版本都挂上,实际生效的是「最后登记的那个」—— 偶然结果,
+    ;; 且与 `chandler switch` 设的 active 矛盾。
+
+    ;; app:挂 active,而不是最高版本 —— 这正是 switch 的意义
+    (global-libdir-app-honors-active
+      (let ([prefix (mktmp)])
+        (register-pkg! prefix "myapp" 'app
+                       '(("1.0.0" . #t) ("2.0.0" . #t) ("1.5.0" . #t)) "1.0.0")
+        (with-chandler-prefix prefix
+          (lambda ()
+            (let ([dirs (global-libdir)])
+              (assert-equal 1 (length dirs))
+              (assert-string= "1.0.0" (entry-version (car dirs))))))))
+
+    ;; lib:没有 active 这个概念(registered-set-active 对 lib 报错)→ 取最高 semver。
+    ;; 9.9.0 < 10.0.0 是数值序,不是字符串序。
+    (global-libdir-lib-picks-highest-semver
+      (let ([prefix (mktmp)])
+        (register-pkg! prefix "mylib" 'lib
+                       '(("9.9.0" . #t) ("10.0.0" . #t) ("2.0.0" . #t)) #f)
+        (with-chandler-prefix prefix
+          (lambda ()
+            (let ([dirs (global-libdir)])
+              (assert-equal 1 (length dirs))
+              (assert-string= "10.0.0" (entry-version (car dirs))))))))
+
+    ;; active 指向的版本目录不在盘上(被手工删了)→ 退到盘上存在的最高版本,
+    ;; 而不是挂一条指向空目录的条目
+    (global-libdir-falls-back-when-active-missing
+      (let ([prefix (mktmp)])
+        (register-pkg! prefix "myapp" 'app
+                       '(("1.0.0" . #f) ("2.0.0" . #t) ("1.5.0" . #t)) "1.0.0")
+        (with-chandler-prefix prefix
+          (lambda ()
+            (let ([dirs (global-libdir)])
+              (assert-equal 1 (length dirs))
+              (assert-string= "2.0.0" (entry-version (car dirs))))))))
+
+    ;; 一个版本都不在盘上 → 该包整个不出现(不挂空条目)
+    (global-libdir-skips-package-with-no-present-version
+      (let ([prefix (mktmp)])
+        (register-pkg! prefix "ghost" 'lib '(("1.0.0" . #f)) #f)
+        (register-pkg! prefix "real"  'lib '(("1.0.0" . #t)) #f)
+        (with-chandler-prefix prefix
+          (lambda ()
+            (let ([dirs (global-libdir)])
+              (assert-equal 1 (length dirs))
+              (assert-string= "real" (entry-name (car dirs))))))))
+
+    ;; 多个包:每包一条,按包名升序(先前是逆序,遮蔽关系看目录枚举方向)
+    (global-libdir-one-entry-per-package-sorted
+      (let ([prefix (mktmp)])
+        (register-pkg! prefix "alpha" 'lib '(("1.0.0" . #t) ("2.0.0" . #t)) #f)
+        (register-pkg! prefix "beta"  'lib '(("1.0.0" . #t)) #f)
+        (register-pkg! prefix "gamma" 'lib '(("3.0.0" . #t) ("1.0.0" . #t)) #f)
+        (with-chandler-prefix prefix
+          (lambda ()
+            (let ([dirs (global-libdir)])
+              (assert-equal 3 (length dirs))
+              (assert-equal '("alpha" "beta" "gamma") (map entry-name dirs))
+              (assert-equal '("2.0.0" "1.0.0" "3.0.0") (map entry-version dirs)))))))
 
     (lock-reused-when-fresh
       (parameterize ([cache-root (mktmp)])

@@ -303,28 +303,51 @@
 ;; (2026-07-24:原 global-prefix 读 CHANDLER_PREFIX,已统一到 CHANDLER_HOME;
 ;;  "安装落点"是另一回事,走 --user/--system,见 registry。)
   (define (global-prefix) (chandler-home))
-  ;; 全局库目录条目:v3 扫中心 .registry/,把每个已装 (name, version) 展开成
-  ;; (src . obj) 对。返回 list of pairs(可能为空)。
-  ;; list-registered 一次读盘 + 一次解析就给出 registered 记录 —— 先前是
-  ;; list-registered-names 解析一遍、再逐 name read-registered 解析第二遍,而本函数
-  ;; 在每次 `chandler run` / `build` / `repl` 启动时都要跑(resolved-libdirs 的兜底段)。
+  ;; ── 全局库目录条目:每个已装包**一条** (src . obj) 对(designs/06 §5)──
+  ;;
+  ;; **每个 name 只挂一个版本**(2026-07-27)。先前把每个包的**每个**版本都挂进
+  ;; library-directories,而 Chez 解析一个库名时只会命中其中一条 —— 命中哪条取决于
+  ;; 累积顺序,实际是「最后登记的那个版本」。那是个偶然结果,而且与 registry 的
+  ;; `active` 语义直接矛盾:`chandler switch` 明明改了 active,dev 期的
+  ;; run/repl/build 却照旧解析到别的版本。多挂的那些条目也不是无害的 ——
+  ;; 资源定位(runtime-paths)与 native 兜底扫描都逐条走这张表。
+  ;;
+  ;; 选版规则:
+  ;;   app → `active`(这正是 `chandler switch` 控制的东西);active 缺失或它的
+  ;;         版本目录不在盘上,则退到「盘上存在的最高 semver」
+  ;;   lib → 最高 semver。lib **没有** active 这个概念(registered-set-active 对
+  ;;         lib 直接报错),故不存在可尊重的显式选择,取最高版本是唯一合理默认
+  ;; 两种情况都只在**盘上真有 src 目录**的版本里选,残缺的版本目录当不存在。
+  ;;
+  ;; 返回序按包名升序(list-registered 走 dir-entries,已排序)—— 先前是逆序,
+  ;; 两个包导出同名库时谁遮蔽谁纯看目录枚举方向。这种撞名本就该由 registry 的
+  ;; 冲突检查拦住,但顺序至少该是可预期的。
   (define (global-libdir)
     (let ([home (chandler-home)])
       (if (not (file-directory? home))
           '()
           (let ([mt (current-machine-type)])
-            (fold-left
-              (lambda (acc p)
-                (let ([name-sym (car p)])
-                  (fold-left
-                    (lambda (acc v)
-                      (let* ([vroot (version-root home name-sym (car v))]
-                             [src (join-paths vroot "src")])
-                        (if (file-directory? src)
-                            (cons (cons src (join-paths vroot mt)) acc)
-                            acc)))
-                    acc (registered-versions (cdr p)))))
-              '() (list-registered home))))))
+            (filter-map (lambda (p) (registered->libdir-entry home mt (car p) (cdr p)))
+                        (list-registered home))))))
+
+  (define (version-src-dir home name version)
+    (join-paths (version-root home name version) "src"))
+
+  ;; 一个已装包 → 它唯一的 (src . obj) 条目,或 #f(盘上没有一个可用版本)
+  (define (registered->libdir-entry home mt name reg)
+    (let* ([present (filter (lambda (v) (file-directory? (version-src-dir home name (car v))))
+                            (registered-versions reg))]
+           [active  (registered-active reg)]
+           [chosen  (cond
+                      [(null? present) #f]
+                      ;; app 的显式选择:active 且它真在盘上
+                      [(and active (memp (lambda (v) (string=? (car v) active)) present))
+                       active]
+                      ;; 否则(lib,或 active 缺失/损坏)取最高 semver
+                      [else (car (list-sort semver>? (map car present)))])])
+      (and chosen
+           (let ([vroot (version-root home name chosen)])
+             (cons (join-paths vroot "src") (join-paths vroot mt))))))
 
   ;; path 依赖的源目录(相对 root 拼成路径),供 live 挂载
   (define (path-dep-source-dirs root)

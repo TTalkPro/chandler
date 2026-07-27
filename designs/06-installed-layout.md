@@ -21,6 +21,7 @@
 | D17 | 启动器 = 稳定 shim,运行时读 `.registry/` | switch 不需重写 launcher;切换瞬时生效 |
 | D18 | `run.sps` lock 驱动 library-directories | 多版本 lib 共存时,各 app 用自己 lock 声明的版本,互不干扰 |
 | D19 | `chandler switch` 命令 | 多版本管理的用户入口 |
+| D20 | dev 期全局兜底每包只挂一个版本(app 取 active,lib 取最高 semver) | 先前挂全部版本,生效的是「最后登记的那个」——偶然结果,且让 `switch` 在 dev 期失效(见 §9.5) |
 
 ## 3. 术语
 
@@ -277,7 +278,25 @@ install 模式之上追加:
 
 `.registry/` 允许 `mylib/1.0.0/` 与 `mylib/2.0.0/` 同时存在。app A 的 lock 指向 1.0.0,app B 指向 2.0.0 —— 各自 run.sps 只挂自己 lock 声明的版本,Chez 不会看到冲突版本。
 
-`scan-libdirs`(扫所有 version)是 dev 模式专用;install/pack 的 run.sps 不用它。
+### 9.5 dev 期全局兜底的选版规则(D20,2026-07-27)
+
+`run.sps` 靠 lock 精确挂载,但 **dev 期**(`chandler run` / `repl` / `build` / `test`)的
+全局兜底段走 `global-libdir`,它没有 lock 可依。规则是**每个包只挂一个版本**:
+
+| registry kind | 选哪个版本 |
+| --- | --- |
+| `app` | `(active …)` —— 这正是 `chandler switch` 控制的东西 |
+| `lib` | 盘上存在的最高 semver(lib 没有 active:`registered-set-active` 对 lib 直接报错) |
+
+两种情况都只在**版本目录真在盘上**的候选里选;app 的 active 若指向已被删掉的版本,
+退到盘上存在的最高 semver。一个可用版本都没有 → 该包整个不出现在搜索路径里。
+返回序按包名升序。
+
+> **先前的行为是 bug**:把每个包的**每个**版本都挂进 `library-directories`。Chez 解析
+> 一个库名时只命中其中一条,命中哪条取决于累积顺序 —— 实际是「最后登记的那个版本」。
+> 于是 `chandler switch` 改了 active,dev 期却照旧解析到别的版本;`10.0.0` 也会输给
+> 后装的 `2.0.0`。多挂的条目还会拖累资源定位(§8.2)与 native 兜底扫描(09 §5.3),
+> 二者都逐条走这张表。
 
 ## 10. 启动器(D17 稳定 shim)
 
