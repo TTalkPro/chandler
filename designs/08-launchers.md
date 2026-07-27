@@ -61,6 +61,12 @@ exec "$_rt" -q --program "$RUNNER" "$@"
 
 ## 3. Windows 稳定 shim(PowerShell)
 
+> **本节将被取代**(D34):`.ps1` 有三个独立的坑 —— pwsh 从不预装、下面这段的
+> `Join-Path` 多段形式是 PS6+ 语法(在预装的 PS 5.1 上直接报错)、`.PS1` 不在默认
+> `PATHEXT` 里。新设计改用 `.cmd`,见
+> [14-windows-portability.md §8](14-windows-portability.md#8-启动器d34--d35)。
+> 在实现落地前,下面描述的仍是现状代码。
+
 ```powershell
 #!/usr/bin/env pwsh
 # <name> launcher — chandler v3 stable shim; do not edit.

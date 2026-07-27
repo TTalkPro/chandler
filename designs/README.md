@@ -15,6 +15,7 @@
 | [09-runtime-paths.md](09-runtime-paths.md) | 资源定位 API(method B:`<src>/<libpath>/resources/`) | 运行时 |
 | [11-cli.md](11-cli.md) | CLI 命令面 + 退出码 + 旗标 | 辅助 |
 | [13-library-source-layout.md](13-library-source-layout.md) | 单仓库**源码布局规范**(umbrella facade / 子库树镜像 / 搜索根=仓库根) | 辅助 |
+| [14-windows-portability.md](14-windows-portability.md) | **Windows 可移植性**(设计中,未实现):cmd.exe 启动器 + 子进程引用层 + 路径层 | 平台 |
 
 ## 一句话定位
 
