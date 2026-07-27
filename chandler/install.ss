@@ -303,29 +303,28 @@
 ;; (2026-07-24:原 global-prefix 读 CHANDLER_PREFIX,已统一到 CHANDLER_HOME;
 ;;  "安装落点"是另一回事,走 --user/--system,见 registry。)
   (define (global-prefix) (chandler-home))
-  ;; 全局库目录条目:v3 扫中心 .registry/ 找已装的 (name . version) pairs
-  ;; 返回 list of (src . obj) pairs(可能为空)
-  ;; 注:v3 的 list-registered-names 返回 ((name-sym . active|#f) ...);
-  ;; 我们要的是 (name-sym . version-str) 全展开,故读各 registered 拿 versions。
+  ;; 全局库目录条目:v3 扫中心 .registry/,把每个已装 (name, version) 展开成
+  ;; (src . obj) 对。返回 list of pairs(可能为空)。
+  ;; list-registered 一次读盘 + 一次解析就给出 registered 记录 —— 先前是
+  ;; list-registered-names 解析一遍、再逐 name read-registered 解析第二遍,而本函数
+  ;; 在每次 `chandler run` / `build` / `repl` 启动时都要跑(resolved-libdirs 的兜底段)。
   (define (global-libdir)
     (let ([home (chandler-home)])
-      (if (file-directory? home)
-          (let ([result '()])
-            (for-each
-              (lambda (name-sym)
-                (let ([reg (read-registered home name-sym)])
-                  (when reg
-                    (for-each
-                      (lambda (p)
-                        (let* ([vroot (version-root home name-sym (car p))]
-                               [src (join-paths vroot "src")]
-                               [obj (join-paths vroot (current-machine-type))])
-                          (when (file-directory? src)
-                            (set! result (cons (cons src obj) result)))))
-                      (registered-versions reg)))))
-              (map car (list-registered-names home)))
-            result)
-          '())))
+      (if (not (file-directory? home))
+          '()
+          (let ([mt (current-machine-type)])
+            (fold-left
+              (lambda (acc p)
+                (let ([name-sym (car p)])
+                  (fold-left
+                    (lambda (acc v)
+                      (let* ([vroot (version-root home name-sym (car v))]
+                             [src (join-paths vroot "src")])
+                        (if (file-directory? src)
+                            (cons (cons src (join-paths vroot mt)) acc)
+                            acc)))
+                    acc (registered-versions (cdr p)))))
+              '() (list-registered home))))))
 
   ;; path 依赖的源目录(相对 root 拼成路径),供 live 挂载
   (define (path-dep-source-dirs root)
@@ -425,21 +424,50 @@
         [(member (car xs) seen) (loop (cdr xs) seen out)]
         [else (loop (cdr xs) (cons (car xs) seen) (cons (car xs) out))])))
 
-  ;; 扫 obj 树:凡父目录名为 "native" 且扩展名匹配者即 native 动态库
-  ;; (与该库的编译 Scheme .so 区分:后者不在 native/ 子目录里);再滤掉自加载的。
-  (define (native-sos-under obj-dir)
-    (if (file-directory? obj-dir)
-        (filter (lambda (f)
-                  (and (native-so? f)
-                       (string=? "native" (base-name (parent-dir f)))
-                       (not (self-loading? f))))
-                (files-under obj-dir))
-        '()))
+  ;; 扫 obj 树找 native 动态库:落点不变量是 <lib>/native/<soname>.<ext>
+  ;; (与该库的编译 Scheme .so 区分:后者不在 native/ 子目录里);自加载的库滤掉。
+  ;;
+  ;; **只递归目录,遇到 native/ 才列文件**。先前是 (files-under obj-dir) 把整棵树的
+  ;; 文件路径全物化成一张表,再逐条按父目录名过滤 —— 一个装了几十个包的全局前缀里
+  ;; 那是上万条 .so 路径 + 上万次 base-name/parent-dir 字符串切分,而命中的通常是零条。
+  ;; 本函数在每次 `chandler run` / `test` / `repl` 启动时对**每个**挂载前缀跑一遍,
+  ;; 属于纯启动开销,值得按形状剪枝。
+  ;;
+  ;; self-loading 的判定也随之从「每个 .so 一次 file-exists?」降到「每个 native/ 一次」
+  ;; —— native-loader.so 与 native/ 同级,而我们此刻手里正好有那个 <lib> 目录。
+  ;;
+  ;; 另一半开销是**每个目录项一次 file-directory?**(即一次 stat)。实测一棵 4200 个
+  ;; .so 的对象树,8.9ms 里有 6.1ms 是这些 stat —— 而其中绝大多数是在问「这个 .so 是
+  ;; 目录吗」。对象树是 chandler 自己生成的格式(designs/06),编译产物的扩展名是封闭
+  ;; 集合,故按扩展名先筛掉一定不是目录的项,只对余下的 stat。这个假设**只在这里**成立,
+  ;; 不能下沉到 (chandler fs) 的通用 files-under —— 那个要走用户的任意源码树。
+  (define obj-tree-file-exts '(".so" ".wpo" ".boot"))
 
-  ;; 该 native 所属库是否自带生成 loader:<lib>/native-loader.so 与 native/ 同级
-  ;; (f = <lib>/native/<soname>.<ext> → 所属库目录 = f 的祖父目录)。
-  (define (self-loading? f)
-    (file-exists? (join-paths (parent-dir (parent-dir f)) "native-loader.so")))
+  (define (obj-tree-file-name? e)
+    (exists (lambda (ext) (string-suffix? ext e)) obj-tree-file-exts))
+
+  (define (native-sos-under obj-dir)
+    (reverse
+      (let walk ([d obj-dir] [acc '()])
+        (fold-left
+          (lambda (acc e)
+            (cond
+              [(obj-tree-file-name? e) acc]                ; 编译产物,不可能是目录:免 stat
+              [(not (file-directory? (join-paths d e))) acc]
+              [(not (string=? e "native")) (walk (join-paths d e) acc)]
+              [(self-loading-lib? d) acc]                  ; 有生成 loader → 惰性自加载,不预载
+              [else
+               (let ([nd (join-paths d e)])
+                 (fold-left
+                   (lambda (acc f)
+                     ;; native/ 下就是 .so/.dylib/.dll 本体,同样按名字判、不 stat
+                     (if (native-so? f) (cons (join-paths nd f) acc) acc))
+                   acc (dir-entries nd)))]))
+          acc (dir-entries d)))))
+
+  ;; 该库是否自带生成 loader:<lib>/native-loader.so 与 <lib>/native/ 同级
+  (define (self-loading-lib? lib-dir)
+    (file-exists? (join-paths lib-dir "native-loader.so")))
 
   ;; ── 项目自身的资源:**不再铺进任何前缀**(C0)──
   ;;   项目的源码根本来就被 resolved-libdirs 挂着,故 <root>/resources/<name>/

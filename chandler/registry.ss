@@ -17,7 +17,7 @@
     version-entry-installed-at version-entry-source version-entry-installer
     registry-dir registry-file
     read-registered write-registered! remove-registered!
-    list-registered-names list-registry-files
+    list-registered list-registered-names list-registry-files
     with-registry-lock!
     staging-dir staging-path with-staging!
     stale-staging-list promote-staging!)
@@ -277,28 +277,28 @@
   ;; ── list-global ──
   ;; 返回 list of (name-str version-str tag installer-symbol)
   ;; tag = "active" 或 ""
+  ;; list-registered 已经解析好记录,不再逐 name 重读一遍注册表文件。
   (define (list-global libdir)
     (apply append
-           (map (lambda (name-sym)
-                  (let ([reg (read-registered libdir name-sym)])
-                    (if reg
-                        (let ([active (registered-active reg)]
-                              [versions (registered-versions reg)])
-                          ;; 拆分:active 排第一,其余按注册序
-                          (let loop ([vs versions] [active-row #f] [rest '()])
-                            (cond
-                              [(null? vs)
-                               (let ([rest-rows (reverse rest)])
-                                 (if active-row
-                                     (cons active-row rest-rows)
-                                     rest-rows))]
-                              [(and active (string=? (caar vs) active))
-                               (loop (cdr vs) (make-row name-sym (cdar vs) "active") rest)]
-                              [else
-                               (loop (cdr vs) active-row
-                                     (cons (make-row name-sym (cdar vs) "") rest))])))
-                        '())))
-                (map car (list-registered-names libdir)))))
+           (map (lambda (p)
+                  (let* ([name-sym (car p)]
+                         [reg (cdr p)]
+                         [active (registered-active reg)]
+                         [versions (registered-versions reg)])
+                    ;; 拆分:active 排第一,其余按注册序
+                    (let loop ([vs versions] [active-row #f] [rest '()])
+                      (cond
+                        [(null? vs)
+                         (let ([rest-rows (reverse rest)])
+                           (if active-row
+                               (cons active-row rest-rows)
+                               rest-rows))]
+                        [(and active (string=? (caar vs) active))
+                         (loop (cdr vs) (make-row name-sym (cdar vs) "active") rest)]
+                        [else
+                         (loop (cdr vs) active-row
+                               (cons (make-row name-sym (cdar vs) "") rest))]))))
+                (list-registered libdir))))
 
   (define (make-row name-sym ve tag)
     (list (symbol->string name-sym)

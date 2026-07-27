@@ -16,6 +16,7 @@
           read-registered
           write-registered!
           remove-registered!
+          list-registered
           list-registered-names
           list-registry-files)
   (import (chezscheme)
@@ -64,11 +65,15 @@
 
   ;; ── 列举 ──
 
-  ;; list-registered-names : libdir → list of (name-symbol . version-str-active|#f)
-  ;; 扫 .registry/ 下所有 <name>.ss,读取 active(app)或首个 version(lib)。
-  ;; 单次 list 调用就拿到所有 name 的概览。
+  ;; list-registered : libdir → list of (name-symbol . registered)
+  ;; 扫 .registry/ 下所有 <name>.ss 并**解析一次**,把 registered 记录直接交出去。
   ;; 格式非法的文件跳过 + 写 stderr 警告(doctor 兜底硬错)。
-  (define (list-registered-names libdir)
+  ;;
+  ;; 调用方多数要的是记录本身(global-libdir 要 versions、list-global 要 versions +
+  ;; active),先前只能拿 list-registered-names 的 (name . active) 再逐个
+  ;; read-registered 一遍 —— 每个包的注册表文件被读盘 + 解析两次,而它落在
+  ;; `chandler run` / `build` / `repl` 每次启动都要走的 resolved-libdirs 路径上。
+  (define (list-registered libdir)
     (let ([d (registry-dir libdir)])
       (if (not (file-directory? d))
           '()
@@ -83,10 +88,15 @@
                                   (fprintf (current-error-port)
                                            "warning: skipping malformed registry: ~a~%" path)
                                   #f])
-                         (let* ([reg (read-registered libdir name-sym)]
-                                [active (and reg (registered-active reg))])
-                           (and reg (cons name-sym active))))))))
+                         (let ([reg (read-registered libdir name-sym)])
+                           (and reg (cons name-sym reg))))))))
             (dir-entries d)))))
+
+  ;; list-registered-names : libdir → list of (name-symbol . version-str-active|#f)
+  ;; list-registered 的投影(保留:只想要概览的调用方不必知道 registered 记录)。
+  (define (list-registered-names libdir)
+    (map (lambda (p) (cons (car p) (registered-active (cdr p))))
+         (list-registered libdir)))
 
   ;; list-registry-files : libdir → list of (name-symbol . path)
   ;; 只列 .registry/*.ss 文件,**不解析、不过滤坏文件** —— doctor 用它拿全量
