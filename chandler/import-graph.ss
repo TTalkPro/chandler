@@ -27,11 +27,11 @@
     ref->string ref->rel candidates candidates-in
     resolve-lib-path own-source-path
     builtin-lib? runtime-provided-lib? classify-libref external-libref?
-    reset-classify-cache!
+    reset-import-caches!
     ;; 可达图
     build-graph
     ;; 小工具
-    dep-read-all dep-find-clause)
+    dep-read-all)
   (import (chezscheme)
           (chandler base))
 
@@ -79,12 +79,6 @@
 
   (define (ref->string ref)
     (string-append "(" (string-join (map symbol->string ref) " ") ")"))
-
-  (define (dep-find-clause key forms)
-    (cond
-      ((null? forms) #f)
-      ((and (pair? (car forms)) (eq? (caar forms) key)) (car forms))
-      (else (dep-find-clause key (cdr forms)))))
 
   ;; ====================================================================
   ;; §库引用规范化 + 内建判定(designs/06)
@@ -148,15 +142,19 @@
                         (if (null? levels) (list 'run) levels)))))
          (else (list (make-dep-edge (normalize-libref set) phase)))))))
 
+  ;; seen 用哈希表而非 member:后者对每条边扫一遍已见列表(equal? 比符号表),
+  ;; 是 O(E²),而每解析一个源文件就要跑一次。
   (define (dedupe-edges edges)
-    (let loop ((es edges) (seen '()) (out '()))
-      (cond
-        ((null? es) (reverse out))
-        (else
-         (let* ((e (car es)) (r (dep-edge-ref e)))
-           (if (member r seen)
-               (loop (cdr es) seen out)
-               (loop (cdr es) (cons r seen) (cons e out))))))))
+    (let ((seen (make-hashtable equal-hash equal?)))
+      (let loop ((es edges) (out '()))
+        (cond
+          ((null? es) (reverse out))
+          (else
+           (let* ((e (car es)) (r (dep-edge-ref e)))
+             (if (hashtable-ref seen r #f)
+                 (loop (cdr es) out)
+                 (begin (hashtable-set! seen r #t)
+                        (loop (cdr es) (cons e out))))))))))
 
   ;; ====================================================================
   ;; §export 名 + include 扫描(designs/06)
@@ -196,20 +194,32 @@
     (guard (x (#t "read error"))
       (if (message-condition? e) (condition-message e) "read error")))
 
+  ;; 解析记忆化。build-graph 对**每个**入口都独立走一遍传递闭包,故一轮构建里
+  ;; 同一源文件会被解析 N 次(N = 可达它的入口数);本仓 45 个文件实测约 15×,
+  ;; 库多的包更甚。解析相对文件系统是纯的,按路径记忆即可 —— 与 classify-cache
+  ;; 同一复位时机(见 reset-import-caches!)。
+  (define parse-cache (make-hashtable string-hash string=?))
+
   (define (parse-source path)
+    (or (hashtable-ref parse-cache path #f)
+        (let ((node (parse-source-uncached path)))
+          (hashtable-set! parse-cache path node)
+          node)))
+
+  (define (parse-source-uncached path)
     (let ((forms (guard (e (#t (error 'parse-source
                                       (format "failed to parse ~a: ~a" path
                                               (dep-condition-message e)))))
                    (dep-read-all path))))
-      (let ((lib (dep-find-clause 'library forms)))
+      (let ((lib (field forms 'library)))
         (if lib (parse-library lib path) (parse-program forms path)))))
 
   (define (parse-library form path)
     ;; form = (library <name> (export ...) (import ...) body ...)
     (let* ((name (normalize-libref (cadr form)))
            (clauses (cddr form))
-           (exp-clause (dep-find-clause 'export clauses))
-           (imp-clause (dep-find-clause 'import clauses))
+           (exp-clause (field clauses 'export))
+           (imp-clause (field clauses 'import))
            (body (filter (lambda (c) (not (and (pair? c)
                                                (memq (car c) '(export import)))))
                          clauses))
@@ -273,13 +283,26 @@
   ;;   prebuilt       — 外部对象树提供;原样消费 + 交付
   ;;   <源码路径>     — 预构建根 src/ 下的纯源码依赖(没有交付对象)→ 自己编
   ;;   #f             — 解析不到
-  ;; 记忆化:每轮指纹计算都会逐边咨询它。缓存键带上 roots,故后来的
-  ;; (define-lib-roots …) / codegen-root 追加不会拿到旧搜索路径下形成的结论。
+  ;; 记忆化:每轮指纹计算都会逐边咨询它,一轮下来数以万计。
+  ;;
+  ;; 结论依赖 roots(own-source-path / prebuilt-lib-obj / resolve-lib-path 都查它),
+  ;; 故 roots 一变旧结论就必须作废。原先的做法是把 roots 并进缓存键 —— 但那让
+  ;; **每次查询**都要 equal-hash 一遍整个 roots 列表(每项是长路径字符串或其对),
+  ;; 20 项时实测 1.23 µs/次 vs 纯 ref 键 0.025 µs,且每次多 cons 一个键。
+  ;;
+  ;; 改为键只放 ref,用「代」来作废:记下填充缓存时的 roots **列表对象**,查询前
+  ;; 比 eq?,不同即整表清空。全部写入方(define-lib-roots / build.ss / native-build
+  ;; 的 gen-root 追加 / parameterize)都是构造新列表,故 eq? 足以认出变更;
+  ;; 退化情形(设成内容相同的另一个列表)只是白清一次缓存,不影响正确性。
   (define classify-cache (make-hashtable equal-hash equal?))
+  (define classify-cache-roots #f)      ; 上次填充时的 roots,按 eq? 认
 
   (define (classify-libref ref)
-    (let* ((key (cons ref (lib-roots)))
-           (hit (hashtable-ref classify-cache key 'miss)))
+    (let ((roots (lib-roots)))
+      (unless (eq? roots classify-cache-roots)
+        (hashtable-clear! classify-cache)
+        (set! classify-cache-roots roots)))
+    (let ((hit (hashtable-ref classify-cache ref 'miss)))
       (if (eq? hit 'miss)
           (let ((r (cond
                      ((builtin-lib? ref) 'builtin)
@@ -300,7 +323,7 @@
                                      (ref->string ref))))
                      ((resolve-lib-path ref) => values)
                      (else #f))))
-            (hashtable-set! classify-cache key r)
+            (hashtable-set! classify-cache ref r)
             r)
           hit)))
 
@@ -311,9 +334,13 @@
     (and (pair? ref) (eq? (car ref) 'chandler)))
 
   ;; 同一进程里连着建两次时清缓存:两次之间磁盘可能变了(codegen 生成了 loader
-  ;; 源码、依赖被重新铺过),而缓存键只带 roots、不带文件存在与否。bake 是
-  ;; 「一次调用 = 一个进程」故无此需;chandler 是单二进制,必须能显式复位。
-  (define (reset-classify-cache!) (hashtable-clear! classify-cache))
+  ;; 源码、依赖被重新铺过),而 classify 的键只带 roots、parse 的键只带路径,
+  ;; 都不带文件内容。bake 是「一次调用 = 一个进程」故无此需;chandler 是单
+  ;; 二进制,必须能显式复位。
+  (define (reset-import-caches!)
+    (hashtable-clear! classify-cache)
+    (set! classify-cache-roots #f)      ; 强制下次查询重新认代
+    (hashtable-clear! parse-cache))
 
   ;; 我们**不**编的边:运行时提供的,或外部对象树提供的。二者都排除出构建图、
   ;; 排除出编译前置、排除出指纹。
