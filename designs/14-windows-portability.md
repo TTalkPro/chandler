@@ -1,10 +1,12 @@
 # 14 — Windows 可移植性
 
-> 状态: **部分实现**。本文是 Windows 支持的权威设计。
-> 已落地:**D34**(`.cmd` 启动器)、**D35**(active sidecar)、以及 §6 的
-> `\` 穿越校验(P1-2)—— 对应 TASK.md 的 C1 / C2 / C3。
-> 未落地:**D33**(子进程层)、**D36**(路径原语)、**D37**、**D38**,
-> 即 TASK.md 的 C4–C7。**在 C9 的 Windows CI 跑绿前,Windows 支持一律「未验证」。**
+> 状态: **大部分实现**。本文是 Windows 支持的权威设计。
+> 已落地:**D33**(子进程引用层)、**D34**(`.cmd` 启动器)、**D35**(active sidecar)、
+> **D37**(`-j` 退化串行)、**D38**(换行/字节一致),以及 §6 的 `\` 穿越校验(P1-2)
+> —— 对应 TASK.md 的 C1–C5。
+> 未落地:**D36**(路径原语认 `\`)与 §7/§10 的其余条目,即 TASK.md 的 C6–C7、C9。
+> **在 C9 的 Windows CI 跑绿前,Windows 支持一律「未验证」** ——
+> 已落地的部分全部由平台参数化测试在 Linux 上逐字断言,但没有一行在真 Windows 上跑过。
 > 来源:2026-07-27 全库平台相关代码走查(`proc` / `fs` / `layout` / `compile` /
 > `native-build` / `pack` / `registry` / `bootstrap` / 启动器)。
 
@@ -40,8 +42,8 @@
 
 | # | 位置 | 问题 |
 |---|------|------|
-| P0-1 | `proc.ss` 全文 | 整层假设 `/bin/sh`。`shell-quote` 是 POSIX 单引号、`env-prefix` 生成 `K=v cmd` 前缀、`cd d && `、`which` 用 `command -v`、`real-path` 用 `readlink -f`。**git / native / pack / run / exec 全线经此**。`bootstrap.ss:91` 的 `q` 是同一份实现的副本 |
-| P0-2 | `fs.ss:188` `system-temp-dir` | 只认 `TMPDIR`,Windows 是 `TEMP`/`TMP` → 全部临时文件写向不存在的 `/tmp`;`proc.ss:38` `make-temp-dir` 不区分「已存在」与真错误,会**死循环重试** |
+| P0-1 ✅ | `proc.ss` 全文 | 整层假设 `/bin/sh`。`shell-quote` 是 POSIX 单引号、`env-prefix` 生成 `K=v cmd` 前缀、`cd d && `、`which` 用 `command -v`、`real-path` 用 `readlink -f`。**git / native / pack / run / exec 全线经此**。`bootstrap.ss:91` 的 `q` 是同一份实现的副本 |
+| P0-2 ⚠️ 半 | `fs.ss` `system-temp-dir` | 两半:①`make-temp-dir` 的**死循环**已修(C5)—— 现在只在目标已存在时换名重试,其余原样抛,并先确保 temp 根存在;②`system-temp-dir` 仍只认 `TMPDIR`,不认 `TEMP`/`TMP`,留给 **C7** |
 | P0-3 ✅ | `cli/commands.ss:325` | `Join-Path $LibDir $Name $Active …` 是 PowerShell 6+ 语法;Windows 预装的是 **5.1**,该行直接报错 → 现有 `.ps1` 启动器在裸机上必挂 |
 | P0-4 ✅ | 启动器格式 | `.PS1` 不在默认 `PATHEXT` 里 → cmd 中敲 `chandler` 找不到,被别的程序 spawn 也找不到;叠加 ExecutionPolicy |
 | P0-5 ✅ | `bin/chandler` | 只有 sh 版,Windows 上没有开发期入口 |
@@ -52,11 +54,11 @@
 |---|------|------|
 | P1-1 | `fs.ss:32` `last-slash` 及其下游 | 只扫 `#\/`。Chez 在 Windows 上返回反斜杠路径,一旦混入 `\`:`base-name` 返回整串;`path-has-segment?`(:166)认不出 `_build`/`.git` 段 → **install 清单与 `chandler verify` 会把生成物和 `.git` 当受管文件**;`relativize`(:180)纯前缀匹配失败 |
 | P1-2 ✅ | `runtime-paths.ss:25` | `validate-resource-segment` 只拒含 `/` 的 segment。Windows 上 `\` 同样是分隔符 → `(resource-path '(app) "..\\..\\secret")` **绕过全部四条校验**。安全相关 |
-| P1-3 | `lock.ss:134` / `install.ss:109` | `sha256-file` 读原始字节;Windows 上 git 默认 `core.autocrlf=true` → Linux 生成的 lock 在 Windows 上 hash 必然失配,`lock-fresh?` 恒判 stale、`verify` 恒报文件被改 |
+| P1-3 ✅ | `lock.ss:134` / `install.ss:109` | `sha256-file` 读原始字节;Windows 上 git 默认 `core.autocrlf=true` → Linux 生成的 lock 在 Windows 上 hash 必然失配,`lock-fresh?` 恒判 stale、`verify` 恒报文件被改 |
 | P1-4 | `fs.ss:88` `rm-rf` | 每步 `ignore-errors`。Windows 上 ① git 的 `.git/objects/**` 只读 → 删不掉;② 已 `load-shared-object` 的 DLL / 运行中的 exe 不能删也不能改名。**失败被吞,调用方以为清干净了** |
 | P1-5 | `pack/core.ss:183` | `copy-exe!` 无条件 `chmod +x`,没有 win 分支(`launchers.ss:90` 与 `commands.ss:359` 有) |
 | P1-6 | `fs.ss:110` `move-file` | 唯一没做「rename 不覆盖」处理的搬运函数;调用点 `compile.ss:295` `touch-file!` 套了 `ignore-errors` → **Windows 上 touch 静默失效**,mtime 不更新 |
-| P1-7 | `compile.ss:588` `run-chunk` | `-j N` 并行编译生成 `cmd & pN=$!` / `wait $pN` 的 sh 脚本再 `system "sh …"` |
+| P1-7 ✅ | `compile.ss:588` `run-chunk` | `-j N` 并行编译生成 `cmd & pN=$!` / `wait $pN` 的 sh 脚本再 `system "sh …"` |
 
 ### 2.4 边角(P2)
 
@@ -94,9 +96,13 @@ Chez 的 `system` 走 `%COMSPEC%`,即 `cmd.exe`。所以:
 
 **决策**:产品路径一律面向 cmd.exe;PowerShell 只在开发态可选使用(§8.4)。
 
-> 待核实(实现时在 Windows 上确认):Chez 的 `system` 在 Windows 上是否严格走
-> `%COMSPEC%`、是否对命令串做额外包裹。以及 Chez 的文本输出端口在 Windows 上
-> 是否做 `\n → \r\n` 转换(影响 §9)。
+> 待核实(C9 在真 Windows 上确认):Chez 的 `system` 是否严格走 `%COMSPEC%`、
+> 是否对命令串做额外包裹。
+>
+> **换行那一问已经不必答了**(§9 落地时消解):先前担心的是「Chez 的文本端口在
+> Windows 上是否把 `\n` 写成 `\r\n`」——`(make-transcoder codec)` 取
+> `(native-eol-style)`,那确实是平台相关的。现在 `fs.ss` **显式**用
+> `(eol-style none)`,答案是什么都不影响结果。**不去依赖一个答案,好过去猜它。**
 
 ### 3.3 cmd.exe 的引用规则
 
@@ -122,7 +128,7 @@ Chez 的 `system` 走 `%COMSPEC%`,即 `cmd.exe`。所以:
 | **D37** | `-j` 并行编译在 Windows 上**退化为串行 + 明确提示** | `run-chunk` 的 sh 脚本是在补 Chez 缺失的「等多个子进程」原语;cmd 没有等价物。`-j` 是开发者便利,不值得为它引入 pwsh 依赖(可选增强见 §8.4) |
 | **D38** | 跨平台字节一致性靠 `.gitattributes` + 二进制写,而非 hash 时归一化 | 归一化会让 hash 不再是「文件真实内容的指纹」,verify 的语义就废了。源头钉死换行才是对的 |
 
-## 5. 子进程层(D33)
+## 5. 子进程层(D33)—— ✅ 已实现
 
 `proc.ss` 内部按平台分派,**导出面不变**(`run-capture` / `run-check` / `run-status` /
 `run-foreground` / `shell-quote` / `env-prefix` / `which` / `real-path`)。
@@ -316,7 +322,7 @@ Windows 上也接受 `/`,把 prefix 传 `%HERE%` 即可,不必为 `.cmd` 再写�
 - `bin/chandler`(开发期 wrapper)补一份 `bin/chandler.cmd`,逻辑与 sh 版对齐
   (含 `_prog_ok` 能力探测的等价物或明确省略,二选一并在 parity 测试里钉住)。
 
-## 9. 换行符与 hash 跨平台一致(D38)
+## 9. 换行符与 hash 跨平台一致(D38)—— ✅ 已实现
 
 两个方向都要堵:
 

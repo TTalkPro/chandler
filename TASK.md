@@ -325,41 +325,67 @@ cmd 的 `where <cand>` 行）。
 - 两个 README 都还在推荐 `bash tests/powershell-run.sh`，而那文件在 `1e88e2d`
   就被删了。改为指向新的 launcher-parity suite
 
-### C4. 换行符与 hash 跨平台一致（D38，P1-3）
+### C4. 换行符与 hash 跨平台一致（D38，P1-3）✅ 已完成
 > 设计 §9。独立于其它项，不做则跨平台协作随机报错。
 
-- [ ] 仓库根加 `.gitattributes`：`*.ss` / `*.sps` / `*.lock` / `*.md` → `text eol=lf`；
-      `*.cmd` → `text eol=crlf`。防 `core.autocrlf=true` 在 checkout 时改写内容
-- [ ] chandler 自己写 lock / registry / manifest 走**二进制端口**
-      （或显式 `(eol-style none)`），主要落点 `sexp.ss:105` 的 `call-with-output-file`
-- [ ] `sha256-file` **不做任何归一化** —— 它是文件真实字节的指纹，
+- [x] 仓库根加 `.gitattributes`：默认 `* -text`（不猜），源码/数据 `text eol=lf`，
+      `*.cmd` / `*.bat` `text eol=crlf`。防 `core.autocrlf=true` 在 checkout 时改字节
+- [x] **写侧显式钉死 eol**：`fs.ss` 加 `text-transcoder`
+      = utf-8 + `(eol-style none)`，`write-text` / `write-text-atomic` /
+      `read-file-string` / `read-lines` 与 `sexp.ss` 的 `read-datum-file` 全部改走它
+- [x] `sha256-file` **不做任何归一化**（保持原样）—— 它是文件真实字节的指纹，
       归一化会让 `chandler verify` 失去意义
-- [ ] 测试：同一 datum 在两种 eol 环境下写出的字节一致
+- [x] 测试 7 条，断言全部落在**字节**上（`get-bytevector-all`）而不是读回的字符串 ——
+      若读写两侧都做同样的变换，两个方向的 bug 会互相抵消而测不出来
+- [x] **验证非空转**：把 transcoder 换成 `(eol-style crlf)`（就是在模拟
+      Windows 上 `native-eol-style` 若为 crlf 的危害）→ **11 条变红**
 
-### C5. `proc.ss` 平台派发子进程层（D33，P0-1）
+**为什么不是「用二进制端口」而是「显式 transcoder」**：二进制端口要在每个调用点
+自己做 UTF-8 编解码，等于把编码逻辑散到各处。显式 transcoder 一处定义、全仓复用，
+且读写对称（`write-text-if-changed` 的比较依赖这条对称性）。
+
+**顺带消掉一个「待核实」**：设计里原本挂着「Chez 的文本端口在 Windows 上是否做
+`\n → \r\n` 转换」。答案不必再查了 —— 显式 `(eol-style none)` 之后，
+`native-eol-style` 是什么都不影响结果。**不去依赖一个答案，好过去猜它。**
+
+### C5. `proc.ss` 平台派发子进程层（D33，P0-1）✅ 已完成
 > 设计 §5。最大一块。**前提事实**：Chez 没有不经 shell 的 spawn
 > （`open-process-ports` 实测同样收 shell 命令串，`&&` 会被解释），
 > 所以只能把 cmd 的引用规则做对，不能绕开。
 
-- [ ] 导出面不变，内部按平台分派：
-  - [ ] 参数引用：Windows 走 `"…"` + MSVCRT 反斜杠规则 + 引号外元字符 `^` 转义
-  - [ ] 环境注入：`set "K=v" && cmd`（`bootstrap.ss:239` 已是此写法，抄过去）
-  - [ ] cwd：`cd /d "d" && ` —— **`/d` 不能少**，跨盘符会静默失败
-  - [ ] `which`：`where.exe <prog>` 取首行
-  - [ ] `real-path`：Windows 直接返回原路径（三个调用点都在 `pack/runtime.ss`，
-        只为找宿主 skiff/scheme，无符号链接需求）
-- [ ] `make-temp-dir`（`proc.ss:38`）区分「已存在」与真错误 ——
-      当前对任何失败都无限 loop（P0-2 的一半）
-- [ ] `bootstrap.ss` 的 `q` 同步（它是 `shell-quote` 的自包含副本，
-      由 `bootstrap-parity` 钉住，改一边就会红）
-- [ ] `-j` 并行编译（`compile.ss:588` `run-chunk`）在 Windows 上
-      **退化为串行 + 明确提示**（D37）。不为它引入 pwsh 依赖
-- [ ] **平台参数化单元测试**：平台判别抽成可 `parameterize` 的参数，
-      于是 Linux 上就能断言 Windows 分支的**生成结果**。
-      覆盖 `\`、空格、`$`、`&`、`^`、`"`，以及**含 `%` 的已知失真**（记录，不修）
-- [ ] 文档写明：`%` 在 cmd 双引号内也会展开且无可靠转义，
-      含 `%` 的值需改走环境变量（npm/yarn/mise 同样限制）
-
+- [x] 导出面不变，内部按 `windows-shell?` 分派：
+  - [x] 参数引用 `cmd-quote`：`"…"` 包裹 + MSVCRT 反斜杠规则
+        （`"` 前与**结尾**的连续反斜杠加倍）。全包在引号里，cmd 的
+        `& | < > ^ ( )` 那层**自动安全**，不需要额外 `^` 转义
+  - [x] 环境注入：`set "K=v" && cmd`（cmd 完全不认 `K=v cmd`，会当程序名）
+  - [x] cwd：`cd /d "d" && ` —— **`/d` 不能少**，跨盘符会静默不切过去
+  - [x] `which`：`where.exe <prog>` 取首行（对齐 `command -v` 的语义）
+  - [x] `real-path`：Windows 直接返回原路径
+- [x] **无法安全传递的当场硬错**：字面 `"` 与换行/回车。cmd 不认反斜杠转义，
+      一个裸引号就让引号配对错位，后面的 `& | > ^` 落到引号外变成 cmd 控制字符 ——
+      那不是「路径传错」，是**命令注入面**
+- [x] **`%` 刻意放行**：cmd 只展开**已定义**的 `%VAR%`，而 URL 编码（`%20`）
+      随处可见，一律拒会造大量假阳性。真撞上同名变量时 git 会拿着变形 URL 明确报错，
+      不是静默走错。限制写在 designs/14 §3.3
+- [x] `make-temp-dir` 修**死循环**：先前对任何 mkdir 失败都重试，temp 根不存在时
+      会转到天荒地老。现在只在目标已存在时换名重试，其余原样抛，并先确保 temp 根存在
+- [x] `bootstrap.ss` 的 `q` 同步分派（`q-sh` / `q-cmd`），`boot-cli-cmd` 的 Windows
+      env 前缀也改走 `q-cmd` —— 先前把 `boot-prefix` 裸贴进引号里
+- [x] `-j` 在 Windows 退化为**串行 + 明确提示**（D37）。串行分支**不短路**，
+      一批里后面的命令照跑，与并行分支「全部 wait 完再汇总」的可观察行为一致
+- [x] **平台参数化测试 13 条**：`windows-shell?` 是 parameter，于是 Windows 那半边
+      在 Linux 上逐字断言。覆盖普通/结尾反斜杠、空格、cmd 元字符、`%` 放行、
+      三类硬错、`set "K=v" &&` 形与 `#f` 跳过、`cd /d`、`real-path` 恒等
+- [x] **bootstrap-parity 补 Windows 侧**（2 条）：两份 `q` 在 cmd 分支上逐字对拍，
+      以及「对无法安全传递的输入都拒」。bootstrap 是 Windows 上装 chandler 的唯一入口，
+      它的引用错了后面什么都不用谈
+- [x] **与参考实现交叉验证**：12 个输入（含 UNC `\\server\share`、多个结尾反斜杠、
+      空串）与 MSVCRT 规则的独立实现逐字比对，**全部一致**
+- [x] **验证非空转**：五处故意分叉各自变红 —— 不加倍结尾反斜杠、env 前缀退回
+      `K=v` 形、`cd` 漏 `/d`、不再拒字面引号、bootstrap 的 `q` 不分派
+- [x] 端到端回归：install / pack / doctor / bootstrap 自举 / fetch(git) suite /
+      **含 `$` 与空格的路径下 build**（B4 修过的那类）
+- [x] 测试 548 → 561，0 failed；`scheme` 与 `petite` 都跑；清空 `_build` 从零重编亦通过
 ### C6. 路径原语认 `\`（D36，P1-1）
 > 设计 §6。依赖 C5 的实跑才能验证。**这是静默错误**，比崩溃危险。
 
@@ -378,7 +404,10 @@ cmd 的 `where <cand>` 行）。
 > 设计 §7、§10。
 
 - [ ] `system-temp-dir`（`fs.ss:188`）：`TMPDIR` → `TEMP` → `TMP` → 平台默认
-      （当前 Windows 上全部临时文件写向不存在的 `/tmp`）
+      （当前 Windows 上全部临时文件写向不存在的 `/tmp`）。
+      **另一半已在 C5 修掉**：`make-temp-dir` 撞上不存在的 temp 根不再死循环，
+      而是给出「设 TMPDIR / TEMP / TMP」的可操作错误 —— 于是这条即便没做完，
+      失败方式也已经从「转到天荒地老」变成「一句话说清」
 - [ ] `fetch.ss:24` `default-cache-root`：Windows 走 `%LOCALAPPDATA%\chandler\cache`，
       与 `registry.ss` 的 `default-user-libdir` 同一套判别
 - [ ] `move-file`（`fs.ss:110`）：目标存在先删再 rename，与 `sexp.ss` /
