@@ -21,8 +21,16 @@
   (define offline? (make-parameter #f))
   (define cache-root (make-parameter #f))   ; #f → 惰性取默认
 
+  ;; 缓存根。Windows 上走 `%LOCALAPPDATA%`,与 (chandler registry) 的
+  ;; default-user-libdir 同一套判别 —— 先前无条件落到 `~/.cache/chandler`,
+  ;; 能用但不合 Windows 惯例(那里 `~/.cache` 不是任何工具会去看的地方)。
+  ;; `XDG_CACHE_HOME` 显式设置时仍然优先,两个平台一致。
   (define (default-cache-root)
-    (join-paths (or (getenv "XDG_CACHE_HOME") (join-paths (home-dir) ".cache")) "chandler"))
+    (cond
+      [(getenv* "XDG_CACHE_HOME") => (lambda (d) (join-paths d "chandler"))]
+      [(windows-mt? (current-machine-type))
+       (join-paths (or (getenv* "LOCALAPPDATA") (home-dir)) "chandler" "cache")]
+      [else (join-paths (join-paths (home-dir) ".cache") "chandler")]))
 
   (define (root) (or (cache-root) (default-cache-root)))
 

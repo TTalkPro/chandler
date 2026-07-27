@@ -23,6 +23,7 @@
           native-so? lib-native-dir lib-native-path native-so-name
           walk-native-dirs
           srcdir-join abspath
+          windows-reserved-basenames windows-reserved-name?
           manifest-filename lock-filename
           project-manifest-path project-lock-path)
   (import (chezscheme)
@@ -185,6 +186,27 @@
   ;; ── 项目根下的两个约定文件 ──
   ;; 纯路径函数,故归 layout。先前住在 install.ss(要 import 一整个 install 才能
   ;; 用),于是全仓 14 处干脆手写 (join-paths root "chandler-manifest.ss") 字面量。
+  ;; ── Windows 文件名可移植性(C7)──
+  ;;
+  ;; Windows 保留一批**设备名**:CON PRN AUX NUL COM1-9 LPT1-9。它们
+  ;;   • 大小写不敏感(`Aux` 同样保留),且
+  ;;   • **带扩展名也算** —— `aux.ss` 一样造不出来。
+  ;; 于是一个叫 `aux` 的库在 Windows 上根本落不了盘(`<src>/aux.ss`)。
+  ;;
+  ;; **不自动改名**:改名会让库名与磁盘路径失去对应,`(import (aux))` 找不到
+  ;; 它自己的文件,而错误现场离原因很远。宁可在 install 就说清。
+  (define windows-reserved-basenames
+    '("con" "prn" "aux" "nul"
+      "com1" "com2" "com3" "com4" "com5" "com6" "com7" "com8" "com9"
+      "lpt1" "lpt2" "lpt3" "lpt4" "lpt5" "lpt6" "lpt7" "lpt8" "lpt9"))
+
+  ;; 名字(去掉扩展名后)是否撞上保留设备名
+  (define (windows-reserved-name? s)
+    (let* ([str (name->string s)]
+           [dot (char-index str #\.)]
+           [stem (string-downcase (if dot (substring str 0 dot) str))])
+      (and (member stem windows-reserved-basenames) #t)))
+
   (define manifest-filename "chandler-manifest.ss")
   (define lock-filename "chandler-manifest.lock")
 
