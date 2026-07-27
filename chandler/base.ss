@@ -22,10 +22,11 @@
     filter-map short-rev
     ;; fs
     parent-dir base-name path-join* absolute-path?
+    path-sep-char? has-path-sep?
     ensure-dir ensure-parent
     dir-entries files-under dir-empty?
     rm-rf copy-file move-file
-    read-file-string read-lines write-text write-text-atomic
+    read-file-string read-lines write-text write-text-atomic write-text-crlf
     sweep-empty-parents home-dir
     write-text-if-changed file-byte-size mtime
     path-swap-ext

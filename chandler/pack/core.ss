@@ -111,7 +111,7 @@
               (copy-exe! exe (join-paths (pack-bin-dir tmp-root) (exe-name "skiff")))
               (for-each (lambda (b) (copy-file (join-paths bd b) (join-paths (pack-boot-dir tmp-root) b)))
                         '("petite.boot" "scheme.boot" "skiff.boot"))
-              (write-launcher! tmp-root name (launcher-sh-skiff name version) (launcher-ps1-skiff name version))
+              (write-launcher! tmp-root name (launcher-sh-skiff name version) (launcher-cmd-skiff name version))
               (write-pack-manifest! tmp-root name version rt entry mainp
                                     (probe-chez-version exe) mt sv))
             (let* ([exe (chez-exe-path)]
@@ -121,7 +121,7 @@
               (copy-file (join-paths csv "petite.boot") (join-paths (pack-boot-dir tmp-root) "petite.boot"))
               (when (eq? rt 'scheme)
                 (copy-file (join-paths csv "scheme.boot") (join-paths (pack-boot-dir tmp-root) "scheme.boot")))
-              (write-launcher! tmp-root name (launcher-sh-stock rt name version) (launcher-ps1-stock rt name version))
+              (write-launcher! tmp-root name (launcher-sh-stock rt name version) (launcher-cmd-stock rt name version))
               (write-pack-manifest! tmp-root name version rt entry mainp ver mt #f)))
             ) ;; close unless lib?
           ;; ── 阶段 3:原子替换 —— temp 完工,换到最终位置 ──
