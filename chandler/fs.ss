@@ -12,6 +12,7 @@
            dir-entries files-under dir-empty?
            rm-rf copy-file move-file
            read-file-string read-lines write-text write-text-atomic write-text-crlf
+           call-with-text-input-file call-with-text-output-file
            sweep-empty-parents home-dir
            write-text-if-changed file-byte-size mtime
            path-swap-ext
@@ -124,16 +125,55 @@
     (ensure-parent dst)
     (rename-file src dst))
 
-  ;; ── 文本 I/O ──
+  ;; ══════════════════════════════════════════════════════════════════
+  ;; 文本 I/O(D38:字节行为与平台无关)
+  ;;
+  ;; **不用默认 transcoder**。R6RS 的 `(make-transcoder codec)` 取
+  ;; `(native-eol-style)`,那是平台相关的:本机(Linux/Chez 10.4.1)实测为 `none`,
+  ;; 但若某平台是 `crlf`,`call-with-output-file` 就会把 `\n` 写成 `\r\n` ——
+  ;; 于是**同一个 datum 在两个平台上写出不同的字节**。
+  ;;
+  ;; 那正好是致命的:lock 的 `manifest-sha256` 与 install/pack 的 per-file sha256
+  ;; 都是**字节**指纹(`sha256-file` 走二进制端口读原始字节,且刻意不做归一化 ——
+  ;; 归一化会让它不再是「文件真实内容的指纹」,`chandler verify` 就失去意义)。
+  ;; 写侧一旦随平台漂移,跨平台协作时 `lock-fresh?` 恒判 stale、`verify` 恒报
+  ;; 文件被改,而两边的文件「看起来」完全一样。
+  ;;
+  ;; 故显式钉死 `none`:chandler 写什么字符就是什么字节。需要 CRLF 的地方
+  ;; (`.cmd` 启动器)由 `write-text-crlf` **显式**写 `\r\n`,不靠 transcoder 变魔术。
+  ;; 读侧用同一个 transcoder,好让 `write-text-if-changed` 的比较对称。
+  ;;
+  ;; 配套的另一半在仓库根的 `.gitattributes`:钉住 git checkout 时不改写字节
+  ;; (Windows 上 `core.autocrlf=true` 是默认行为)。两边都堵才管用 —— 只堵一边
+  ;; 等于没堵。
+  ;; ══════════════════════════════════════════════════════════════════
+  (define text-transcoder
+    (make-transcoder (utf-8-codec) (eol-style none) (error-handling-mode replace)))
+
+  (define (call-with-text-input-file path proc)
+    (call-with-port
+      (open-file-input-port path (file-options) (buffer-mode block) text-transcoder)
+      proc))
+
+  (define (call-with-text-output-file path proc)
+    (call-with-port
+      (open-file-output-port path (file-options no-fail) (buffer-mode block) text-transcoder)
+      proc))
+
   (define (read-file-string path)
     (if (file-exists? path)
-        (let ([s (call-with-input-file path get-string-all)])
-          (if (eof-object? s) "" s))
+        (call-with-text-input-file path
+          (lambda (p)
+            (let ([s (get-string-all p)])
+              (if (eof-object? s) "" s))))
         ""))
 
+  ;; eol-style none ⇒ `get-line` 只按 `\n` 断行,CRLF 文件的行尾会留一个 `\r`。
+  ;; 这与本机先前的行为一致(默认 transcoder 在此也是 none),调用方
+  ;; (`env.ss` 的 dotenv 解析)本就对每行 `string-trim`,而 `\r` 是空白字符。
   (define (read-lines path)
     (if (file-exists? path)
-        (call-with-input-file path
+        (call-with-text-input-file path
           (lambda (p)
             (let loop ([acc '()])
               (let ([l (get-line p)])
@@ -142,7 +182,7 @@
 
   (define (write-text path s)
     (ensure-parent path)
-    (call-with-output-file path (lambda (p) (display s p)) 'truncate))
+    (call-with-text-output-file path (lambda (p) (put-string p s))))
 
   ;; ── 原子落盘(D20):temp 文件(与目标**同目录** —— 跨目录 rename 不保证原子)
   ;; → 关端口 → rename 覆盖目标。崩溃只留 .tmp 残件;目标要么是旧内容、要么是
@@ -161,7 +201,7 @@
                                           (number->string (get-process-id))))])
       (guard (e [else (guard (e2 (#t (void))) (delete-file tmp))
                       (raise e)])
-        (call-with-output-file tmp (lambda (p) (display s p)) 'truncate)
+        (call-with-text-output-file tmp (lambda (p) (put-string p s)))
         (when (file-exists? path)
           (guard (e (#t (void))) (delete-file path)))
         (rename-file tmp path))))

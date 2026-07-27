@@ -585,7 +585,29 @@
           (loop (+ i 1) (cons (car rest) acc) (cdr rest)))))
 
   ;; 并发启一批命令,全部等完,汇总退出码。
+  ;;
+  ;; 这段 sh 脚本(`cmd & pN=$!` / `wait $pN`)是在补 **Chez 缺失的原语** ——
+  ;; `system` 是阻塞的,`open-process-ports` 又拿不到退出码,于是「同时起 N 个、
+  ;; 全部等完、汇总状态」只能借 shell 的作业控制。
+  ;;
+  ;; **Windows 上退化为串行**(D37):cmd 没有等价物(`start /wait` 是逐个等,
+  ;; 拿不到并发)。`-j` 是开发者便利,不值得为它把 pwsh 拉进依赖 —— 分发态与
+  ;; install 态的底线是「只依赖 cmd.exe」,而依赖一旦引入就会顺着开发路径蔓延。
+  ;; 结果完全一致,只是不省时间。
   (define (run-chunk cmds)
+    (if (windows-shell?)
+        (run-chunk-serial cmds)
+        (run-chunk-parallel cmds)))
+
+  (define (run-chunk-serial cmds)
+    (let loop ((cs cmds) (ok #t))
+      (if (null? cs)
+          ok
+          ;; 不短路:一批里后面的命令照跑,好让一次构建把所有错都报出来,
+          ;; 与并行分支(全部 wait 完再汇总)的可观察行为一致
+          (loop (cdr cs) (and (= 0 (system (car cs))) ok)))))
+
+  (define (run-chunk-parallel cmds)
     (let ((tmp (fp-tmp)) (n (length cmds)))
       (call-with-output-file tmp
         (lambda (p)
@@ -614,6 +636,9 @@
     (let* ((units  (compile-units))
            (needed (filter (lambda (u) (needed-unit? (car u))) units)))
       (unless (null? needed)
+        ;; D37:说出来。静默退化会让人对着 -j8 的构建纳闷「为什么一点没快」。
+        (when (and (windows-shell?) (> n 1) (not (*quiet*)))
+          (eprintf "chandler: -j~a: parallel compile is not available on Windows; building serially~%" n))
         (write-worker-script!)
         (let ((cache (make-hashtable string-hash string=?)))
           (for-each (lambda (u) (unit-level (car u) (cdr u) cache)) units)

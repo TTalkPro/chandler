@@ -15,8 +15,10 @@
           (chandler fs))
 
   ;; ── 读:单一顶层 datum,拒空/拒多 form ──
+  ;; 走 (chandler fs) 的 text transcoder(eol-style none)—— 与 write-canonical-file
+  ;; 的写侧对称,读到的字符与盘上的字节一一对应(D38)。
   (define (read-datum-file path)
-    (call-with-input-file path
+    (call-with-text-input-file path
       (lambda (p)
         (let ([datum (read p)])
           (when (eof-object? datum)
