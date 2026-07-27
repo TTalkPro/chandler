@@ -9,6 +9,10 @@
 ;;; 全部通过才碰 library-directories / native / import。校验失败一律显式
 ;;; (exit N)(sysexits:65/70/78)+ 单行 s-expr 诊断,不走 Chez error。
 ;;; 不再单独生成 bootstrap.ss —— verifier 直接内联进 run.sps。
+;;; (**术语**:那个曾被生成进包里的 bootstrap.ss 就是本文件这段部署侧校验器,
+;;;  旧注释里「bootstrap」多半指它。与**仓库根的自举安装器 `bootstrap.ss`**
+;;;  ——装 chandler 自己用的三段式脚本——无关。本文件末尾提到的「bootstrap 编排」
+;;;  才是指仓库根那一个:它 spawn 应用并检查退出码,故 main 必须传出退出码。)
 ;;;
 ;;; 包根推导:run.sps 恒在 <libdir>/<name>/<version>/.chandler/run.sps → 4× path-parent
 ;;; = %root(install 模式 = libdir;pack 模式 = share/chez)。pack.manifest 在包根,
@@ -52,7 +56,7 @@
       "        [(procedure? v) (let ([r (v)]) (and (string? r) r))]\n"
       "        [else #f]))))\n"))
 
-  ;; 内联 (chandler version) 的区间匹配:部署态没有 chandler 可 import,bootstrap
+  ;; 内联 (chandler version) 的区间匹配:部署态没有 chandler 可 import,故本段
   ;; 必须自含。支持精确 / "*" / >= <= > < = 操作符与空格合取,与 skiff/app.ss 的
   ;; version-in-range? 同语义。解析容错(非法分量当 0)+ 整体 guard 兜成 #f:
   ;; 部署侧宁可按「不匹配」走 78,也不能让畸形版本串把进程抛进 debugger。

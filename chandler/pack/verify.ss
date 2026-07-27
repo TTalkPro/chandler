@@ -14,8 +14,14 @@
 ;;;     --target             对当前 runtime 跑 designs/10 §4 全矩阵 → 78。
 ;;;   退出码(sysexits):0 全过;65 完整性/schema 错(EX_DATAERR,对齐 skiff/app.ss);
 ;;;   70 format 超出(EX_SOFTWARE);78 --target 不符(EX_CONFIG)。
-;;;   与 bootstrap 共用措辞与单行 s-expr 诊断(那边是自含生成码,这边直调
-;;;   (chandler runtime)/(chandler version);决策表是同一份)。
+;;;   与**部署侧校验器**共用措辞与单行 s-expr 诊断:那边是 (chandler pack run-sps)
+;;;   生成、内联进包里 run.sps 的自含代码(部署态没有 chandler 可 import),
+;;;   这边直调 (chandler runtime)/(chandler version);决策表是同一份。
+;;;
+;;;   **术语**:本子系统里的「部署侧校验器」在旧注释里叫「bootstrap」——
+;;;   那段代码曾被单独生成成包内的一个 bootstrap.ss,后来内联进了 run.sps
+;;;   (见 (chandler pack run-sps) 文件头)。它与**仓库根的自举安装器
+;;;   `bootstrap.ss`**(装 chandler 自己用的三段式脚本)毫无关系,别混。
 
 (library (chandler pack verify)
   ;; verify-pack-target! 导出**仅为 parity 测试**:它与 (chandler pack run-sps) 的
@@ -45,7 +51,8 @@
   ;; pack-field1 已由 (chandler sexp) 的 field-ref 提供同一语义(assq + cadr)。
 
   ;; (format N) 前向兼容:N > pack-format-supported(=1)→ 70 EX_SOFTWARE;
-  ;; 字段缺省视为 0(对齐 bootstrap 的 verify-format-src)。返回 #f(通过)或 70。
+  ;; 字段缺省视为 0(对齐部署侧的 verify-format-src,在 (chandler pack run-sps))。
+  ;; 返回 #f(通过)或 70。
   (define (verify-pack-format! fields)
     (let ([fmt (or (field-ref fields 'format) 0)])
       (and (number? fmt) (> fmt pack-format-supported)
@@ -108,8 +115,8 @@
       (printf "verify ~a: ~a ok, ~a bad, ~a extra~%" root ok bad extra)
       bad))
 
-  ;; runtime-aware verify-target!(designs/10 §4 矩阵,与 bootstrap 的
-  ;; full-target-check-src 同决策、同措辞):
+  ;; runtime-aware verify-target!(designs/10 §4 矩阵,与部署侧的
+  ;; full-target-check-src 同决策、同措辞;那段在 (chandler pack run-sps)):
   ;;   - machine-type / chez-version 永不放宽,不符即 78 EX_CONFIG;
   ;;   - (skiff-version "X") 精确:runtime 是 skiff 则值比对;是 stock 则必 78;
   ;;   - (skiff-compat "<range>") 非全开:runtime 是 skiff 则 version-match?;

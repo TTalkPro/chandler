@@ -179,29 +179,53 @@ EXTRA 文案、是否统计并打印 ok/extra 汇总。
   datum 里，那份要作为独立脚本跑，`eprintf` 在其中未绑定。
   `pack/run-sps.ss` 两处同理（在生成的源码**字符串**里）
 
-### B6. bootstrap.ss 策略镜像防漂移 ⬜ 未做
-- [ ] `bootstrap.ss:153-171` libdir/bindir 表镜像 `registry.ss:39-57`；
-      解释器选择逻辑共 4 份（`bootstrap.ss:187`、`cli/runtime-env.ss:27`、
-      `cli/commands.ss:313`、`compile.ss:478`）
-- [ ] 纯管道复制（dirname/join-paths/rm-rf 等）保留不动（自包含红线）；
-      两块策略代码加 parity 测试，或构建时从库代码生成
-      `bootstrap-prelude.ss`
-- 建议按 pack verifier 的先例走 **parity 测试**而非代码生成：bootstrap 的
-  自包含是硬约束（同 B1），而 parity 测试已被证明是管住这类重复的有效手段
+### B6. bootstrap.ss 策略镜像防漂移 ✅ 已完成（走 parity 测试）
+按 pack verifier 的先例走 **parity 测试**而非代码生成：bootstrap 的自包含是
+硬约束（同 B1），纯管道复制（dirname/join-paths/rm-rf）保留不动。
 
-### B7. 测试样板 ⬜ 未做（低优先）
-- [ ] `with-proj` 两份逐字节重复（`tests/chandler/compile.ss:34`、
-      `cli-make.ss:18`）+ 两份文件树 fixture → `fixtures.ss` 提
-      `with-file-tree`
-- [ ] stdout 捕获 3 份、compiler 门 3 份 → 提入 harness/fixtures
+- [x] 新增 `tests/chandler/bootstrap-parity.ss`（9 条）。做法与
+      pack-verifier-parity 同构：**不重新实现** bootstrap 的逻辑（那只会变成
+      第三份副本），而是把 bootstrap.ss 当**数据**读进来（先剥 shebang 行）、
+      按名字抽出那几个 `define`、eval 进干净的 `(chezscheme)` 环境再比对。
+      依赖（join-paths/win?/getenv*/home）同样从 bootstrap.ss 抽
+- [x] 覆盖：① `target-libdir`/`target-bindir` × user/system/prefix 对
+      `registry` 的 `default-*`；② `interp` 对 `choose-interp`，覆盖
+      默认跟随 / CHANDLER_RUNTIME 压过 / 可执行文件覆盖 / 空串视为未设 /
+      非法值两侧都拒；③ bootstrap 的 `q` 对 `shell-quote`（含端到端穿 sh）
+- [x] **验证非空转**：故意制造 3 处分叉（libdir 表改字、裸 getenv、
+      `q` 退回双引号），分别报 1/3/2 条失败，还原后全绿
+
+期间修掉两个真问题（都在 bootstrap 的策略侧，与库侧已分叉）：
+- **`q` 只包双引号** —— 与 B4 同一 bug 的第三份。验证时看到旧实现让
+  `` `id` `` **真的执行了命令**，不只是路径拼错，是命令注入面。
+  改为单引号转义（自包含，与 `shell-quote` 同语义）
+- **裸 `getenv`** —— 库侧用 `getenv*`（空串视为未设，因为 Chez 的 putenv
+  删不掉变量、还原只能置 ""）。bootstrap 用裸 getenv，`CHANDLER_SKIFF=""`
+  会让它拿 `""` 去 exec 一个空命令名。已加自包含的 `getenv*` 并对齐
+- [x] `scheme --script bootstrap.ss --bootstrap-only` 端到端跑通，
+      产出的 `_bootstrap/bin/chandler --version` 正常（改动都在这条路径上）
+
+### B7. 测试样板 ✅ 已完成
+- [x] `fixtures.ss` 加 `write-file-tree` / `with-file-tree` / `with-proj`：
+      合并 **5 份**文件树夹具（原分析只列了 4 份，`native-build.ss` 里还有
+      第五份 `with-proj`）
+- [x] stdout 吞噬合并为三个**各有名字**的函数，不用布尔开关
+      （调用点上的 `#t` 说明不了任何事）：
+      `run-quiet`（换端口）/ `silently`（换端口 + `*quiet*`）/
+      `capture-output`（返回吞下的文本）。原先是 5 份散在 3 个文件里
+- [x] `when-compiler` 合并 3 份（`compile.ss` 那份原名 `needs-compiler`）
+- [x] 顺带去掉 `build.ss` 已无用的 `(chandler compile)` import
+      （`cli-make.ss` 的 task-engine import 仍需要，它用着 `exit-ok`）
+- [x] 测试 506 passed, 0 failed；清空 `_build` 从零重编亦通过
 
 ---
 
 ## 完成情况
 
 A 部分（算法/性能）：A1–A6 全部完成。
-B 部分（公共代码提取）：B3/B4/B5 完成；B1/B2 评估后判定不做（理由见各节）；
-B6/B7 未做。
+B 部分（公共代码提取）：B3/B4/B5/B6/B7 完成；B1/B2 评估后判定不做
+（理由见各节 —— 两者的「重复」要么受硬约束无法合并且已有构造性验证兜底，
+要么抽象成本高于重复本身）。
 
 实测收益汇总：
 
@@ -214,10 +238,20 @@ B6/B7 未做。
 | `split-lines`（1.17 MB） | 16.8 ms | 5.0 ms | 3.4× |
 | classify-libref 单次查询（20 条 roots） | 1.23 µs | 0.025 µs | 49×（分析代理实测） |
 
-另修一个真 bug（B4）：`shq` 不转义，含 `$` 的路径会让 compile worker 与
-native-build 的三个后端 `cd` 失败。
+另修三个真 bug，都是同一类「假设代替保证」：
 
-测试：494 → 496（新增 3 个：classify-cache 代际作废、env-prefix 引用与
-#f 跳过、env-prefix 端到端穿 /bin/sh），0 failed。
+1. **B4 — `recipe.ss` 的 `shq` 不转义**：注释写「路径没有 shell 特殊字符」，
+   但双引号内 `$` `` ` `` `\` `"` 对 sh 仍然特殊。含 `$` 的路径会让 compile
+   worker 与 native-build 的三个后端 `cd` 失败
+2. **B6 — `bootstrap.ss` 的 `q` 同一 bug 的第三份**：验证时看到旧实现让
+   `` `id` `` **真的执行了命令** —— 不只是路径拼错，是命令注入面
+3. **B6 — `bootstrap.ss` 用裸 `getenv`**：库侧用 `getenv*`（空串视为未设，
+   因 Chez 的 putenv 删不掉变量、还原只能置 ""）。`CHANDLER_SKIFF=""` 会让
+   bootstrap 拿 `""` 去 exec 一个空命令名
 
-改动全部留在工作区，未提交。
+测试：494 → 506，0 failed。新增 12 个：
+- classify-cache 代际作废（A5）
+- env-prefix 的引用与 #f 跳过、端到端穿 /bin/sh（B4）
+- bootstrap-parity 9 条（B6）
+
+三个新增的 parity/回归测试都验证过**非空转** —— 故意制造分叉后确认它们会红。

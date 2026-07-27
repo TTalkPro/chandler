@@ -40,7 +40,8 @@
         "  (lib-dirs \"" mt "\")\n"
         "  (entry (library " (datum->string entry) ") (main " (symbol->string main-proc) "))\n")))
 
-  ;; (native <soname> "<rel>") —— `skiff --app`(与 stock 的 bootstrap)在 import 入口库
+  ;; (native <soname> "<rel>") —— `skiff --app`(与 stock Chez 上 run.sps 的部署侧
+  ;; prelude)在 import 入口库
   ;; 之前统一 load-shared-object 这些(pack 规范 §4:infra 载 native,库只写
   ;; foreign-procedure)。按组装后的树实扫,故应用自己的 native 也在内。空则省略。
   ;; 对象根不止一个 —— app 与每个 dep 各有 <libdir>/<name>/<version>/<mt>/,
