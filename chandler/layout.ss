@@ -15,7 +15,7 @@
 ;;; native 收进所属库:<obj>/<lib>/native/<soname>.<ext>(与该库编译 .so 同处)。
 
 (library (chandler layout)
-  (export current-machine-type machine-type-string so-ext
+  (export current-machine-type so-ext
           windows-mt?
           join-paths path-join
           path-sep split-pair version-root entry->arg libdirs->arg
@@ -25,10 +25,9 @@
   (import (chezscheme)
           (chandler util))
 
+  ;; 全仓唯一的「machine-type 字符串」出处。先前另有一个逐字同义的
+  ;; `machine-type-string`,两个名字在 13 个文件里混用 —— 已统一到本函数。
   (define (current-machine-type)
-    (symbol->string (machine-type)))
-
-  (define (machine-type-string)
     (symbol->string (machine-type)))
 
   (define (windows-mt? mt)

@@ -81,7 +81,7 @@
   (define-suite suite
 
     (build-dir-and-so-paths
-      (assert-string= (string-append "_build/" (machine-type-string)) (build-dir))
+      (assert-string= (string-append "_build/" (current-machine-type)) (build-dir))
       (assert-string= (string-append (build-dir) "/app/util.so") (ref->so '(app util)))
       (assert-string= (string-append (build-dir) "/a/b/c.so") (ref->so '(a b c))))
 
@@ -94,7 +94,7 @@
                     (root->dir-pair '("dep/src" . "dep/ta6le") "B")))
 
     (prebuilt-form
-      (assert-equal (cons "lib/src" (string-append "lib/" (machine-type-string)))
+      (assert-equal (cons "lib/src" (string-append "lib/" (current-machine-type)))
                     (prebuilt "lib"))
       (assert-equal '("s" . "o") (prebuilt "s" "o")))
 

@@ -45,7 +45,7 @@
   ;; §18 编译层 — designs/06 §降解为 file 任务 + designs/07
   ;; ====================================================================
 
-  (define (build-dir) (string-append "_build/" (machine-type-string)))
+  (define (build-dir) (string-append "_build/" (current-machine-type)))
 
   ;; WPO 注入开关(designs/09)。默认关;(program-task …) 打开它,于是本次运行的
   ;; **每次**编译都产 .wpo —— 全程序链接需要全部 .wpo(难点 6)。它进 flags-string,
@@ -221,7 +221,7 @@
                                         "\nINC\n"   (string-join inc-hs ",")
                                         "\nFLAGS\n" (flags-string)
                                         "\nCHEZ\n"  (scheme-version)
-                                        "\nMT\n"    (machine-type-string)
+                                        "\nMT\n"    (current-machine-type)
                                         "\nDEPS\n"  (string-join up-fps ",")))))
                    ;; 不认识的目标 —— 文件在就哈希它
                    ((file-exists? target) (sha256-file target))
@@ -603,7 +603,8 @@
                     (iota n))
           (put-string p "exit $rc\n"))
         'truncate)
-      (let ((rc (system (string-append "sh " tmp))))
+      ;; tmp 落在 system-temp-dir 下,TMPDIR 含空格时不引用就会被 sh 拆成两个参数
+      (let ((rc (system (string-append "sh " (shq tmp)))))
         (delete-file tmp)
         (= rc 0))))
 
@@ -704,7 +705,7 @@
   (define prebuilt
     (case-lambda
       ((dir) (cons (string-append dir "/src")
-                   (string-append dir "/" (machine-type-string))))
+                   (string-append dir "/" (current-machine-type))))
       ((src obj) (cons src obj))))
 
   ;; (define-lib-roots "src" ...) —— 设库搜索根。codegen 根(*gen-roots*,
