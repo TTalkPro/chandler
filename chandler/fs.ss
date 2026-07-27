@@ -14,7 +14,9 @@
            sweep-empty-parents home-dir
            write-text-if-changed file-byte-size mtime
            path-swap-ext
-           parent-dir-or-dot system-temp-dir)
+           parent-dir-or-dot system-temp-dir
+           path-has-segment? unmanaged-path-segments unmanaged-path?
+           relativize rel-files-under)
   (import (chezscheme)
           (chandler util))
 
@@ -155,6 +157,32 @@
   ;; parent-dir 但空串返回 "."(compile/import-graph 各写一份的统一出处)
   (define (parent-dir-or-dot path)
     (let ([d (parent-dir path)]) (if (string=? d "") "." d)))
+
+  ;; ── 路径段判定 ──
+  ;; 路径里是否含 segs 中的某一段。全仓单一出处:先前 cmd-verify 的
+  ;; generated-path?、install 的 vendor-unmanaged-path?(两者逐字节相同)、
+  ;; fetch 的 build-tree-path? 各写一份,注释还互相叮嘱「两侧必须一致」——
+  ;; 那种不变式该由共用代码保证,不该靠注释。
+  (define (path-has-segment? p segs)
+    (let loop ([xs (string-split p #\/)])
+      (cond
+        [(null? xs) #f]
+        [(member (car xs) segs) #t]
+        [else (loop (cdr xs))])))
+
+  ;; 不受 lock/manifest 文件清单管辖的路径段:.git 是仓库元数据,_build 是生成物。
+  (define unmanaged-path-segments '(".git" "_build"))
+
+  (define (unmanaged-path? rel) (path-has-segment? rel unmanaged-path-segments))
+
+  ;; ── 相对化 ──
+  ;; root 下的绝对路径 → 相对 root 的路径。root 自身的尾斜杠由本函数补。
+  (define (relativize root abs) (strip-prefix abs (string-append root "/")))
+
+  ;; files-under 的相对形:扫 <root>/<sub>,结果相对 **root**(不是 sub)。
+  (define (rel-files-under root sub)
+    (map (lambda (abs) (relativize root abs))
+         (files-under (path-join* root sub))))
 
   ;; 系统临时目录(尊重 TMPDIR;修 compile/recipe 硬编码 /tmp 的可移植性 bug)
   (define (system-temp-dir)

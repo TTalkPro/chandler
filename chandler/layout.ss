@@ -21,9 +21,13 @@
           path-sep split-pair version-root entry->arg libdirs->arg
           resources-dirname lib-resource-dir
           native-so? lib-native-dir lib-native-path native-so-name
-          srcdir-join)
+          walk-native-dirs
+          srcdir-join abspath
+          manifest-filename lock-filename
+          project-manifest-path project-lock-path)
   (import (chezscheme)
-          (chandler util))
+          (chandler util)
+          (chandler fs))   ; dir-entries(fs 只依赖 util,无环)
 
   ;; 全仓唯一的「machine-type 字符串」出处。先前另有一个逐字同义的
   ;; `machine-type-string`,两个名字在 13 个文件里混用 —— 已统一到本函数。
@@ -77,7 +81,7 @@
   ;;     → (cons "<prefix>/foo/1.2.0/src" "<prefix>/foo/1.2.0/<mt>")
   (define (version-root prefix name version)
     ;; name 收 symbol 或 string(manifest/CLI 给字符串,lock 记录给 symbol)
-    (join-paths prefix (if (symbol? name) (symbol->string name) name) version))
+    (join-paths prefix (name->string name) version))
 
   ;; ── 资源落点(D13 method B,2026-07-25):<src>/<libpath>/resources/… ──
   ;;
@@ -133,6 +137,36 @@
   (define (native-so-name soname)
     (string-append soname "." (so-ext)))
 
+  ;; 遍历对象树:对每个 <base>/<segs…>/native/ 调 (proc segs native-dir),
+  ;; segs 是该库的名字段列表(("mylib") / ("chez" "async"))。
+  ;;
+  ;; 全仓唯一的「native 落点」遍历。先前 install 的 native-sos-under 与 pack 的
+  ;; native-libs-under 各写一份递归 —— 返回形状不同(绝对 .so 路径 vs 名字段),
+  ;; 但编码的是同一条不变式,漏改一边就会一边找得到、另一边找不到。
+  ;;
+  ;; **递归**:多段库名的 native 落在 <obj>/chez/async/native/,一层扫描会漏。
+  ;; 目录项按名排序遍历 —— pack 清单要确定性输出,native 预载也不该依赖 readdir
+  ;; 的任意顺序。已知的对象文件扩展名直接跳过、不 stat(它们不可能是目录)。
+  (define (walk-native-dirs base proc)
+    (let walk ([rel '()])
+      (let ([dir (fold-left join-paths base (reverse rel))])
+        (when (file-directory? dir)
+          (for-each
+            (lambda (e)
+              (unless (obj-tree-file-name? e)
+                (let ([p (join-paths dir e)])
+                  (when (file-directory? p)
+                    (if (string=? e "native")
+                        (unless (null? rel) (proc (reverse rel) p))
+                        (walk (cons e rel)))))))
+            (list-sort string<? (dir-entries dir)))))))
+
+  ;; 对象树里的编译产物 —— 按名字判即可,不必 stat。
+  (define obj-tree-file-exts '(".so" ".wpo" ".boot"))
+
+  (define (obj-tree-file-name? e)
+    (exists (lambda (ext) (string-suffix? ext e)) obj-tree-file-exts))
+
   ;; 文件名/路径是否 native 动态库(按 OS 扩展名;供扫描 obj 树时甄别编译 .so 与 native)
   (define (native-so? path)
     (string-suffix? (string-append "." (so-ext)) path))
@@ -141,4 +175,18 @@
   (define (srcdir-join dep-root srcdir)
     (if (or (not srcdir) (string=? srcdir "") (string=? srcdir "."))
         dep-root
-        (join-paths dep-root srcdir))))
+        (join-paths dep-root srcdir)))
+
+  ;; 相对路径按 root 解释,绝对路径原样。先前 cmd-verify、cmd-run 的 abspath、
+  ;; runtime-env 的 dotenv 各写一份。
+  (define (abspath root p)
+    (if (absolute-path? p) p (join-paths root p)))
+
+  ;; ── 项目根下的两个约定文件 ──
+  ;; 纯路径函数,故归 layout。先前住在 install.ss(要 import 一整个 install 才能
+  ;; 用),于是全仓 14 处干脆手写 (join-paths root "chandler-manifest.ss") 字面量。
+  (define manifest-filename "chandler-manifest.ss")
+  (define lock-filename "chandler-manifest.lock")
+
+  (define (project-manifest-path root) (join-paths root manifest-filename))
+  (define (project-lock-path root) (join-paths root lock-filename)))
