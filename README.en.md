@@ -40,6 +40,12 @@ chandler --version                     # → chandler 0.1.6 (skiff 0.1.2) (chez 
 
 ### Windows
 
+> ⚠️ **Status: unverified.** Windows support is fully implemented (D33–D38) and
+> pinned on Linux by platform-parameterised unit tests and a parity diff of both
+> launcher families — but **not one line of it has ever run on real Windows**.
+> The acceptance gate is `.github/workflows/windows.yml` (test suite + bootstrap +
+> a real pack run). Until it goes green, read the section below as "should", not "does".
+
 No PowerShell required — plain `cmd.exe` works (the snippet below is cmd syntax):
 
 ```bat
@@ -56,6 +62,17 @@ chandler --version
 >
 > **Known limitations** (inherent to cmd; npm/yarn's Windows shims share them): a `%` inside an argument
 > gets variable-expanded, unquoted `& | < > ^` break the line, and `Ctrl+C` prompts `Terminate batch job (Y/N)?`.
+>
+> **A native `script` backend needs a `.cmd` too.** A build script is written in another language, and
+> that language's interpreter differs per platform (`sh` on POSIX, only `cmd.exe` on Windows). A package
+> that builds on both ships both and declares them together — `(build (script "build.sh" "build.cmd"))`;
+> chandler picks the one runnable here by extension. Declaring only `.sh` is a **plain configuration
+> error** on Windows (naming what to add), not cmd complaining that `'sh' is not recognized`.
+>
+> **`chandler make -j N` degrades to a serial build on Windows** (D37; it says so on stderr rather than
+> degrading silently): parallel compilation relies on a small sh script that spawns N subprocesses and
+> `wait`s for them — supplying a primitive Chez lacks — and cmd has no equivalent. `-j` is a developer
+> convenience, not worth making pwsh a prerequisite. The build output is identical; it just isn't faster.
 >
 > **Upgrading from 0.1.6 or earlier**: launchers were `.ps1` back then. Reinstall once to get the `.cmd`;
 > `chandler uninstall` removes any leftover `.ps1` too.
@@ -269,6 +286,8 @@ scheme --libdirs . --program tests/run-tests.sps    # same, pure Chez, no extern
 petite  --libdirs . --program tests/run-tests.sps   # same (Petite-subset check)
 skiff   --libdirs . --program tests/run-tests.sps   # same (Skiff runtime)
 ```
+
+CI lives in `.github/workflows/{linux,windows}.yml`. The two are **deliberately isomorphic**: `run-tests.sps` → `bootstrap.ss` (which smoke-tests the launcher itself) → `build` + `pack` a minimal app and **actually run the launcher inside the pack**. They share one fixture, `tests/fixtures/packsmoke/`. The Linux job additionally runs the suite under Petite. Installing Chez takes a detour on both: scoop on Windows (releases only ship an installer), mise-from-source on Linux (Ubuntu ships 9.5.8, and upstream publishes no Linux binaries).
 
 `tests/chandler/launcher-parity.ss` renders **both** the sh and `.cmd` launcher families and diffs them: the sidecar path they read, how the runner path is assembled, the runtime-discovery order, and all five exit codes must match; the deliberate divergences (cmd has no `exec`; `%*` vs `"$@"`) are pinned explicitly. **It runs as part of `run-tests.sps` — no Windows and no pwsh needed.**
 

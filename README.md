@@ -38,6 +38,11 @@ chandler --version                          # → chandler 0.1.6 (skiff 0.1.2) (
 
 ### Windows
 
+> ⚠️ **状态:未验证。** Windows 支持已全部落地(D33–D38),并由平台参数化测试
+> 与两族启动器的 parity 对拍在 Linux 上逐字断言 —— 但**没有一行在真 Windows 上
+> 跑过**。验收关口是 `.github/workflows/windows.yml`(测试套件 + 自举 + pack 实跑);
+> 它跑绿之前,下面的说明按「应当如此」读,不是「已经如此」。
+
 不需要 PowerShell,`cmd.exe` 即可(下面是 cmd 语法):
 
 ```bat
@@ -54,6 +59,16 @@ chandler --version
 >
 > **已知限制**(cmd 固有,npm / yarn 的 Windows shim 同款):参数里含 `%` 会被变量展开、
 > 未加引号的 `& | < > ^` 会破;`Ctrl+C` 会弹 `Terminate batch job (Y/N)?`。
+>
+> **native 的 `script` 后端要一份 `.cmd`**:脚本是用别的语言写的,而那门语言的
+> 解释器两个平台不一样(POSIX 是 `sh`,Windows 只有 `cmd.exe`)。包要两边都能建,
+> 就两边各带一份并一起声明 —— `(build (script "build.sh" "build.cmd"))`,
+> chandler 按扩展名挑本平台能跑的那个。只声明 `.sh` 时在 Windows 上是**明确的
+> 配置错误**(告诉你该补什么),不是让 cmd 去抱怨「'sh' 不是内部或外部命令」。
+>
+> **`chandler make -j N` 在 Windows 上退化为串行**(D37,会打印一行提示,不静默):
+> 并行编译靠一段「起 N 个子进程再 `wait`」的 sh 脚本补 Chez 缺失的原语,cmd 没有等价物。
+> `-j` 只是开发者便利,不值得为它把 pwsh 拉进前置依赖 —— 构建结果与串行完全一致,只是不加速。
 >
 > **从 0.1.6 及更早升级**:那时的启动器是 `.ps1`,重装一次即换成 `.cmd`;
 > `chandler uninstall` 会把残留的 `.ps1` 一并带走。
@@ -245,6 +260,8 @@ scheme --libdirs . --program tests/run-tests.sps    # 同上,纯 Chez,无外部�
 petite  --libdirs . --program tests/run-tests.sps   # 同上(Petite 子集校验)
 skiff   --libdirs . --program tests/run-tests.sps   # 同上(Skiff 运行时)
 ```
+
+CI 在 `.github/workflows/{linux,windows}.yml`,两份**刻意同构**:`run-tests.sps` → `bootstrap.ss` 自举(它自带启动器冒烟)→ 最小 app 的 `build` + `pack` + **实跑包里的启动器**。夹具共用 `tests/fixtures/packsmoke/`。Linux 那份另跑一遍 Petite。装 Chez 两边都得绕一下:Windows 走 scoop(release 只挂安装器),Linux 走 mise 从源码建(Ubuntu 仓库是 9.5.8,官方 release 没有 Linux 二进制)。
 
 `tests/chandler/launcher-parity.ss` 把 sh 与 `.cmd` 两族启动器**都渲染出来对拍**:读的 sidecar 路径、runner 路径拼法、运行时发现顺序、五个退出码必须一致,刻意保留的差异(cmd 无 `exec`、`%*` vs `"$@"`)则显式钉住。**跑 `run-tests.sps` 就跑到,不需要 Windows,也不需要 pwsh。**
 
