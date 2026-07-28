@@ -293,7 +293,7 @@
       (let ((cmd (script-command dir script landing inc)))
         (unless (*quiet*)
           (display "native: script ") (display dir) (display "/") (display script) (newline))
-        (let ((rc (system cmd)))
+        (let ((rc (shell-system cmd)))
           (unless (= rc 0)
             (bail-exec "native script backend failed (exit ~a): ~a" rc cmd))))))
 
@@ -310,7 +310,7 @@
                                      (cons "CHEZ_INCLUDE" inc)))
                    "make PREFIX=" (shq abs) " DESTDIR= install")))
         (unless (*quiet*) (display "native: make ") (display dir) (newline))
-        (let ((rc (system cmd)))
+        (let ((rc (shell-system cmd)))
           (unless (= rc 0) (bail-exec "native make backend failed (exit ~a): ~a" rc cmd))))))
 
   ;; cmake 后端(designs/20 §cmake 配方):三段式,out-of-source。bdir 是
@@ -329,7 +329,7 @@
       (unless (*quiet*) (display "native: cmake ") (display dir) (newline))
       (for-each
         (lambda (cmd)
-          (let ((rc (system cmd)))
+          (let ((rc (shell-system cmd)))
             (unless (= rc 0) (bail-exec "native cmake backend failed (exit ~a): ~a" rc cmd))))
         (list
           (string-append "cmake -S " (shq dir) " -B " (shq bdir)

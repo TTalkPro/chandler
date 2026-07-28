@@ -34,9 +34,10 @@
   ;; 本组用例验的是 FFI 端到端,不是可移植的 C 构建脚本怎么写。
   (define (cc-available?) (and (which "cc") #t))
   (define (needs-toolchain proc)
-    (when-posix
-      (lambda ()
-        (when (and (compiler-available?) (cc-available?)) (proc)))))
+    (cond [(windows-host?)        (skip! "posix-only")]
+          [(not (compiler-available?)) (skip! "no-compiler")]
+          [(not (cc-available?))  (skip! "no-cc")]
+          [else (proc)]))
 
   ;; 一个带 native 的最小工程:C 源 + build.sh + 用 native-foreign-procedure 的库。
   (define native-files

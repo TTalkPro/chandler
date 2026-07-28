@@ -240,6 +240,21 @@
                 "percent%20encoded"                  ; % 刻意放行,两侧都不拒
                 ""))))
 
+    ;; `cmd /c` 的外层引号(解析的第三层,D68)—— 两份实现逐字对拍。
+    ;; bootstrap 生成的命令行都以 `(q interp)` 开头,必然踩中剥离规则;它是
+    ;; Windows 上装 chandler 的**唯一入口**,这一层错了后面什么都不用谈。
+    (bootstrap-cmd-outer-quote-parity
+      (let ([env (bootstrap-env '(cmd-outer-quote))])
+        (for-each
+          (lambda (line)
+            (assert-string= (cmd-outer-quote line)
+                            (eval `(cmd-outer-quote ,line) env)))
+          (list "\"scheme\" -q --libdirs \"/r\" --program \"/r/m.sps\""
+                "\"C:\\bin\\chandler.cmd\""
+                "set \"CHANDLER_HOME=C:\\p\" && \"scheme\" -q"   ; 不以引号开头 → 不包
+                "cd /d \"D:\\w\" && \"x\""
+                ""))))
+
     ;; 两侧对**无法安全传递**的字符都硬错(一个 raise、一个 exit,故只比「拒不拒」)
     (bootstrap-cmd-quote-rejects-same-inputs
       (let ([env (bootstrap-env '(q q-sh q-cmd win? mt-string die))])
