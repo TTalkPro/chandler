@@ -13,8 +13,10 @@
 ;;; 从 manifest 推导构建);chandler 留着,只是惯例示范 —— build 段本身其实也能
 ;;; 从 manifest 推出来。跑测试统一走 `chandler test`(库搜索 + native + .env +
 ;;; .env.tests 全挂);不再默认提供 `make test` / `make test-ps` 任务(需要时
-;;; 自行在本文件里 (task 'test ...) 即可)。PowerShell 启动器验收直接跑
-;;; `bash tests/powershell-run.sh`。
+;;; 自行在本文件里 (task 'test ...) 即可)。启动器验收在
+;;; `tests/chandler/launcher-parity.ss`(两族模板对拍)与 `cli.ss` 的端到端
+;;; 实跑里,跟着 `chandler test` 一起跑 —— 早先那个 `tests/powershell-run.sh`
+;;; 在 1e88e2d 就删了,PowerShell 也不再是任何一条路径上的依赖(D34)。
 ;;;
 ;;; **安装不在这里**:chandler 的安装由自含的 `bootstrap.ss` 负责(拷源码 →
 ;;; <prefix>/src/、拷 _build/<mt>/ → <prefix>/<mt>/,并写运行时发现启动器)。
