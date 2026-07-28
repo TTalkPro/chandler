@@ -631,8 +631,69 @@ cmd.exe」的底线冲突。**一个包要两边都能建，就得两边各带�
 - **`%` 的处置**：bake 在多参数形式下**拒绝**含 `%` 的参数，chandler **放行**。
   bake 引的是 recipe 作者写的命令，chandler 引的是 git URL 与路径，而 `%20`
   这类 URL 编码随处可见，一律拒会造出大量假阳性。取舍见 designs/14 §3.3
-- **D73**（Windows 的 broken pipe 因 `_dosmaperr` 未收录 109 而报
-  `invalid argument`）：chandler 全库没有按错误文案分派的地方，不适用
+- ~~**D73**（Windows 的 broken pipe 因 `_dosmaperr` 未收录 109 而报
+  `invalid argument`）：chandler 全库没有按错误文案分派的地方，不适用~~
+  —— **判错了对象，已由 C12 / D42 纠正**
+
+### C12. broken pipe：先认人再问 OS（D42）✅ 已完成
+> 设计 designs/14 §14 / §11c。来源：bake 的 L5/L6（D74/D75，2026-07-28）——
+> 那两条在 ta6le + a6nt 两侧都跑完了回归（`run-all` 24 文件全绿、探针四场景
+> 读数齐全、兜底文案注入后 `test-e2e` 72 passed），不是未验证的结论。
+
+**C11 把这条线整个放掉了，那是个错判。** 就 D73 本身（文案表拆自证/非自证两张）
+而言结论没错；错在据此认为整个问题不适用。D73 只是 bake 的 K2 的一个**修法细节**，
+而 K2 那个**问题**——下游截断 ⇒ 假报错 + 非零退出码——chandler 有，且比 bake 更裸：
+bake 至少有 `%broken-pipe?` 在挡，chandler 当时零处置。
+
+- [x] **复现**：`chandler make -P 2>err | head -5` ⇒ 上游 **rc=65** +
+      `chandler: failed on #<binary output port stdout>: broken pipe`；
+      `make -T`（几行，塞得进管道缓冲）⇒ rc=0、err 空。
+      Windows 上 `chandler make -P | more` 同款
+- [x] **根因在下一层，不在判别函数**：Chez 把 `SIGPIPE` 设成 `SIG_IGN`（EPIPE 于是
+      变成异常），fd port 又丢掉 errno 只留 `strerror` 文本 ⇒ POSIX 上 EPIPE 与
+      ENOSPC 类型上分不开，Windows 上连管道措辞都到不了（`_dosmaperr` 没收录
+      `ERROR_BROKEN_PIPE` 109 ⇒ 默认 `EINVAL`）
+- [x] **认人**（`cli/main.ss`，**不需要 FFI**）：`port-file-descriptor`=1 或
+      `port-name`="stdout"。本机实测两者都给，与 bake 在 a6nt 上的读数一致。
+      **确定是别的 fd ⇒ 直接判否** —— 这是相对「只比文案」的实质收紧
+- [x] **问 OS**（`proc.ss` §FFI，全仓唯一碰 FFI 的地方）：POSIX `poll` 的
+      `POLLERR`/`POLLHUP`；Windows `GetFileType`==`FILE_TYPE_PIPE`。
+      惰性建立、guard 包住、**建不起来就降级回文案表**（= 引入 FFI 之前的行为）
+- [x] **`designs/14 §11` 的 FFI 边界按此收窄**（不是取消）：反对的是「把子进程创建
+      整层建在 FFI 上」；本条只在**错误路径上惰性触碰**且可降级。且 chandler 本就
+      不是零 FFI —— `activate.ss:50` 早在调 `load-shared-object`
+- [x] **反面保证**：`> /dev/full` 仍 rc=65 + `no space left on device`。
+      poll 的 revents 是 4（无 `POLLERR`）⇒ 真实写失败不被当成断管道。
+      这比比对英文文案强，且不受 locale 影响
+- [x] **测试 9 条**（`tests/chandler/cli-broken-pipe.ss`）：平台参数化文案表 /
+      认人（造条件对象）/ 端到端（真 CLI + 真管道）。
+      下游夹具是 **Scheme 写的 `pipe-head`** 而非 `head`（后者 Windows 上没有，
+      bake D70/D72：缺的常常是命令不是能力）。判据用 **stderr 为空**而非退出码
+      （管道里取上游码在 cmd 侧要 delayed expansion），并**同时断言下游收到 5 行**
+      —— 命令没跑起来时 stderr 也是空的
+- [x] **四向故障注入**（本轮新增的 MUST，来自 bake L5/L6）。绿色本身区分不了
+      「探针在承重」与「判别空转」：
+
+      | 注入 | 预期 | 实测 |
+      |---|---|---|
+      | A 探针恒答「对端还在」 | 端到端变红 | ✅ 红（stderr 62 字节）⇒ 探针在承重 |
+      | B 探针置为不可用 | 仍全绿 | ✅ 9/9 ⇒ 降级路径有效 |
+      | C 打死自证文案表（探针照常） | 端到端**仍绿**，只有文案单元用例红 | ✅ ⇒ 文案表确实只是兜底 |
+      | D 认人失去「确定是别的 fd」这一支 | 反面用例变红 | ✅ 红 ⇒ 认人在承重 |
+
+      C 那一向对应 bake 在 a6nt 上做的同一件事。**注入指令要说清是「改」不是「加」**
+      —— bake 第一次因贴成新 `define` 撞出 `multiple definitions`，42 条 FAIL 全是
+      那个编译错误的连带
+- [x] 全量 598 → **607 passed，0 failed，0 skipped**
+- [ ] **未做：D75（子进程的 SIGPIPE 传染）**。已复现：chandler 进程
+      `SigIgn: 0x1000`，经 `shell-system` 跑 `yes 2>f | head -1` 让上游多吐
+      `yes: standard output: Broken pipe`（普通 sh 下 f 为空）。chandler 自己
+      构造的命令里没有管道（`toolchain-id` 已走 `run-capture`），暴露面只在
+      `recipe.ss` 的 `run`/`run/code` —— 用户 recipe 里的 `foo | head`。
+      处置见 designs/14 §14.6；**影响面别当回归**：修好后上游是被信号杀死 rc=141
+- [ ] **Windows 侧未验证**：与本文件其余 C 部分同一条件 —— 认人与文案表两半边
+      在 Linux 上参数化断言过，探针的 Windows 分支只有 bake 的 a6nt 读数背书，
+      chandler 自己**没有一行在真 Windows 上跑过**（C9 的 CI 关口仍未跑绿）
 
 ### C 部分的验证纪律
 
@@ -656,6 +717,15 @@ cmd.exe」的底线冲突。**一个包要两边都能建，就得两边各带�
    「某个具体命令/手段」**（bake D72）。缺手段就换个夹具，别归到平台组去 ——
    **平台组该尽量小**。bake 一度把 broken pipe 判为 Windows 不适用，实际缺的
    只是 `head`；chandler 这边是 `rm-rf` 删不掉那条，缺的只是「chmod 0500 目录」。
+7. **「他们的修法在我们这儿不适用」≠「他们修的那个问题我们没有」**（C12 换来的）。
+   C11 因为 D73 的**修法细节**（按错误文案分派）在 chandler 不适用，就把整条
+   broken pipe 的线放掉了 —— 而那个**问题**我们有，还比对方更裸。
+   **判不适用之前先复现一次**，一条命令的事。
+8. **故障注入要覆盖到「哪条路在承重」，不只是「功能对不对」**（C12 换来的）。
+   一个有主路 + 兜底路的判别，两条路都绿时长得一模一样：必须把主路打死看兜底
+   是否接住（B 向），再把兜底打死看主路是否仍绿（C 向）。今天 `make.ss` 的
+   `(unless (member name '()) …)` 是同一类漏网 —— 测试绿、注释对、commit 描述
+   正确，唯独代码没承重。**注入指令写给别人执行时要说清是「改」不是「加」。**
 
 ---
 

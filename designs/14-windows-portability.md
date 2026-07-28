@@ -1,7 +1,8 @@
 # 14 — Windows 可移植性
 
 > 状态: **代码侧已完成,尚未在 Windows 上验证**。本文是 Windows 支持的权威设计。
-> D33–D39 **全部落地**(TASK.md 的 C1–C10),测试套件也已去掉 shell 依赖(§12.1);
+> D33–D39 **全部落地**(TASK.md 的 C1–C10),D40–D42 亦已落地(C11–C12),
+> 测试套件也已去掉 shell 依赖(§12.1);
 > 只剩 **Windows CI 跑绿**这一步 —— workflow 已写(`.github/workflows/windows.yml`),
 > 但没有在 GitHub Actions 上执行过。
 >
@@ -182,6 +183,7 @@ C5 只对 MSVCRT 做了静态往返,没对 `cmd /c` 做 —— 于是
 | **D39** | native 的 `(script …)` 收**多个**脚本,按扩展名挑本平台能跑的 | 脚本是用别的语言写的,解释器两个平台不一样(sh / cmd)。要两边都能建就得两边各带一份 —— 这是事实,不是我们造出来的复杂度。挑不出来即 config 错(§12.2) |
 | **D40** | Windows 命令行是**三层**不是两层:`cmd /c` 的首尾引号剥离由 `shell-system` 抵消,全仓 `system` 出口收敛成一个 | §3.4。首字符是引号时必然被剥,而我们生成的命令行必然以引号开头 —— **凡是有参数、无 cwd/env 前缀的调用在 Windows 上全是坏的**。包裹必须作用在含重定向的最终整行上 |
 | **D41** | 跳过的用例**必须在汇总里报出来**(逐条列名 + 原因) | 一条被平台/环境门挡掉的用例,与它跑过并通过,在「N passed」里长得一模一样。静默跳过让另一个平台上的绿色变成假象 —— 实测:petite 那一遍原来藏着 22 条 |
+| **D42** | broken pipe 的判别**先认人再问 OS**,文案表降级为兜底;为此引入全仓唯一一处 FFI(`proc.ss` §FFI) | §14。`chandler make -P \| head` 修前必现假报错 + 退出码 65。根因在下一层(Chez 把 SIGPIPE 设成 `SIG_IGN` ⇒ EPIPE 变异常;fd port 又丢掉 errno 只留 strerror 文本),比文案在 POSIX 上分不开 EPIPE 与 ENOSPC、在 Windows 上连管道措辞都看不到。来源 bake D74(两平台实测) |
 
 ## 5. 子进程层(D33)—— ✅ 已实现
 
@@ -416,6 +418,14 @@ Windows 上也接受 `/`,把 prefix 传 `%HERE%` 即可,不必为 `.cmd` 再写�
 - **FFI 直调 `CreateProcessW` / `_wspawnvp`** —— 能拿到真正的 argv spawn,但把
   chandler 从「纯 Scheme + 系统 git」拖进 FFI 依赖,且要按 mt 分别维护。§3.3 的
   引用规则虽然琐碎,但是**纯字符串逻辑,可在 Linux 上单元测试**,这点更值钱。
+
+  > **边界已按 D42 收窄,不是取消**:本条反对的是「把子进程创建整层建在 FFI 上」——
+  > 那是产品主路径、要按 mt 维护、失败没有退路。D42 引入的 `poll`/`GetFileType`
+  > 不同:**只在错误路径上惰性触碰**(正常跑一次 `dlopen`/`dlsym` 都不做)、
+  > 全程 guard 包住、**建不起来就降级回文案表**(= 引入 FFI 之前的行为)。
+  > 且 chandler 本来就不是「零 FFI」—— `activate.ss:50` 为加载用户 native 产物
+  > 早就在调 `load-shared-object`。【MUST】新增 FFI 一律照这三条:惰性、可降级、
+  > 收敛在 `proc.ss` §FFI 一处。
 - **原生 `.exe` shim** —— 能解掉 Ctrl+C 提示和进程树多一层的问题,但需要 C 工具链
   或预编译二进制进仓库,与 git-first 的分发模型冲突。`.cmd` 的代价可接受。
 - **MSYS / Cygwin / WSL 路径互通** —— 明确不支持。目标是**原生 Windows**;
@@ -445,8 +455,29 @@ bake 在真 Windows 上跑过四轮,其 Phase L / D67–D73 的结论逐条比�
 - **`%` 的处置**:bake 在多参数形式下**拒绝**含 `%` 的参数,chandler **放行**。
   场景不同 —— bake 引的是 recipe 作者写的命令,chandler 引的是 git URL 与路径,
   而 `%20` 这类 URL 编码随处可见,一律拒会造出大量假阳性。取舍见 §3.3。
-- **D73**(Windows 的 broken pipe 因 `_dosmaperr` 未收录 109 而报 `invalid argument`):
-  chandler 全库没有按错误文案分派的地方,不适用。
+- ~~**D73**(Windows 的 broken pipe 因 `_dosmaperr` 未收录 109 而报 `invalid argument`):
+  chandler 全库没有按错误文案分派的地方,不适用。~~ —— **这条判错了对象**,已由
+  D42 纠正,见 §14。就 D73 **本身**(文案表拆自证/非自证两张)而言结论没错;错在
+  据此把整条线放掉了。D73 只是 K2 的一个**修法细节**,而 K2 那个**问题**
+  (下游截断 ⇒ 假报错 + 非零退出码)chandler 有,且比 bake 更裸:bake 至少有
+  `%broken-pipe?` 在挡,chandler 当时零处置。
+  **教训**:比对上游经验时,「他们的**修法**在我们这儿不适用」不等于
+  「他们修的那个**问题**我们没有」。判不适用之前先复现一次。
+
+## 11c. 借自 bake 的第二轮(2026-07-28,bake L5/L6 / D74–D75)
+
+bake 在 L5/L6 把 broken pipe 从「比文案」推进到「问 OS」,并在 a6nt 上跑完了回归
+(`run-all` 24 文件全绿、探针四场景读数齐全、兜底文案注入后 `test-e2e` 72 passed)。
+逐条比对:
+
+| bake | chandler 的处置 |
+|---|---|
+| **D74** 判别改为**先认人再问 OS**,文案表降级为兜底 | 采纳 → **D42**,见 §14。chandler 侧实测复现了同一个 bug |
+| D74 的**认人**两平台都成立(`fd=1` / `name="stdout"`) | 本机复测一致,**不需要 FFI**;收紧的是「recipe 自开的 port 写失败不得被静默」 |
+| D74 的**探针**(POSIX `poll` / Windows `GetFileType`) | 采纳,住 `proc.ss` §FFI —— 全仓唯一碰 FFI 的地方。§11 的边界因此调整,见该节 |
+| **故障注入必须做**:绿色区分不了「探针承重」与「兜底承重」 | 采纳 → 四向注入,见 §14。C 那一向(打死自证文案表,端到端仍绿)是「文案表只是兜底」的**证据**,不是说法 |
+| bake 探针两次栽在**测量通道**上(`2>` 绑错对象;通道跟着被测场景一起变) | 记录 → 本轮端到端把 err/out 各自落文件、下游行数单独断言,不让「没跑起来」与「跑了没报错」长成一样 |
+| **D75** Chez 的 `SIG_IGN` 跨 `exec` 传染给子进程 | **未做**,见 §14 末尾。chandler 侧已复现,但暴露面只在用户 recipe |
 
 ## 12. 验证策略
 
@@ -548,6 +579,117 @@ Windows 上 `/dev/null` 不是路径、`head` 不是程序,整条命令失败后
 | 6 | 路径原语认 `\`(D36)+ `system-temp-dir` + 文件系统语义(§10) | 依赖第 5 步的实跑才能验证 |
 | 7 | 测试套件去 shell 依赖 + CI | 前面所有工作的验收关口。套件侧已清理(§12.1);CI 见 `.github/workflows/{linux,windows}.yml`,两份**都还没在 Actions 上跑过** |
 | 8 | native `script` 后端的 Windows 分支(D39) | 第 7 步收尾时点出的缺口 —— 它不挡「装得上、发得出」,只挡「建得了带 native 的依赖」,故排在验收关口之后单独做(§12.2) |
+
+## 14. broken pipe:先认人,再问 OS(D42)—— ✅ 已实现
+
+### 14.1 症状与实测
+
+```
+$ chandler make -P 2>err | head -5      # 649 行,超管道缓冲
+上游 rc=65
+err: chandler: failed on #<binary output port stdout>: broken pipe
+
+$ chandler make -T 2>err | head -2      # 几行,塞得进缓冲
+上游 rc=0,err 空
+```
+
+Windows 上 `chandler make -P | more` 同款(`more` 是那边的标准分页器)。
+修之前 chandler 全库**零处置**。
+
+### 14.2 为什么不能只比文案
+
+根因在判别函数**下面一层**:
+
+1. Chez 启动时把 `SIGPIPE` 设成 `SIG_IGN` ⇒ 读端一关不是被信号静默杀掉,
+   而是 `write(2)` 返回 `EPIPE`,走进 I/O 错误路径;
+2. Chez 的 fd port **丢掉 errno**,只留 `strerror` 文本 ⇒ POSIX 上 EPIPE 与
+   ENOSPC 连 `who` 都相同、类型上分不开;Windows 上更糟 —— MSVCRT 的
+   `_dosmaperr` 没收录 `ERROR_BROKEN_PIPE`(109),落到默认 `EINVAL`,
+   于是**连管道措辞都看不到**,只有一句通用的 `invalid argument`。
+
+所以判别改为问操作系统,文案表降级为兜底。
+
+### 14.3 判别【MUST】分两步,顺序不得调换
+
+**先认人**(`cli/main.ss`,不需要 FFI):出错的是不是 chandler 自己的 stdout。
+`port-file-descriptor` = 1,或 `port-name` = `"stdout"`。本机实测两者都给;
+bake 在 a6nt 上实测同样成立。**确定是别的 fd ⇒ 直接判否**,不静默 ——
+这是相对「只比文案」的实质收紧:老判别下,recipe 自己开的文件 port 写失败时
+只要文案撞上表里的句子就会被一起吞掉。两样都问不出 ⇒ `'unknown`,退回文案表。
+
+**再问 OS**(`proc.ss` §FFI):
+
+| | 问法 | 够用的理由 |
+|---|---|---|
+| POSIX | `poll(fd 1, POLLOUT)`,revents 含 `POLLERR`/`POLLHUP` | 精确到「断没断」 |
+| Windows | `GetFileType(GetStdHandle(-11)) == FILE_TYPE_PIPE` | 只答「是不是管道」——那边没有可用于管道的 poll(`WSAPoll` 只吃 socket,`PeekNamedPipe` 只能用在读端,而我们手里是写端)。管道上的写不可能是 ENOSPC,故「是管道 + 写失败 ⇒ 读端没了」成立 |
+
+【MUST】探针建不起来(静态链接、pb 后端、沙箱挡 `dlopen`)⇒ 退回文案表,
+即引入 FFI 之前的行为 —— **降级不得比原来更差**。
+
+### 14.4 反面保证
+
+`/dev/full` 是「可打开但写必失败」的设备:poll 的 revents 仍是 4(无 `POLLERR`),
+探针答「对端还在」,错误照常上报。实测:
+
+```
+$ chandler make -P > /dev/full 2>err
+rc=65
+err: chandler: failed on #<binary output port stdout>: no space left on device
+```
+
+这比比对 `"no space left on device"` 这句英文强,且不受 locale 影响。
+Windows 侧没有等价设备(`NUL` 写必成功;只读/被独占的文件是在**打开**时失败,
+另一条路径),该用例按 D41 报进跳过清单。
+
+### 14.5 验证 —— 【MUST】含四向故障注入
+
+`tests/chandler/cli-broken-pipe.ss`,9 条,三组:平台参数化的文案表 /
+认人(造条件对象,不起子进程)/ 端到端(真 CLI + 真管道)。
+
+端到端的下游是 **Scheme 写的 `pipe-head` 夹具**而非 `head` ——
+后者在 Windows 上不存在(bake D70/D72:缺的常常是**某个命令**而不是**平台能力**,
+归平台组之前先找夹具)。判据用 **stderr 为空**而非退出码:管道里取上游退出码
+在 cmd 侧要 delayed expansion,为一条断言不值得;而 chandler 走错误路径时
+**必定**先 fprintf 到 stderr 再返回非零码,故 stderr 为空 ⟺ 未走错误路径。
+【MUST】同时断言下游确实收到 N 行 —— 命令没跑起来时 stderr 也是空的。
+
+**绿色本身区分不了「探针在承重」与「判别空转」**,故四向注入(均已实跑):
+
+| 注入 | 预期 | 实测 |
+|---|---|---|
+| A 探针恒答「对端还在」 | 端到端变红 | ✅ 红(stderr 62 字节) ⇒ 探针在承重 |
+| B 探针置为不可用 | 仍全绿 | ✅ 9/9 ⇒ 降级路径有效 |
+| C 打死自证文案表(探针照常) | 端到端**仍绿**,只有文案单元用例红 | ✅ 端到端绿、2 条文案用例红 ⇒ 文案表确实只是兜底 |
+| D 认人失去「确定是别的 fd」这一支 | 反面用例变红 | ✅ 红 ⇒ 认人在承重 |
+
+C 那一向对应 bake 在 a6nt 上做的同一件事(把 Windows 唯一可能命中的兜底文案
+改成永不命中的字符串,`test-e2e` 仍 72 passed)。**注入指令要说清是「改」不是
+「加」** —— bake 第一次因贴成新 `define` 撞出 `multiple definitions`,42 条 FAIL
+全是那个编译错误的连带。
+
+### 14.6 未做:D75(子进程的 SIGPIPE 传染)
+
+Chez 的 `SIGPIPE`=`SIG_IGN` **跨 `exec` 继承**。chandler 侧已复现:
+
+```
+chandler 进程自身: SigIgn: 0000000000001000        (bit13 = SIGPIPE)
+经 shell-system 跑 `yes 2>f | head -1`:  f = "yes: standard output: Broken pipe\n"
+普通 sh 跑同一条:                        f 为空
+```
+
+chandler **自己**构造的命令里没有管道(`toolchain-id` 已改走 `run-capture`),
+故内部无暴露;暴露面在 `recipe.ss` 导出的 `run` / `run/code` —— 用户 recipe 里
+任何 `foo | head` / `| grep -q`,**上游工具**都会多一行报错。
+
+bake 的处置(D75)是在 `%system` 前后 `dynamic-wind` 把 SIGPIPE 临时按回
+`SIG_DFL`,只包住那一段 —— **全程恢复不行**:进程会被信号直接杀死,
+`run/capture` 的 `dynamic-wind` 清理不执行,临时目录残留。chandler 这边
+`shell-system` 是全仓唯一 `system` 出口,正好是唯一要包的地方。
+
+**影响面(真做的话别当回归)**:修好后 recipe 里 `foo | head` 的上游是
+**被信号杀死、rc 141**,而不是原先的 1 + 一行报错 —— 与终端里手敲一致。
+若某条 recipe 依赖 `pipefail` 判成败,读到的码会变。
 
 ## 相关文档
 
