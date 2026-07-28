@@ -103,18 +103,45 @@
         shown)))
 
   ;; ── §14 -P:任务图诊断(逐任务打传递前置树)──
+  ;;
+  ;; **重复子树折叠**:一棵树里每个任务只完整展开一次,再遇到就打
+  ;; `name ...` 且**不再下钻**。
+  ;;
+  ;; 先前的卫兵是 `(member name seen)`,而 `seen` 传的是**当前路径**(祖先链)——
+  ;; 那只挡得住环,挡不住共享子树:每条到达它的路径都把它整棵重展一遍,于是
+  ;; 输出随深度**指数增长**。实测 18 层菱形堆叠(**55 个任务**)打出
+  ;; **4,194,163 行**;而库任务图天然就是这个形状 —— `util` 被几乎所有库 import,
+  ;; 每个 import 它的库又被更上层 import。
+  ;;
+  ;; 折叠之后环也自然终止(环上的节点第二次出现时已在 seen 里),于是不再需要
+  ;; 单独的环卫兵。
+  ;;
+  ;; **seen 按顶层目标独立**:每个根一张新表,否则第二棵树会因为第一棵展开过
+  ;; 而整个塌成一行。
+  ;;
+  ;; 键必须用 `equal?` 表:任务名**既有 symbol(phony)也有 string(file 目标)**,
+  ;; `eq?` 表对 string 键静默失配 —— 症状不是报错,是同一个节点凭空多一份、
+  ;; 折叠失效(与 task-registry 同一条约束)。
+  ;;
+  ;; 来源:bake 的 J1 —— 同一段代码从 bake 吸收过来时把这个问题一起带了过来。
   (define (make-show-prereqs)
     (define (children name)
       (let ([t (hashtable-ref task-registry name #f)])
         (if t (task-prereqs t) '())))          ; 未物化的名字作叶子打印
     (define (walk name depth seen)
-      (if (= depth 0)
-          (begin (display (format-object name)) (newline))
-          (begin (display (make-string (+ 2 (* (- depth 1) 5)) #\space))
-                 (display "└─ ") (display (format-object name)) (newline)))
-      (unless (member name seen)                ; 环卫兵 —— 不再往下递归
-        (for-each (lambda (c) (walk c (+ depth 1) (cons name seen))) (children name))))
-    (for-each (lambda (n) (walk n 0 '()))
+      (let ([folded? (hashtable-ref seen name #f)])
+        (if (= depth 0)
+            (display (format-object name))
+            (begin (display (make-string (+ 2 (* (- depth 1) 5)) #\space))
+                   (display "└─ ") (display (format-object name))))
+        ;; 叶子重复出现时不加省略号 —— 没有被省掉的东西
+        (when (and folded? (pair? (children name))) (display " ..."))
+        (newline)
+        ;; 先记再下钻 —— 环上的节点第二次到达时已在表里,递归就此终止
+        (hashtable-set! seen name #t)
+        (unless folded?
+          (for-each (lambda (c) (walk c (+ depth 1) seen)) (children name)))))
+    (for-each (lambda (n) (walk n 0 (make-hashtable equal-hash equal?)))
               (list-sort sort-task-names (vector->list (hashtable-keys task-registry)))))
 
   (define (print-help)
