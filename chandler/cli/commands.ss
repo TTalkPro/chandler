@@ -414,7 +414,7 @@
             (app-launcher-cmd name libdir))
           (let ([f (join-paths bindir name)])
             (write-text f (app-launcher-sh name libdir))
-            (run-status "chmod" (list "+x" f) '())))
+            (make-executable! f)))      ; C9:先前是 `chmod +x` 子进程
       (printf "installed command '~a' to ~a~%" name bindir)))
 
   (define (remove-app-launcher! name bindir)
