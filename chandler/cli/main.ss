@@ -2,22 +2,111 @@
 ;;; chandler/cli/main.ss --- dispatch + sysexits 退出码(designs/01 §退出码)
 
 (library (chandler cli main)
-  (export main)
+  (export main
+          ;; D42 的判别件:导出供单元测试。broken-pipe? 是这条路上唯一的决策点,
+          ;; pipe-phrase-match? 单独导出是因为它那半边(Windows-only 那张表)
+          ;; 在 Linux 上只能靠 parameterize windows-shell? 来驱动。
+          broken-pipe? pipe-phrase-match?)
   (import (chezscheme)
           (chandler util)
           (chandler runtime-detector)
+          ;; windows-shell?:文案表的平台闸门。stdout-pipe-gone?:探针,住在
+          ;; proc 的 §FFI(全仓唯一碰 FFI 的地方)。
+          (only (chandler proc) windows-shell? stdout-pipe-gone?)
           (chandler cli args)
           (chandler cli make)
           (chandler cli commands))
 
   (define chandler-cli-version chandler-version)
 
+  ;; ══════════════════════════════════════════════════════════════════
+  ;; broken pipe —— `chandler make -P | head` 不得假报错(D42)
+  ;;
+  ;; 症状:下游读够就退出,chandler 的 stdout 写失败 ⇒ report-error 打一行
+  ;; 「failed on #<binary output port stdout>: broken pipe」+ 退出码 65。
+  ;; 实测:`make -P`(649 行)必现;`make -T`(几行,塞得进管道缓冲)不现。
+  ;;
+  ;; 判别【MUST】分两步,顺序不得调换:**先认人,再问 OS**。
+  ;; 机制层面的根因与两平台读数见 (chandler proc) 的 §FFI。
+  ;; ══════════════════════════════════════════════════════════════════
+
+  ;; **自证型**文案:句子本身就说明"管道对端没了",不可能来自别的失败。
+  ;; 无条件匹配即可 —— POSIX 的 strerror 不会吐 Win32 措辞,反之亦然。
+  (define pipe-gone-phrases
+    '("broken pipe"                        ; POSIX EPIPE
+      "the pipe has been ended"            ; Win32 ERROR_BROKEN_PIPE (109)
+      "the pipe is being closed"           ; Win32 ERROR_NO_DATA (232)
+      "no process is on the other end of the pipe"))
+
+  ;; **非自证型**文案,仅 Windows。bake 在 a6nt 上实测:报的既不是上面任何一句,
+  ;; 也不是 EPIPE,而是 `invalid argument` —— MSVCRT 的 `_dosmaperr` 映射表里
+  ;; **没有** ERROR_BROKEN_PIPE(109),未收录的一律落到默认 EINVAL,于是 Win32
+  ;; 那三句在 Chez 这一层根本到不了。
+  ;;
+  ;; 【已知取舍 —— D42 之后只在探针不可用的降级路径上还生效】
+  ;; EINVAL 不自证,理论上别的写失败也可能映射到它。收下的理由是代价与风险不对称:
+  ;; 不收 ⇒ `chandler make -P | more` 在 Windows 上**必然**假报错;收下 ⇒ 风险是
+  ;; 假想的第二种映射到 EINVAL 的真实写失败。【MUST】只在 Windows 上放松。
+  (define pipe-gone-phrases/windows-only
+    '("invalid argument"))
+
+  ;; 大小写不敏感:Chez 给的是 "Broken pipe"(大写 B),而 report-error 那条
+  ;; `~(~a~)` 会折叠成小写 —— 同一件事在两处长得不一样,比较前统一降格。
+  (define (pipe-phrase-match? s)
+    (let ([low (string-downcase s)])
+      (define (any-of phrases)
+        (exists (lambda (ph) (string-contains? low ph)) phrases))
+      (or (any-of pipe-gone-phrases)
+          (and (windows-shell?) (any-of pipe-gone-phrases/windows-only)))))
+
+  (define (phrase-says-pipe-gone? e)
+    (and (irritants-condition? e)
+         (exists (lambda (x) (and (string? x) (pipe-phrase-match? x)))
+                 (condition-irritants e))))
+
+  ;; 出错的到底是不是 chandler 自己的 stdout。#t / #f / 'unknown
+  ;;
+  ;; 这一步是相对「只比文案」的实质收紧:老判别没有它,recipe 自己开的文件 port
+  ;; 写失败时若文案撞上表里的句子(Windows 上就是那句通用的 invalid argument),
+  ;; 一样会被静默。本机实测:stdout 给 fd=1 name="stdout",另开的文件 port 给别的 fd。
+  (define (stdout-error? e)
+    (if (not (i/o-port-error? e))
+        'unknown
+        (let* ([p  (i/o-error-port e)]
+               [fd (ignore-errors (port-file-descriptor p))])
+          (cond
+            [(eqv? fd 1) #t]
+            [(equal? (ignore-errors (port-name p)) "stdout") #t]
+            [fd #f]                        ; 确定是别的 fd ⇒ 不静默
+            [else 'unknown]))))            ; 两样都问不出 ⇒ 退回文案表
+
+  (define (broken-pipe? e)
+    (and (i/o-write-error? e)
+         (let ([whose (stdout-error? e)])
+           (cond
+             [(eq? whose #f) #f]                     ; 确定不是 stdout ⇒ 不静默
+             [(eq? whose 'unknown)                   ; 认不出人 ⇒ 老路
+              (phrase-says-pipe-gone? e)]
+             [else
+              (let ([ans (stdout-pipe-gone?)])       ; 问 OS
+                (if (eq? ans 'unknown)               ; 这台机器问不了 ⇒ 老路
+                    (phrase-says-pipe-gone? e)
+                    ans))]))))
+
   ;; main:argv(不含程序名)→ 退出码
   (define (main argv)
     (call/cc
       (lambda (return)
         (with-exception-handler
-          (lambda (e) (return (report-error e)))
+          (lambda (e)
+            (if (broken-pipe? e)
+                (begin
+                  ;; 【MUST】缓冲里剩下的内容必须丢掉:留着的话 main.sps 的
+                  ;; `(exit …)` 在 flush 时会**再抛一次**,那次在本 handler 之外,
+                  ;; 退出码又变回非零 —— 静默等于没做。
+                  (ignore-errors (clear-output-port (current-output-port)))
+                  (return 0))
+                (return (report-error e))))
           (lambda ()
             ;; `chandler make …` 自带一套 argv 语法(短旗标带值:-f path / -j N),
             ;; 与 chandler 的解析器不兼容(它把未知短旗标当布尔,-j 4 会拆成

@@ -29,7 +29,9 @@
            windows-shell? sh-quote cmd-quote cd-prefix
            ;; 全仓唯一的 system 出口 + `cmd /c` 外层引号(D68)。
            ;; cmd-outer-quote 是纯函数,导出供往返验证(designs/14 §3.4)。
-           shell-system shell-command-line cmd-outer-quote)
+           shell-system shell-command-line cmd-outer-quote
+           ;; §FFI:全仓唯一碰 FFI 的地方(D42/bake D74)。cli 判 broken pipe 时用。
+           stdout-pipe-gone?)
   (import (chezscheme)
           (chandler util)
           (chandler layout)      ; windows-mt?(layout 不依赖 proc,无环)
@@ -304,4 +306,81 @@
     (if (windows-shell?)
         p
         (let ([r (run-capture "sh" (list "-c" (string-append "readlink -f " (sh-quote p))))])
-          (if (= 0 (proc-result-code r)) (string-trim (proc-result-out r)) p)))))
+          (if (= 0 (proc-result-code r)) (string-trim (proc-result-out r)) p))))
+
+  ;; ══════════════════════════════════════════════════════════════════
+  ;; §FFI —— 唯一一件必须问操作系统的事:stdout 的对端还在吗(D42)
+  ;;
+  ;; 【MUST】全仓**只有这一节**碰 FFI。放在 proc 而不是 util,是因为 designs/14 §5
+  ;; 已把 proc 定为平台分派层,而 util 是纯字符串/列表助手。
+  ;;
+  ;; 为什么需要它:`chandler make -P | head` 这类用法里,下游读够就退出,chandler
+  ;; 的 stdout 写失败 ⇒ 冒出一行假报错 + 退出码 65。根因在下面一层:Chez 把
+  ;; SIGPIPE 设成 SIG_IGN(于是 EPIPE 变成异常而不是静默终止),而 fd port 又把
+  ;; errno 丢了、只留 strerror 文本 —— 判别若只比文案,POSIX 上分不开 EPIPE 与
+  ;; ENOSPC,Windows 上更是连管道措辞都看不到(MSVCRT 的 _dosmaperr 没收录
+  ;; ERROR_BROKEN_PIPE 109,落到默认 EINVAL ⇒ "invalid argument")。
+  ;; 所以判别改为**问 OS**,文案表降级为兜底。来源:bake D74(两平台实测)。
+  ;;
+  ;; 两平台问法不同,**不是偷懒,是 Windows 没有对应物**:
+  ;;   POSIX  : poll(fd 1, POLLOUT),revents 含 POLLERR/POLLHUP ⇒ 对端没了。精确。
+  ;;            bake 实测(ta6le):管道断 12(POLLOUT|POLLERR)、普通文件 4、
+  ;;            控制台 4、**/dev/full 4 且确实抛 ENOSPC** —— 末一条是"真实写失败
+  ;;            不得被当成断管道"的实测保证,且不受 locale 影响。
+  ;;   Windows: GetFileType(GetStdHandle(-11)) == FILE_TYPE_PIPE(3)。只回答
+  ;;            "是不是管道" —— Windows 没有可用于管道的 poll(WSAPoll 只吃 socket,
+  ;;            PeekNamedPipe 只能用在读端,而我们手里是写端)。够用的理由:
+  ;;            管道上的写不可能是 ENOSPC。bake 实测(a6nt):管道 3、普通文件 1、
+  ;;            控制台 2 —— ① 与 ②③ 分得开,判据成立。
+  ;;
+  ;; 【MUST】建不起来(静态链接、pb 后端、沙箱挡 dlopen)时【MUST】降级为
+  ;; 'unknown,调用方退回文案表 —— 降级后的行为 = 引入 FFI 之前的行为,不得更差。
+  ;; 惰性:首次用到才建,建一次记住(**失败也记住**,不反复 dlopen)。正常路径上
+  ;; 一次 dlopen/dlsym 都不做。
+  ;; ══════════════════════════════════════════════════════════════════
+
+  ;; 记忆化:build 抛异常 ⇒ 记住 #f(= 这台机器上不可用)。
+  (define (ffi-once build)
+    (let ([cache 'not-built])
+      (lambda ()
+        (when (eq? cache 'not-built)
+          (set! cache (guard (e [#t #f]) (build))))
+        cache)))
+
+  ;; 【MUST】这里问的是**真实平台**,不是 windows-shell? 那个 parameter ——
+  ;; 后者被平台参数化测试驱动来验另一侧的**串生成**,拿它决定 dlopen 谁,
+  ;; 会在 Linux 上去开 kernel32.dll。同 harness 里 windows-host? 的那条理由。
+  (define (real-windows?) (windows-mt? (current-machine-type)))
+
+  (define pipe-probe
+    (ffi-once
+      (lambda ()
+        (if (real-windows?)
+            (begin
+              (load-shared-object "kernel32.dll")
+              (let ([get-std-handle (foreign-procedure "GetStdHandle" (int) void*)]
+                    [get-file-type  (foreign-procedure "GetFileType" (void*) unsigned-32)])
+                ;; 【已知限制】x64 只有一种调用约定,故用默认的 __cdecl。32 位 i3nt
+                ;; 要 __stdcall,而那个词在 POSIX 的 Chez 上**展开期就报错**,写不进
+                ;; 这个两平台共用的文件 —— 真要支持 i3nt,得把这段拆进平台分文件。
+                (lambda () (= 3 (get-file-type (get-std-handle -11))))))
+            (begin
+              (load-shared-object #f)   ; 进程内已有的符号(含 libc),不写死 so 名
+              (let ([c-poll (foreign-procedure "poll" (void* unsigned-long int) int)])
+                (lambda ()
+                  ;; struct pollfd { int fd; short events; short revents; } —— 8 字节。
+                  ;; 布局是 POSIX 定死的,不像 struct stat 那样按 libc/架构漂,
+                  ;; 所以这里敢手摆内存;换成 fstat 判 S_ISFIFO 就不敢了。
+                  (let ([pfd (foreign-alloc 8)])
+                    (foreign-set! 'int   pfd 0 1)   ; fd = 1 (stdout)
+                    (foreign-set! 'short pfd 4 4)   ; events = POLLOUT
+                    (foreign-set! 'short pfd 6 0)   ; revents 清零
+                    (c-poll pfd 1 0)                ; timeout 0,不阻塞
+                    (let ([revents (foreign-ref 'short pfd 6)])
+                      (foreign-free pfd)
+                      ;; POLLERR=8 / POLLHUP=16,对端没了两者必有其一
+                      (not (zero? (bitwise-and revents 24))))))))))))
+
+  ;; #t = 对端没了 / #f = 还在 / 'unknown = 这台机器上问不了(调用方自行退路)
+  (define (stdout-pipe-gone?)
+    (let ([p (pipe-probe)]) (if p (p) 'unknown))))
