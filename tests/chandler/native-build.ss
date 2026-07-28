@@ -13,6 +13,7 @@
           (tests chandler harness)
           (tests chandler fixtures)
           (chandler base)
+          (chandler proc)            ; which(替掉 `command -v`)
           (chandler task-engine)
           (chandler recipe)
           (chandler import-graph)
@@ -22,9 +23,20 @@
   ;; with-proj / silently / when-compiler 来自 (tests chandler fixtures)。
 
   ;; 环境门:真编 C + 编 Scheme 库都具备才跑端到端用例。
-  (define (cc-available?) (= 0 (run/code "command -v cc >/dev/null 2>&1")))
+  ;;
+  ;; C9:探针从 `command -v cc …`(POSIX shell 内建 + `/dev/null`)换成 proc 的
+  ;; `which` —— 它在 Windows 上走 `where.exe`。
+  ;;
+  ;; 另外这一组还要 POSIX,但**理由与 script 后端无关**(D39 之后后端两平台都能跑,
+  ;; 见 fixtures 的 make-native-lib):这里的 build.sh 里写的是
+  ;; `cc -shared -fPIC`,那是 gcc/clang 的旗标,MSVC 不认。要在 Windows 上跑,
+  ;; 得连**这个 C 工程本身**一起写第二份(cl.exe 的 `/LD`),那是另一件事 ——
+  ;; 本组用例验的是 FFI 端到端,不是可移植的 C 构建脚本怎么写。
+  (define (cc-available?) (and (which "cc") #t))
   (define (needs-toolchain proc)
-    (when (and (compiler-available?) (cc-available?)) (proc)))
+    (when-posix
+      (lambda ()
+        (when (and (compiler-available?) (cc-available?)) (proc)))))
 
   ;; 一个带 native 的最小工程:C 源 + build.sh + 用 native-foreign-procedure 的库。
   (define native-files
@@ -160,6 +172,91 @@
               (assert-false (string=? base (native-fingerprint srcs '(script "b.sh") #f "other")))
               (assert-false (string=? base (native-fingerprint srcs 'make #f "greet")))
               (assert-string= base (native-fingerprint srcs '(script "b.sh") #f "greet")))))))
+
+    ;; ══════════════════════════════════════════════════════════════
+    ;; script 后端的平台派发(纯字符串;`windows-shell?` 参数化,两侧都在
+    ;; Linux 上逐字断言 —— 不这么做 cmd 那半边在 CI 里等于从没被执行过)
+    ;; ══════════════════════════════════════════════════════════════
+
+    ;; 按扩展名挑本平台能跑的那个。POSIX 侧**刻意不要求 `.sh`** ——
+    ;; 现存的包写 `(script "build")` / `"mk.bash"` 都合法,收紧等于判死它们。
+    (script-picked-by-platform
+      (let ([both '("build.sh" "build.cmd")])
+        (assert-string= "build.sh"  (parameterize ([windows-shell? #f]) (pick-script both)))
+        (assert-string= "build.cmd" (parameterize ([windows-shell? #t]) (pick-script both))))
+      ;; 声明顺序不决定结果:cmd 写在前面,POSIX 照样挑 sh 那个
+      (let ([rev '("build.cmd" "build.sh")])
+        (assert-string= "build.sh"  (parameterize ([windows-shell? #f]) (pick-script rev)))
+        (assert-string= "build.cmd" (parameterize ([windows-shell? #t]) (pick-script rev))))
+      ;; 大小写不敏感(NTFS 上 BUILD.CMD 与 build.cmd 是同一个文件)
+      (assert-string= "B.CMD" (parameterize ([windows-shell? #t]) (pick-script '("B.CMD"))))
+      ;; 无扩展名 / 别的扩展名:POSIX 交给 sh,Windows 跑不了
+      (assert-string= "build" (parameterize ([windows-shell? #f]) (pick-script '("build"))))
+      (assert-string= "mk.bash" (parameterize ([windows-shell? #f]) (pick-script '("mk.bash"))))
+      (assert-false (parameterize ([windows-shell? #t]) (pick-script '("build" "mk.bash")))))
+
+    ;; 挑不出来 → **config 错**,而不是把 `sh build.sh` 扔给 cmd 让它报
+    ;; 「'sh' 不是内部或外部命令」—— 那句话既不提 native-task 也不提该怎么办。
+    ;;
+    ;; **断言落在错误内容与 exit-code 上,不能只是 assert-raises**:后端跑完还有
+    ;; 一道「产物在不在落点」的核验,那条也会抛。光看「抛没抛」的话,把本检查
+    ;; 整个删掉测试照样绿 —— 验过了,它就是这么绿的。
+    (script-backend-rejects-unrunnable-declaration
+      (with-proj '(("native/greet/build.sh" . ": > \"$NATIVE_OUT/greet.so\"\n"))
+        (lambda (d)
+          (let ([sink (open-output-string)])
+            (guard (e (#t (void)))
+              (parameterize ([current-error-port sink] [windows-shell? #t])
+                (run-native-backend 'greet "native/greet" '(script "build.sh") #f
+                                    "greet" "_build/x" "_build/.cmake/x" "_build/x/greet.so")))
+            (let ([msg (get-output-string sink)])
+              (assert-true (string-contains? msg "no build script runnable on this platform"))
+              (assert-true (string-contains? msg "build.sh"))
+              ;; 可操作:说清 Windows 认什么、该怎么补
+              (assert-true (string-contains? msg ".cmd"))
+              ;; 没有退化成「跑了 sh 然后抱怨产物不在」
+              (assert-false (string-contains? msg "did not produce")))))))
+
+    ;; 反过来:带上 .cmd 之后,同一份声明在 Windows 侧就选得出来了
+    (script-backend-accepts-declaration-with-cmd
+      (assert-string= "build.cmd"
+                      (parameterize ([windows-shell? #t])
+                        (pick-script '("build.sh" "build.cmd")))))
+
+    ;; 生成的命令串:两侧逐字。cmd 侧三处差异一次看清 ——
+    ;; `cd /d`(漏了会静默不切盘)、`set "K=v" &&`(cmd 完全不认 `K=v cmd`)、
+    ;; `call`(不带它调另一个批处理时控制权不返回,errorlevel 也不回传)。
+    (script-command-dispatches-on-platform
+      (with-proj '(("native/greet/build.sh" . ""))
+        (lambda (d)
+          (let ([posix (parameterize ([windows-shell? #f])
+                         (script-command "native/greet" "build.sh" "_build/out" #f))]
+                [win   (parameterize ([windows-shell? #t])
+                         (script-command "native/greet" "build.cmd" "_build/out" #f))])
+            (assert-true (string-contains? posix "cd 'native/greet' && "))
+            (assert-true (string-contains? posix "NATIVE_OUT='"))
+            (assert-true (string-contains? posix "sh 'build.sh'"))
+            (assert-false (string-contains? posix "call "))
+
+            (assert-true (string-contains? win "cd /d \"native/greet\" && "))
+            (assert-true (string-contains? win "set \"NATIVE_OUT="))
+            (assert-true (string-contains? win "call \"build.cmd\""))
+            ;; CHEZ_INCLUDE 为 #f 时整条跳过(两侧同)
+            (assert-false (string-contains? posix "CHEZ_INCLUDE"))
+            (assert-false (string-contains? win "CHEZ_INCLUDE"))))))
+
+    ;; chez-api 时 CHEZ_INCLUDE 才出现,且经各自的引用规则
+    (script-command-includes-chez-include-when-given
+      (with-proj '(("native/greet/build.sh" . ""))
+        (lambda (d)
+          (assert-true (string-contains?
+                         (parameterize ([windows-shell? #t])
+                           (script-command "native/greet" "b.cmd" "_build/out" "C:\\chez\\inc"))
+                         "set \"CHEZ_INCLUDE=C:\\chez\\inc\""))
+          (assert-true (string-contains?
+                         (parameterize ([windows-shell? #f])
+                           (script-command "native/greet" "b.sh" "_build/out" "/usr/inc"))
+                         "CHEZ_INCLUDE='/usr/inc'")))))
 
     (chez-include-dir-validates
       ;; CHEZ_INCLUDE_DIR 显式覆盖仍要校验 scheme.h 在不在 —— 缺了就**立刻**报,

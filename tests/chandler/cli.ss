@@ -20,23 +20,51 @@
           (chandler cli commands)   ; app-launcher-sh:启动器端到端实跑
           (chandler cli main))
 
-  ;; 渲染 sh 启动器并**实跑**它,返回 (values exit-code stdout)。
+  ;; 渲染**本平台**的启动器并实跑它,返回 (values exit-code stdout)。
   ;;
   ;; runtime 用一个 stub 脚本(把收到的参数原样打出),而不是真的 skiff/scheme ——
   ;; 本测试要证明的是「shim 把 sidecar 读对了、runner 路径拼对了」,牵进真运行时
   ;; 只会让断言变模糊,还得赌 PATH 上有什么。
+  ;;
+  ;; C9:两族启动器**共用下面 5 条用例**,而不是把 Windows 侧跳过 —— 模板对拍
+  ;; (launcher-parity)证明不了 `set /p ACTIVE=<file` 真能读出版本号,正如它
+  ;; 也证明不了 `IFS= read -r`。差异只在这个函数里:
+  ;;   • 启动器文件名带 `.cmd`,内容按 CRLF 写
+  ;;   • stub 是批处理;`.cmd` 里不带 `call` 调另一个 `.cmd` 时控制权不返回,
+  ;;     于是启动器进程直接以 stub 的退出码结束(happy path 是 0)—— 断言不受
+  ;;     影响,而**错误分支根本不会走到 RT**,`exit /b 70` 照常生效
   (define (run-app-launcher libdir name)
-    (let* ([bin (mktmp)]
-           [stub (join-paths bin "fakescheme")]
-           [launcher (join-paths bin name)])
-      (write-text stub "#!/bin/sh\necho \"$@\"\n")
-      (run-status "chmod" (list "+x" stub))
-      (write-text launcher (app-launcher-sh name libdir))
-      (run-status "chmod" (list "+x" launcher))
-      (let ([r (run-capture launcher '()
-                            (list (cons 'env (list (cons "CHANDLER_RUNTIME" "chez")
-                                                   (cons "CHANDLER_SCHEME" stub)))))])
-        (values (proc-result-code r) (proc-result-out r)))))
+    (if (windows-host?)
+        (let* ([bin (mktmp)]
+               [stub (join-paths bin "fakescheme.cmd")]
+               [launcher (join-paths bin (string-append name ".cmd"))])
+          (write-text-crlf stub "@echo off\r\necho %*\r\n")
+          (write-text-crlf launcher (app-launcher-cmd name libdir))
+          (launch launcher stub))
+        (let* ([bin (mktmp)]
+               [stub (join-paths bin "fakescheme")]
+               [launcher (join-paths bin name)])
+          (write-text stub "#!/bin/sh\necho \"$@\"\n")
+          (make-executable! stub)
+          (write-text launcher (app-launcher-sh name libdir))
+          (make-executable! launcher)
+          (launch launcher stub))))
+
+  ;; 启动器打出的 runner 路径是否指向这个版本。**比较前把分隔符归一** ——
+  ;; cmd 侧模板拼的是 `\`,join-paths 拼的是 `/`,不归一就等于在断言排版。
+  (define (saw-runner? out libdir name version)
+    (substr? (normalize-seps out)
+             (normalize-seps (join-paths libdir name version ".chandler" "run.sps"))))
+
+  (define (exec-runtime)
+    (or (test-runtime)
+        (error 'exec-runtime "no Scheme runtime found on PATH; exec e2e cannot run")))
+
+  (define (launch launcher stub)
+    (let ([r (run-capture launcher '()
+                          (list (cons 'env (list (cons "CHANDLER_RUNTIME" "chez")
+                                                 (cons "CHANDLER_SCHEME" stub)))))])
+      (values (proc-result-code r) (proc-result-out r))))
 
   ;; 装一个 app 到 libdir 并补上 runner,返回 libdir
   (define (install-app-with-runner! libdir name version)
@@ -388,13 +416,19 @@
           (assert-equal 65 (main (list "-C" app "verify"))))))
 
     ;; ── exec:设 CHEZSCHEMELIBDIRS(+ .env)后透传命令;退出码 = 子进程退出码 ──
-    (exec-passthrough-echo
-      (let ([app (mktmp)])
-        (assert-equal 0 (main (list "-C" app "exec" "--" "echo" "hello")))))
+    ;; 被透传的命令用**当前 Scheme 运行时 + 一个临时脚本**,不用 `echo` / `sh -c`
+    ;; (C9:两者在 Windows 上都不存在;`echo` 还是 cmd 内建,连引号都不脱)。
+    (exec-passthrough
+      (let ([app (mktmp)]
+            [s (path-join* (mktmp) "hello.ss")])
+        (write-text s "(display \"hello\")(newline)\n")
+        (assert-equal 0 (main (list "-C" app "exec" "--" (exec-runtime) "-q" "--script" s)))))
 
     (exec-propagates-exit-code
-      (let ([app (mktmp)])
-        (assert-equal 3 (main (list "-C" app "exec" "--" "sh" "-c" "exit 3")))))
+      (let ([app (mktmp)]
+            [s (path-join* (mktmp) "bad.ss")])
+        (write-text s "(exit 3)\n")
+        (assert-equal 3 (main (list "-C" app "exec" "--" (exec-runtime) "-q" "--script" s)))))
 
     (exec-no-command-is-usage-error
       (let ([app (mktmp)])
@@ -458,7 +492,7 @@
         (let-values ([(rc out) (run-app-launcher libdir "myapp")])
           (assert-equal 0 rc)
           ;; stub 打出 shim 传给 runtime 的参数 —— runner 路径必须带对版本
-          (assert-true (substr? out (join-paths libdir "myapp" "1.0.0" ".chandler" "run.sps")))
+          (assert-true (saw-runner? out libdir "myapp" "1.0.0"))
           (assert-true (substr? out "--program")))))
 
     ;; switch 后**不重写 launcher**(D17 稳定 shim),但下一次启动就该换版本
@@ -472,8 +506,8 @@
         (switch-active libdir "myapp" "2.0.0")
         (let-values ([(rc out) (run-app-launcher libdir "myapp")])
           (assert-equal 0 rc)
-          (assert-true (substr? out (join-paths libdir "myapp" "2.0.0" ".chandler" "run.sps")))
-          (assert-false (substr? out (join-paths libdir "myapp" "1.0.0" ".chandler" "run.sps"))))))
+          (assert-true (saw-runner? out libdir "myapp" "2.0.0"))
+          (assert-false (saw-runner? out libdir "myapp" "1.0.0")))))
 
     ;; sidecar 缺失 → 70(而不是拿到空版本号去拼一个不存在的 runner 路径)
     (launcher-without-sidecar-exits-70
@@ -499,7 +533,7 @@
         (write-text (active-file libdir "myapp") "1.0.0")
         (let-values ([(rc out) (run-app-launcher libdir "myapp")])
           (assert-equal 0 rc)
-          (assert-true (substr? out (join-paths libdir "myapp" "1.0.0" ".chandler" "run.sps"))))))
+          (assert-true (saw-runner? out libdir "myapp" "1.0.0")))))
 
     ;; ── uninstall 清掉三种形态的 launcher(含 D34 之前的 .ps1)──
     ;; 旧安装留下的 `.ps1` 若不带走,PATH 上就躺着一个指向已删包的僵尸启动器 ——

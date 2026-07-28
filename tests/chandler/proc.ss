@@ -1,9 +1,13 @@
 #!chezscheme
 ;;; tests/chandler/proc.ss --- (chandler proc) 测试
 ;;;
-;;; 两部分:
-;;;   ① POSIX 端到端 —— 真起子进程,验证引用后的串穿过 /bin/sh 原样抵达。
-;;;   ② **平台参数化**的串生成 —— `windows-shell?` 是个 parameter,于是 Windows
+;;; 三部分:
+;;;   ① **跨平台**端到端 —— 真起子进程,验证引用后的参数原样进了 argv。探针程序
+;;;      是 Scheme 运行时本身(harness 的 run-probe):`sh` / `echo` / `pwd` /
+;;;      `true` 在 Windows 上都不存在,而批处理看不见真正的 argv(C9)。
+;;;   ② POSIX 专属端到端 —— 那些**只**在 /bin/sh 语义下才有意义的断言
+;;;      (单引号里 `$` `` ` `` `"` 都不展开)。
+;;;   ③ **平台参数化**的串生成 —— `windows-shell?` 是个 parameter,于是 Windows
 ;;;      那半边(cmd 引用 / `set "K=v" &&` / `cd /d`)在 Linux 上就能逐字断言。
 ;;;      不这么做,那半边代码在 CI 里等于从来没被执行过(D33,designs/14 §5)。
 
@@ -11,7 +15,20 @@
   (export suite)
   (import (chezscheme)
           (tests chandler harness)
+          (chandler fs)               ; path-join* / write-text / normalize-seps / base-name
+          (chandler util)             ; string-contains?
           (chandler proc))
+
+  ;; 探针跑不起来(PATH 上一个 Scheme 运行时都找不到)时**当场失败**,
+  ;; 而不是让整组端到端用例静默变成空转 —— 那正是 C9 要消灭的东西。
+  (define (probe args opts)
+    (or (run-probe args opts)
+        (error 'probe "no Scheme runtime found on PATH; the e2e probe cannot run")))
+
+  (define (probe-out r) (strip-cr (proc-result-out r)))
+
+  (define (rt) (or (test-runtime)
+                   (error 'rt "no Scheme runtime found on PATH; the e2e probe cannot run")))
 
   (define-suite suite
     (quote-plain
@@ -20,11 +37,21 @@
     (quote-with-quote
       (assert-string= "'a'\\''b'" (shell-quote "a'b")))
 
-    (quote-metachars
-      ;; 空格与 $ 被引用后原样,不展开
-      (let ([r (run-capture "echo" (list "a b" "$HOME"))])
+    ;; ══════════════════════════════════════════════════════════════
+    ;; ① 跨平台端到端(探针 = Scheme 运行时,两平台都跑)
+    ;; ══════════════════════════════════════════════════════════════
+
+    ;; 引用后的参数**逐个**原样进 argv:空格不拆词、shell 元字符不展开。
+    ;; `"` 不在此列 —— cmd 侧无法安全传递,shell-quote 对它硬错(见下面
+    ;; quote-rejects-embedded-quote-on-windows),故它只出现在 POSIX 专属用例里。
+    (args-arrive-verbatim
+      (let* ([args (list "a b" "$HOME" "`id`" "x&y" "50%" "a\\b\\")]
+             [want (apply string-append
+                          (map (lambda (a) (string-append "arg[" a "]\n")) args))]
+             [r (probe args '())])
         (assert-equal 0 (proc-result-code r))
-        (assert-string= "a b $HOME\n" (proc-result-out r))))
+        ;; 探针先逐行打 argv,再打 cwd/env —— 故比较前缀
+        (assert-string= want (substring (probe-out r) 0 (string-length want)))))
 
     (env-prefix-quotes-and-skips-false
       ;; 值经 shell-quote,故含空格/元字符的值不会被 sh 拆开或展开;
@@ -33,43 +60,93 @@
       (assert-string= "A='$HOME' " (env-prefix '(("A" . "$HOME"))))
       (assert-string= "B='2' " (env-prefix '(("A" . #f) ("B" . "2")))))
 
-    (env-prefix-round-trips-through-sh
-      ;; 端到端:含空格与 $ 的值必须原样抵达子进程,不被 /bin/sh 展开
-      (let ([r (run-capture "sh" '("-c" "printf %s \"$V\"")
-                            '((env . (("V" . "a b $HOME `id` \"q\"")))))])
+    ;; 环境注入端到端:含空格与元字符的值原样抵达子进程(POSIX 的 `K=v cmd`
+    ;; 前缀与 Windows 的 `set "K=v" &&` 各走各的分支,断言同一条)
+    (env-option
+      (let ([r (probe '() '((env . (("CHANDLER_TEST_VAR" . "a b $HOME `id` 50%")))))])
         (assert-equal 0 (proc-result-code r))
-        (assert-string= "a b $HOME `id` \"q\"" (proc-result-out r))))
+        (assert-true (string-contains? (probe-out r) "env[a b $HOME `id` 50%]"))))
 
-    (capture-stdout
-      (let ([r (run-capture "echo" '("hello"))])
+    ;; cwd 端到端:进程真的在指定目录里跑起来(Windows 上靠 `cd /d`,
+    ;; 漏了 `/d` 会静默不切过去 —— 那正是这条要挡的)
+    (cwd-option
+      (let* ([d (mktmp)]
+             [r (probe '() (list (cons 'cwd d)))])
         (assert-equal 0 (proc-result-code r))
-        (assert-string= "hello\n" (proc-result-out r))))
+        ;; 比较前归一分隔符:Windows 上 current-directory 返回 `\` 形
+        (assert-true (string-contains? (normalize-seps (probe-out r))
+                                       (normalize-seps (base-name d))))))
 
+    ;; stderr 与退出码分别捕获(重定向 `2>` 两侧写法一致,但经过的 shell 不同)
     (capture-stderr-and-code
-      (let ([r (run-capture "sh" '("-c" "echo oops 1>&2; exit 3"))])
+      (let ([r (probe '() '((env . (("CHANDLER_TEST_CODE" . "3")))))])
         (assert-equal 3 (proc-result-code r))
-        (assert-string= "oops\n" (proc-result-err r))))
+        (assert-string= "err\n" (strip-cr (proc-result-err r)))))
 
+    ;; run-check / run-status 的成败语义(先前借 `true` / `false` / `echo`,
+    ;; Windows 上三个都没有)
     (run-check-ok
-      (assert-string= "ok\n" (run-check "echo" '("ok"))))
+      (let ([script (path-join* (mktmp) "ok.ss")])
+        (write-text script "(display \"ok\")(newline)\n")
+        (assert-string= "ok\n" (strip-cr (run-check (rt) (list "-q" "--script" script))))))
 
     (run-check-fails
-      (assert-raises (lambda () (run-check "false" '()))))
+      (let ([script (path-join* (mktmp) "bad.ss")])
+        (write-text script "(exit 1)\n")
+        (assert-raises (lambda () (run-check (rt) (list "-q" "--script" script))))))
 
     (run-status-bool
-      (assert-equal 0 (run-status "true" '()))
-      (assert-equal 1 (run-status "false" '())))
+      (let ([ok (path-join* (mktmp) "ok.ss")]
+            [bad (path-join* (mktmp) "bad.ss")])
+        (write-text ok "(exit 0)\n")
+        (write-text bad "(exit 1)\n")
+        (assert-equal 0 (run-status (rt) (list "-q" "--script" ok)))
+        (assert-equal 1 (run-status (rt) (list "-q" "--script" bad)))))
 
-    (cwd-option
-      (let ([r (run-capture "pwd" '() '((cwd . "/tmp")))])
-        (assert-equal 0 (proc-result-code r))
-        ;; /tmp 或其 realpath(如 macOS /private/tmp);至少非空且以换行结尾
-        (assert-true (> (string-length (proc-result-out r)) 1))))
+    ;; stdin 重定向真的接上了:给一个已知内容的文件,子进程必须读到它。
+    ;; 断言用**文件**而不是空设备 —— 空设备那条若坏掉,子进程会挂住等输入
+    ;; 而不是给出错答案,那样测试就成了「挂起」而非「变红」。空设备名本身
+    ;; (`/dev/null` / `NUL`)由 fs 的 null-device-is-platform-native 守。
+    (stdin-redirects-from-file
+      (let* ([d (mktmp)]
+             [script (path-join* d "readin.ss")]
+             [input (path-join* d "in.txt")])
+        (write-text script "(display (get-line (current-input-port)))\n")
+        (write-text input "from-file\n")
+        (let ([r (run-capture (rt) (list "-q" "--script" script) (list (cons 'stdin input)))])
+          (assert-equal 0 (proc-result-code r))
+          (assert-string= "from-file" (strip-cr (proc-result-out r))))))
 
-    (env-option
-      (let ([r (run-capture "sh" '("-c" "echo $CHANDLER_TEST_VAR")
-                            '((env . (("CHANDLER_TEST_VAR" . "xyz")))))])
-        (assert-string= "xyz\n" (proc-result-out r))))
+    ;; `'null` 解析成本平台的空设备(而不是被当成一个叫 "null" 的文件名)
+    (stdin-null-uses-platform-device
+      (let* ([d (mktmp)]
+             [script (path-join* d "readin.ss")])
+        (write-text script "(display (if (eof-object? (read-char)) \"eof\" \"data\"))\n")
+        (let ([r (run-capture (rt) (list "-q" "--script" script) '((stdin . null)))])
+          (assert-equal 0 (proc-result-code r))
+          (assert-string= "eof" (strip-cr (proc-result-out r)))
+          ;; 没有在 cwd 里造出一个叫 "null" 的文件(拼错设备名的典型症状)
+          (assert-false (file-exists? "null")))))
+
+    ;; ══════════════════════════════════════════════════════════════
+    ;; ② POSIX 专属端到端(断言的是 /bin/sh 的语义,换个 shell 就没意义)
+    ;; ══════════════════════════════════════════════════════════════
+
+    (env-prefix-round-trips-through-sh
+      ;; 单引号内 sh 不做任何解释 —— `$` `` ` `` `"` 全部字面通过。
+      ;; 字面 `"` 只有这一侧测得了:cmd 侧根本不接受(shell-quote 硬错)。
+      (when-posix (lambda ()
+        (let ([r (run-capture "sh" '("-c" "printf %s \"$V\"")
+                              '((env . (("V" . "a b $HOME `id` \"q\"")))))])
+          (assert-equal 0 (proc-result-code r))
+          (assert-string= "a b $HOME `id` \"q\"" (proc-result-out r))))))
+
+    (quote-metachars-through-sh
+      ;; 空格与 $ 经 sh-quote 后原样,不被 /bin/sh 拆词或展开
+      (when-posix (lambda ()
+        (let ([r (run-capture "echo" (list "a b" "$HOME"))])
+          (assert-equal 0 (proc-result-code r))
+          (assert-string= "a b $HOME\n" (proc-result-out r))))))
 
     ;; ══════════════════════════════════════════════════════════════
     ;; Windows 侧(平台参数化;不起子进程,逐字断言生成的命令串)

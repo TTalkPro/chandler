@@ -5,16 +5,12 @@
   (export suite)
   (import (chezscheme)
           (tests chandler harness)
-          (chandler proc)
           (chandler fs))
 
-  ;; 登记进 harness,由 run-suites 逐用例清(不用 (tests chandler fixtures) 的 mktmp:
-  ;; fs 是最底层,fixtures 依赖它,引入会绕成环。这里直接登记即可)。
-  (define (tmp)
-    (register-test-tmp! (string-trim* (proc-result-out (run-capture "mktemp" '("-d"))))))
-  (define (string-trim* s)
-    (let ([n (string-length s)])
-      (if (and (> n 0) (char=? #\newline (string-ref s (- n 1)))) (substring s 0 (- n 1)) s)))
+  ;; harness 的 mktmp(fs 的 make-temp-dir + 登记,run-suites 逐用例清)。
+  ;; 先前是 `mktemp -d` 子进程 —— Windows 上没有那个程序;顺带 (chandler proc)
+  ;; 的 import 也不再需要了(fs 是最底层,不该为造个目录去经过子进程层)。
+  (define (tmp) (mktmp))
 
 
   ;; 读原始字节 —— 断言必须落在**字节**上,不能落在读回的字符串上:
@@ -173,13 +169,19 @@
         (assert-false (file-directory? (string-append root "/ro")))))
 
     ;; 删不掉时**抛**,不再静默成功。用一个不可写的父目录制造真删不掉的情形。
+    ;;
+    ;; **POSIX 专属**(C9):制造手段是目录的 w 位,而 Windows 的 ACL 里没有这一位
+    ;; ——Chez 的 chmod 在那边只映射到「只读」属性,对目录内的删除不起作用,于是
+    ;; 这条在 Windows 上会因为「删成功了」而红。它守的是 rm-rf 的**抛/不抛**契约,
+    ;; 那条契约本身与平台无关,只是这个夹具造不出来。
     (rm-rf-raises-when-it-cannot-delete
-      (let ([root (tmp)])
-        (write-text (string-append root "/locked/a.txt") "x")
-        (chmod (string-append root "/locked") #o500)          ; r-x:不能删其中的项
-        (let ([raised (guard (e (#t #t)) (rm-rf (string-append root "/locked/a.txt")) #f)])
-          (chmod (string-append root "/locked") #o700)        ; 先还原,好让 harness 清得掉
-          (assert-true raised))))
+      (when-posix (lambda ()
+        (let ([root (tmp)])
+          (write-text (string-append root "/locked/a.txt") "x")
+          (chmod (string-append root "/locked") #o500)        ; r-x:不能删其中的项
+          (let ([raised (guard (e (#t #t)) (rm-rf (string-append root "/locked/a.txt")) #f)])
+            (chmod (string-append root "/locked") #o700)      ; 先还原,好让 harness 清得掉
+            (assert-true raised))))))
 
     ;; 幂等语义不变:目标不存在 = 成功,不抛
     (rm-rf-missing-is-still-silent
@@ -198,6 +200,36 @@
         (move-file a b)
         (assert-string= "new" (read-file-string b))
         (assert-false (file-exists? a))))
+
+    ;; ── C9 新增的两个平台原语 ──
+
+    ;; make-temp-dir:真建出来、每次不同、可写。先前测试拿 `mktemp -d` 起子进程,
+    ;; 那个程序在 Windows 上不存在,失败时还静默返回空串。
+    (make-temp-dir-creates-unique-writable-dirs
+      (let ([a (register-test-tmp! (make-temp-dir))]
+            [b (register-test-tmp! (make-temp-dir))])
+        (assert-true (file-directory? a))
+        (assert-true (file-directory? b))
+        (assert-false (string=? a b))
+        (write-text (string-append a "/x") "ok")
+        (assert-string= "ok" (read-file-string (string-append a "/x")))))
+
+    ;; 空设备名两平台不同 —— 拼错的话「把 stdin 接到空」会变成「新建一个叫
+    ;; /dev/null 的文件」,而且不报错。
+    (null-device-is-platform-native
+      (if (windows-host?)
+          (assert-string= "NUL" (null-device))
+          (assert-string= "/dev/null" (null-device))))
+
+    ;; make-executable!:POSIX 上置 x 位;Windows 上是**空操作**(那里没有执行位),
+    ;; 两边都不能抛 —— 先前是三处各自 `chmod +x` 子进程,Windows 上会往 stderr
+    ;; 喷「'chmod' 不是内部或外部命令」还把退出码丢掉。
+    (make-executable-sets-x-bit-on-posix
+      (let ([f (string-append (tmp) "/prog")])
+        (write-text f "#!/bin/sh\n")
+        (make-executable! f)                    ; 两平台都不该抛
+        (when-posix (lambda ()
+          (assert-equal #o100 (bitwise-and (get-mode f) #o100))))))
 
     ;; system-temp-dir 认三个变量,优先级 TMPDIR > TEMP > TMP
     (system-temp-dir-honors-windows-vars

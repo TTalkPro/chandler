@@ -8,9 +8,25 @@
 (library (tests chandler harness)
   (export define-suite run-suites
           assert-true assert-false assert-equal assert-raises assert-string=
-          register-test-tmp!)
+          register-test-tmp! mktmp
+          windows-host? when-posix when-windows
+          test-runtime run-probe strip-cr)
   (import (chezscheme)
-          (chandler fs))
+          (chandler fs)
+          (chandler layout)           ; windows-mt?
+          (chandler proc))            ; which / run-capture:端到端探针
+
+  ;; ── 平台门(C9)──
+  ;; 「这条用例验的是本平台的 shell / 文件系统语义」时用它跳过另一侧,而不是
+  ;; 放宽断言 —— 放宽等于不验。跳过的一侧应当有对侧的对应用例,或在注释里
+  ;; 写明为什么没有。
+  ;;
+  ;; 判据与 (chandler proc) 的 windows-shell? 同源(machine-type 以 nt 结尾),
+  ;; 但这里**不**用那个 parameter:它被平台参数化测试 parameterize 来驱动另一侧
+  ;; 分支,拿它当「我现在在哪」会在那些用例里读到假答案。
+  (define (windows-host?) (windows-mt? (current-machine-type)))
+  (define (when-posix proc)   (unless (windows-host?) (proc)))
+  (define (when-windows proc) (when   (windows-host?) (proc)))
 
   ;; 每个测试临时目录登记在此,run-suites 在**每条用例之后**统一清 —— 夹具的 mktmp
   ;; 从前谁造谁清、大多没清,一轮下来 /tmp 攒上万个目录直到 tmpfs 撑满,mktemp 返回
@@ -20,9 +36,61 @@
     (when (and (string? dir) (> (string-length dir) 0))
       (set! test-tmp-dirs (cons dir test-tmp-dirs)))
     dir)
+  ;; 新建一个临时目录并登记。**不再 shell-out `mktemp -d`** —— 那是 Windows 上
+  ;; 没有的程序,而 fs 的 make-temp-dir 是纯 Chez 且失败即抛(先前 mktemp 返回
+  ;; 空串时夹具会把内容写进 cwd = 仓库根,污染工作区;现在这条路径不存在了)。
+  (define (mktmp) (register-test-tmp! (make-temp-dir)))
+
   (define (clear-test-tmps!)
     (for-each (lambda (d) (guard (e (#t (void))) (rm-rf d))) test-tmp-dirs)
     (set! test-tmp-dirs '()))
+
+  ;; ══════════════════════════════════════════════════════════════════
+  ;; 端到端子进程探针(C9)
+  ;;
+  ;; 要验的是「引用后的参数**原样进了子进程的 argv**」。先前用 `sh -c` +
+  ;; `echo` / `pwd` / `true` / `false` —— 这些在 Windows 上一个都没有;
+  ;; 而换成批处理也不行:cmd 的 `%*` 给的是**原始命令行尾部**(我们加的引号
+  ;; 还在),`%1` 又会脱一层引号,两者都证明不了 argv 里到底是什么。
+  ;;
+  ;; 于是探针程序取 **Scheme 运行时本身**:它在两个平台上都按各自的规则
+  ;; (Windows 是 MSVCRT,正是 cmd-quote 对着写的那套)解析 argv,而且一定
+  ;; 存在 —— 测试套件就跑在它上面。
+  ;; ══════════════════════════════════════════════════════════════════
+
+  (define runtime-cache 'unset)
+  (define (test-runtime)
+    (when (eq? runtime-cache 'unset)
+      (set! runtime-cache
+        (let loop ([cs (list (getenv "CHANDLER_SCHEME") "scheme" "chez" "petite" "skiff")])
+          (cond
+            [(null? cs) #f]
+            [(and (car cs) (> (string-length (car cs)) 0) (which (car cs)))]
+            [else (loop (cdr cs))]))))
+    runtime-cache)
+
+  (define probe-source
+    (string-append
+      "(for-each (lambda (s) (display \"arg[\") (display s) (display \"]\") (newline))\n"
+      "          (command-line-arguments))\n"
+      "(display \"cwd[\") (display (current-directory)) (display \"]\") (newline)\n"
+      "(display \"env[\") (display (or (getenv \"CHANDLER_TEST_VAR\") \"\")) (display \"]\") (newline)\n"
+      "(display \"err\" (current-error-port)) (newline (current-error-port))\n"
+      "(exit (string->number (or (getenv \"CHANDLER_TEST_CODE\") \"0\")))\n"))
+
+  ;; 用当前运行时跑探针,args 原样透传。opts 同 run-capture((cwd . d) / (env . …))。
+  ;; 返回 proc-result;找不到运行时返回 #f(调用方跳过 —— 与其假绿,不如明说)。
+  (define (run-probe args opts)
+    (let ([rt (test-runtime)])
+      (and rt
+           (let ([script (path-join* (mktmp) "probe.ss")])
+             (write-text script probe-source)
+             (run-capture rt (append (list "-q" "--script" script) args) opts)))))
+
+  ;; Windows 上文本端口按 native eol 写出 → 断言前统一去掉 CR。
+  ;; (被测的是参数传递,不是换行风格;换行风格由 C4 的字节级用例守。)
+  (define (strip-cr s)
+    (list->string (filter (lambda (c) (not (char=? c #\return))) (string->list s))))
 
   ;; (define-suite name (test-name body ...) ...) → name 绑定为 ((sym . thunk) ...)
   (define-syntax define-suite
