@@ -95,13 +95,9 @@
     (find (lambda (d) (eq? (locked-dep-name d) name)) (lock-deps lk)))
 
   ;; ── 临时目录 / 文件 ──
-  ;; 登记进 harness,由 run-suites 逐用例清。空串(mktemp 失败,如磁盘满)当场报错 ——
-  ;; 从前它会静默返回 "",调用方随即把夹具写进 **cwd(= 仓库根)**,污染工作区。
-  (define (mktmp)
-    (let ([d (trim (proc-result-out (run-capture "mktemp" '("-d"))))])
-      (when (string=? d "")
-        (error 'mktmp "mktemp -d returned empty (disk full? /tmp not writable?)"))
-      (register-test-tmp! d)))
+  ;; `mktmp` 由 harness 提供(fs 的 make-temp-dir + 登记,由 run-suites 逐用例清),
+  ;; 这里只 re-export —— C9 之前它是 `mktemp -d` 子进程:Windows 上没有那个程序,
+  ;; 失败时还静默返回空串,调用方随即把夹具写进 **cwd(= 仓库根)**,污染工作区。
   (define (write-file p s) (call-with-output-file p (lambda (o) (display s o)) 'truncate))
   (define (read-file p) (if (file-exists? p) (call-with-input-file p get-string-all) ""))
   (define (trim s) (string-trim s))
@@ -153,16 +149,25 @@
   ;; —— 不需要 C 编译器:这些用例要验的是授权、落点不变量与产物搬运,不是 cc。
   ;; (2026-07-24 之前后端写的是 `make`、也没有 native/ 目录,那时构建被 mock bake
   ;; 挡着从不真跑;进程内编译后它会真的去执行,故补成一个真能跑的最小后端。)
+  ;; **两个平台各带一份脚本**:script 后端按扩展名挑本平台能跑的那个
+  ;; (POSIX → sh,Windows → cmd 的 `call`)。两份做同一件事:按落点契约
+  ;; 造出一个空文件。这样 build/pack 的 native 用例在两个平台上跑的是**同一组
+  ;; 断言**,而不是「Windows 上跳过」。
   (define (make-native-lib name soname)
     (let ([dir (mktmp)])
       (git-init! dir)
       (write-file (string-append dir "/chandler-manifest.ss")
-        (format "(manifest (format 1) (name ~s) (version \"0.1.0\") (srcdir \".\") (native (~a (path \"native/~a\") (build (script \"build.sh\")))))"
+        (format "(manifest (format 1) (name ~s) (version \"0.1.0\") (srcdir \".\") (native (~a (path \"native/~a\") (build (script \"build.sh\" \"build.cmd\")))))"
                 name soname soname))
       (write-file (string-append dir "/" name ".ss") (lib-umbrella-text name))
       (ensure-dir (string-append dir "/native/" soname))
       (write-file (string-append dir "/native/" soname "/build.sh")
                   (string-append ": > \"$NATIVE_OUT/" soname ".$SOEXT\"\n"))
+      ;; `type nul >` 是 cmd 里造空文件的成语(对应 sh 的 `: >`)。CRLF:
+      ;; 与生成的启动器同一条规矩(.gitattributes / write-text-crlf)。
+      (write-text-crlf (string-append dir "/native/" soname "/build.cmd")
+                       (string-append "@echo off\r\ntype nul > \"%NATIVE_OUT%\\"
+                                      soname ".%SOEXT%\"\r\n"))
       (git-commit! dir "c1")
       dir))
 

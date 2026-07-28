@@ -252,13 +252,18 @@
           (list "quo\"te" "line\nbreak" "cr\rhere"))))
 
     (bootstrap-shell-quote-survives-sh
-      ;; 端到端:引用后的串交 /bin/sh 必须原样回来
-      (let ([env (bootstrap-env '(q q-sh q-cmd win? mt-string die))]
-            [nasty "a b $HOME `id` \"d\" 'e'"])
-        (eval '(define (win?) #f) env)
-        (let ([r (run-capture "sh" (list "-c" (string-append "printf %s "
-                                                             (eval `(q ,nasty) env))))])
-          (assert-equal 0 (proc-result-code r))
-          (assert-string= nasty (proc-result-out r)))))
+      ;; 端到端:引用后的串交 /bin/sh 必须原样回来。
+      ;; **POSIX 专属**(C9):被验的正是 `q` 的 sh 分支穿过 /bin/sh 的行为,
+      ;; 在 Windows 上没有 sh 可穿。cmd 分支由上面两条逐字对拍守
+      ;; (bootstrap-cmd-quote-parity / bootstrap-cmd-quote-rejects-same-inputs)——
+      ;; 那是**同一份规则**的两侧,不是这一条被放宽了。
+      (when-posix (lambda ()
+        (let ([env (bootstrap-env '(q q-sh q-cmd win? mt-string die))]
+              [nasty "a b $HOME `id` \"d\" 'e'"])
+          (eval '(define (win?) #f) env)
+          (let ([r (run-capture "sh" (list "-c" (string-append "printf %s "
+                                                               (eval `(q ,nasty) env))))])
+            (assert-equal 0 (proc-result-code r))
+            (assert-string= nasty (proc-result-out r)))))))
 
     ))

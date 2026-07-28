@@ -202,7 +202,7 @@
           (install app '())
           ;; _vendor/ 下塞孤儿目录 → 下次 install 清理
           (let ([orphan (join-paths app "_vendor/ghost")])
-            (run-check "mkdir" (list "-p" orphan) '())
+            (ensure-dir orphan)                 ; C9:先前是 `mkdir -p` 子进程
             (write-file (string-append orphan "/x") "junk")
             (install app '())
             (assert-false (file-directory? orphan))

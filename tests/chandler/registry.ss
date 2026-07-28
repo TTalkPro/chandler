@@ -293,7 +293,9 @@
 
     (staging-path-dashes-no-collision
       ;; name/version 含 "-" 时,旧 "<name>-<version>" 拼接会撞;两段式不撞
-      (let ([libdir "/tmp/x"])
+      ;; (libdir 只参与拼串,一次也不落盘 —— 故意用个不像临时目录的字面量,
+      ;;  免得下一个人以为这里需要一个真存在的路径)
+      (let ([libdir "/L"])
         (assert-false
           (string=? (staging-path libdir "a-b" "c-d")
                     (staging-path libdir "a" "b-c-d")))))

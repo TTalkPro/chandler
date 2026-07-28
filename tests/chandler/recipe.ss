@@ -222,9 +222,19 @@
           (assert-equal '("l1" "l2") (file->lines "t.txt"))
           (write-file "empty.txt" "")
           (assert-string= "" (file->string "empty.txt"))
-          (assert-equal 0 (run/code "true"))
-          (assert-false (= 0 (run/code "false")))
-          (assert-string= "hi\n" (run/capture "echo" "hi"))
-          (assert-raises (lambda () (run "false"))))))
+          ;; run / run/code / run/capture 的成败与捕获语义。
+          ;; 被跑的命令是**当前 Scheme 运行时 + 临时脚本**,不是 `true` / `false` /
+          ;; `echo`(C9:三个在 Windows 上都不存在)。recipe 的这三个 API 本身收的
+          ;; 就是一条 shell 命令串 —— 那是它对用户的契约,不在可移植性范围内;
+          ;; 这里验的是**围绕它的管道**(退出码、抛不抛、stdout 捕获)。
+          (let ([rt (or (test-runtime)
+                        (error 'recipe-test "no Scheme runtime found on PATH"))])
+            (write-file "ok.ss" "(exit 0)\n")
+            (write-file "bad.ss" "(exit 1)\n")
+            (write-file "say.ss" "(display \"hi\")(newline)\n")
+            (assert-equal 0 (run/code rt "-q" "--script" "ok.ss"))
+            (assert-false (= 0 (run/code rt "-q" "--script" "bad.ss")))
+            (assert-string= "hi\n" (strip-cr (run/capture rt "-q" "--script" "say.ss")))
+            (assert-raises (lambda () (run rt "-q" "--script" "bad.ss")))))))
 
     ))

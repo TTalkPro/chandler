@@ -21,6 +21,10 @@
 
   ;; when-compiler 来自 (tests chandler fixtures):编译产物断言需要真编译器,
   ;; Petite 上跳过(授权逻辑照跑 —— 它在编译之前就完成了)。
+  ;;
+  ;; native 的 script 后端**两平台都跑**:夹具的 native 依赖同时带 build.sh 与
+  ;; build.cmd,后端按扩展名挑本平台能跑的那个。先前这几条另有一道 POSIX 门 ——
+  ;; 那时后端写死 `sh <script>`,现在不需要了。
 
     ;; C0:依赖的编译产物留在**它自己的** _vendor 树里,不再搬进汇总的 lib/
   (define (dep-obj app dep rel)

@@ -7,6 +7,7 @@
           (tests chandler harness)
           (tests chandler fixtures)
           (chandler hash)
+          (chandler layout)           ; join-paths
           (chandler sexp)
           (chandler lock))
 
@@ -53,7 +54,10 @@
 
     ;; ── canonical 字节稳定 ──
     (lock-write-stable
-      (let ([p1 "/tmp/chandler-lock-1.tmp"] [p2 "/tmp/chandler-lock-2.tmp"])
+      ;; 临时目录取自 harness(C9:先前硬编码 `/tmp/…`,Windows 上没有,
+      ;; 而且两次重跑写同一对文件、谁也没清)
+      (let* ([d (mktmp)]
+             [p1 (join-paths d "lock-1.ss")] [p2 (join-paths d "lock-2.ss")])
         (write-lock p1 sample)
         (write-lock p2 sample)
         (assert-string= (sha256-file p1) (sha256-file p2))))

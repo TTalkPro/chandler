@@ -5,27 +5,24 @@
   (export suite)
   (import (chezscheme)
           (tests chandler harness)
+          (chandler fs)               ; path-join*
           (chandler sexp))
 
-  (define tmp "/tmp/chandler-test-sexp.tmp")
+  ;; 每用例独立临时目录,harness 统一清。**不再硬编码 `/tmp`**(C9)——
+  ;; 那既是 Windows 上不存在的路径,又让并发/重跑的两个进程写同一个文件;
+  ;; 从前那个固定的 `/tmp/chandler-test-sexp.tmp` 还从来没有人清过。
+  (define (tmp-dir) (mktmp))
+  (define (tmp-file) (path-join* (mktmp) "datum.ss"))
 
   (define (with-datum-file datum thunk)
-    (write-canonical-file tmp datum)
-    (thunk))
-
-  ;; 每用例独立临时目录,harness 统一清
-  (define tmp-counter 0)
-  (define (tmp-dir)
-    (set! tmp-counter (+ tmp-counter 1))
-    (register-test-tmp!
-      (string-append "/tmp/chandler-test-sexp-atomic-"
-                     (number->string (get-process-id)) "-"
-                     (number->string tmp-counter))))
+    (let ([p (tmp-file)])
+      (write-canonical-file p datum)
+      (thunk p)))
 
   (define-suite suite
     (roundtrip-simple
       (with-datum-file '(manifest (name "x") (version "0.1.0"))
-        (lambda ()
+        (lambda (tmp)
           (assert-equal '(manifest (name "x") (version "0.1.0"))
                         (read-datum-file tmp)))))
 
@@ -39,12 +36,14 @@
       (assert-string= "(name \"x\")\n" (canonical-string '(name "x"))))
 
     (read-rejects-empty
-      (call-with-output-file tmp (lambda (p) (display "" p)) 'truncate)
-      (assert-raises (lambda () (read-datum-file tmp))))
+      (let ([tmp (tmp-file)])
+        (call-with-output-file tmp (lambda (p) (display "" p)) 'truncate)
+        (assert-raises (lambda () (read-datum-file tmp)))))
 
     (read-rejects-multi
-      (call-with-output-file tmp (lambda (p) (display "(a) (b)" p)) 'truncate)
-      (assert-raises (lambda () (read-datum-file tmp))))
+      (let ([tmp (tmp-file)])
+        (call-with-output-file tmp (lambda (p) (display "(a) (b)" p)) 'truncate)
+        (assert-raises (lambda () (read-datum-file tmp)))))
 
     (tagged-list
       (assert-true (tagged-list? '(foo 1 2) 'foo))

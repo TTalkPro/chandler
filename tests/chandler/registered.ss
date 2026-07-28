@@ -216,7 +216,8 @@
                  [r (make-registered 'x 'app (list (cons "1.0.0" e)))])
             (let ([d (registered->datum r)])
               (assert-true (registered? (datum->registered d))))))
-        (list '(path "/x") '(git "https://x") '(pack "/tmp/p.tar.gz"))))
+        ;; 三个都只是 datum 里的字符串,不落盘(与相邻的 "/x" 同性质)
+        (list '(path "/x") '(git "https://x") '(pack "/x/p.tar.gz"))))
 
     ;; ── format 校验(对齐 manifest 的友好模式)──
 
