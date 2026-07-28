@@ -158,42 +158,21 @@
         (string-append "cd /d " (cmd-quote dir) " && ")
         (string-append "cd " (sh-quote dir) " && ")))
 
-  ;; ══════════════════════════════════════════════════════════════════
-  ;; §3 唯一临时目录
-  ;; ══════════════════════════════════════════════════════════════════
-
-  (define counter 0)
-  (define (next-counter) (set! counter (+ counter 1)) counter)
-
-  ;; **区分「已存在」与真错误**:先前对任何 mkdir 失败都重试,于是临时目录根本
-  ;; 不存在时(Windows 上 system-temp-dir 曾回落到不存在的 `/tmp`)会**死循环**。
-  ;; 现在只在目标已存在时换名重试,其余原样抛 —— 并附上最可能的那条原因。
-  (define (make-temp-dir)
-    (let ([base (system-temp-dir)])
-      (unless (file-directory? base)
-        (ensure-dir base)
-        (unless (file-directory? base)
-          (error 'make-temp-dir
-                 (format "temp directory does not exist and could not be created: ~a~%  (set TMPDIR / TEMP / TMP to a writable directory)"
-                         base))))
-      (let ([t (current-time 'time-utc)])
-        (let loop ([n (+ (* (time-second t) 1000000)
-                         (quotient (time-nanosecond t) 1000)
-                         (next-counter))]
-                   [tries 0])
-          (let ([d (path-join* base (string-append "chandler-" (number->string n)))])
-            (if (or (file-directory? d) (file-exists? d))
-                (if (> tries 10000)
-                    (error 'make-temp-dir
-                           (format "could not find a free temp directory name under ~a" base))
-                    (loop (+ n 1) (+ tries 1)))
-                (begin (mkdir d) d)))))))    ; mkdir 失败即抛(权限 / 磁盘满…),不再吞
+  ;; 唯一临时目录:`make-temp-dir` 现住 (chandler fs) —— 它不起子进程,
+  ;; 而测试 harness 也要用它(去掉 `mktemp -d` 这个 shell 依赖),
+  ;; 让 harness 为了 mkdir 去 import 整个 proc 没有道理。
 
   ;; ══════════════════════════════════════════════════════════════════
   ;; §4 主入口
   ;; ══════════════════════════════════════════════════════════════════
 
-  ;; run-capture:(values code stdout stderr) 经 proc-result;opts: (cwd . dir) (env . ((k.v)…))
+  ;; run-capture:(values code stdout stderr) 经 proc-result;
+  ;; opts: (cwd . dir) (env . ((k.v)…)) (stdin . 'null)
+  ;;
+  ;; `stdin` 收 `'null`(接到空设备)或一个路径串。**空设备名两平台不同**
+  ;; (`/dev/null` vs `NUL`),故由这里统一给出 —— 调用方不再自己拼
+  ;; `sh -c "… < /dev/null"`(pack 的两个版本探针先前正是这么写的,C9)。
+  ;; 探针类命令用它避免「对方想读 stdin 于是挂住」。
   (define run-capture
     (case-lambda
       [(prog args) (run-capture prog args '())]
@@ -203,7 +182,12 @@
               [errf (path-join* dir "err")]
               [cwd (alist-ref opts 'cwd)]
               [env (alist-ref opts 'env)]
-              [base (quote-command prog args)]
+              [base0 (quote-command prog args)]
+              [in (alist-ref opts 'stdin)]
+              [base (if in
+                        (string-append base0 " <"
+                                       (shell-quote (if (eq? in 'null) (null-device) in)))
+                        base0)]
               [with-redir (string-append base " >" (shell-quote outf) " 2>" (shell-quote errf))]
               [with-cd (if cwd (string-append (cd-prefix cwd) with-redir) with-redir)]
               [with-env (if env (string-append (env-prefix env) with-cd) with-cd)])
