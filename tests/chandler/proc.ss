@@ -30,6 +30,41 @@
   (define (rt) (or (test-runtime)
                    (error 'rt "no Scheme runtime found on PATH; the e2e probe cannot run")))
 
+  ;; ── `cmd /c` 的引号处理,**独立实现一遍**(D69 的静态验法)──
+  ;;
+  ;; 照 `cmd /?` 原文:
+  ;;   1. 「恰好两个引号 + 中间无 & < > ( ) @ ^ | + 中间有空白 + 中间那串是一个
+  ;;      可执行文件名」⇒ 引号原样保留;
+  ;;   2. 否则,首字符是引号 ⇒ 剥掉第一个引号与最后一个引号,保留最后一个引号
+  ;;      之后的文本。
+  ;;
+  ;; 「是不是可执行文件」在测试里判不了(要查文件系统),故这里**只实现规则 2**,
+  ;; 并由 cmd-outer-quote-makes-behaviour-deterministic 单独钉住「包完之后引号数
+  ;; 恒 ≥ 4 ⇒ 规则 1 永不成立」—— 于是规则 1 判不了这件事不影响结论。
+  ;; 刻意与被测实现**反向**写(它加,这里减),两边同时写错成互补的错的概率
+  ;; 远低于单边写错。
+  (define (cmd-c-strip line)
+    (let ([n (string-length line)])
+      (if (or (= n 0) (not (char=? #\" (string-ref line 0))))
+          line
+          (let ([last (last-index-of line #\")])
+            (if (<= last 0)
+                line
+                (string-append (substring line 1 last)
+                               (substring line (+ last 1) n)))))))
+
+  (define (last-index-of s c)
+    (let loop ([i (- (string-length s) 1)])
+      (cond [(< i 0) -1]
+            [(char=? c (string-ref s i)) i]
+            [else (loop (- i 1))])))
+
+  (define (count-char s c)
+    (let loop ([i 0] [n 0])
+      (if (= i (string-length s))
+          n
+          (loop (+ i 1) (if (char=? c (string-ref s i)) (+ n 1) n)))))
+
   (define-suite suite
     (quote-plain
       (assert-string= "'abc'" (shell-quote "abc")))
@@ -227,4 +262,59 @@
     ;; real-path 在 Windows 上不 shell-out(没有 readlink),原样返回
     (real-path-windows-is-identity
       (assert-string= "C:\\x\\y"
-                      (parameterize ([windows-shell? #t]) (real-path "C:\\x\\y"))))))
+                      (parameterize ([windows-shell? #t]) (real-path "C:\\x\\y"))))
+
+    ;; ══════════════════════════════════════════════════════════════
+    ;; `cmd /c` 的外层引号剥离(解析的**第三层**,D68)
+    ;;
+    ;; 验法照 designs/14 §3.4 的两条:这里是**静态往返** —— 把 cmd 的剥离规则
+    ;; 独立实现一遍(`cmd-c-strip`,下方),验证「我们包的」被「它剥的」正好抵消。
+    ;; 平台无关,Linux 上就能跑。动态那半(真过一遍 cmd)只有 Windows CI 给得了。
+    ;;
+    ;; 教训写在这:C5 只对 MSVCRT 那层做过交叉验证,漏了这一层,于是
+    ;; **所有带参数、无 cwd/env 前缀的子进程调用在 Windows 上都是坏的**
+    ;; ——「往返验证能证明转义符合我理解的规则,证明不了我理解的规则就是全部
+    ;; 的规则」(bake D69)。
+    ;; ══════════════════════════════════════════════════════════════
+
+    ;; 我们生成的命令行,经 cmd 剥离后必须与包裹前逐字相同
+    (cmd-outer-quote-round-trips-through-cmd-c
+      (for-each
+        (lambda (line)
+          (assert-string= line (cmd-c-strip (cmd-outer-quote line))))
+        (list
+          ;; 无 cwd/env 前缀:以引号开头 —— 就是先前坏掉的那一类
+          "\"where\" \"git\""
+          "\"git\" \"-C\" \"C:\\proj\" \"rev-parse\" \"HEAD\""
+          ;; run-capture 的最终形:后面接着重定向(包裹必须作用在整行上)
+          "\"scheme\" \"-q\" \"--script\" \"C:\\T\\p.ss\" >\"C:\\T\\out\" 2>\"C:\\T\\err\""
+          ;; 只有程序名的单 token
+          "\"C:\\bin\\chandler.cmd\""
+          ;; 含空格的程序名(cmd 的「保留」特例本来会命中,包完之后一律走剥离)
+          "\"C:\\Program Files\\p.exe\" \"--version\"")))
+
+    ;; 不以引号开头的行**不包** —— 那类根本不触发剥离规则,包了反而多一层改写
+    (cmd-outer-quote-leaves-unquoted-lines-alone
+      (for-each
+        (lambda (line)
+          (assert-string= line (cmd-outer-quote line))
+          (assert-string= line (cmd-c-strip line)))
+        (list "cd /d \"D:\\w\" && \"git\" \"status\""
+              "set \"K=v\" && \"git\" \"status\""
+              "where git"
+              "")))
+
+    ;; 包完之后引号数恒 ≥ 4 ⇒ cmd 的「恰好两个引号」保留特例**永不成立**,
+    ;; 行为因此是确定的,不依赖「中间那串是不是一个可执行文件」这种运行期判断。
+    (cmd-outer-quote-makes-behaviour-deterministic
+      (for-each
+        (lambda (line)
+          (assert-true (>= (count-char (cmd-outer-quote line) #\") 4)))
+        (list "\"C:\\bin\\p.exe\""
+              "\"C:\\Program Files\\p.exe\"")))
+
+    ;; POSIX 侧一概不动
+    (shell-command-line-is-identity-on-posix
+      (assert-string= "'git' 'status'"
+                      (parameterize ([windows-shell? #f])
+                        (shell-command-line "'git' 'status'"))))))

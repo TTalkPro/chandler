@@ -9,24 +9,42 @@
   (export define-suite run-suites
           assert-true assert-false assert-equal assert-raises assert-string=
           register-test-tmp! mktmp
-          windows-host? when-posix when-windows
+          windows-host? when-posix when-windows skip!
           test-runtime run-probe strip-cr)
   (import (chezscheme)
           (chandler fs)
           (chandler layout)           ; windows-mt?
           (chandler proc))            ; which / run-capture:端到端探针
 
-  ;; ── 平台门(C9)──
-  ;; 「这条用例验的是本平台的 shell / 文件系统语义」时用它跳过另一侧,而不是
-  ;; 放宽断言 —— 放宽等于不验。跳过的一侧应当有对侧的对应用例,或在注释里
-  ;; 写明为什么没有。
+  ;; ══════════════════════════════════════════════════════════════════
+  ;; 跳过 —— **必须报出来**
+  ;;
+  ;; 「这条用例验的是本平台的 shell / 文件系统语义」时跳过另一侧,而不是放宽
+  ;; 断言 —— 放宽等于不验。但**静默跳过同样是骗人**:Windows CI 上打一行
+  ;; 「593 passed」,读的人没法知道其中 N 条根本没跑。故 run-suites 结尾逐条
+  ;; 列出跳过的用例与原因。
   ;;
   ;; 判据与 (chandler proc) 的 windows-shell? 同源(machine-type 以 nt 结尾),
   ;; 但这里**不**用那个 parameter:它被平台参数化测试 parameterize 来驱动另一侧
   ;; 分支,拿它当「我现在在哪」会在那些用例里读到假答案。
+  ;;
+  ;; 归组之前先找夹具 —— 缺的往往不是**平台能力**,只是某个具体命令/手段
+  ;; (bake D72:broken pipe 一度被判为 Windows 不适用,实际缺的只是 `head`)。
+  ;; 平台组该尽量小。
+  ;; ══════════════════════════════════════════════════════════════════
+
   (define (windows-host?) (windows-mt? (current-machine-type)))
-  (define (when-posix proc)   (unless (windows-host?) (proc)))
-  (define (when-windows proc) (when   (windows-host?) (proc)))
+
+  (define skipped '())                  ; ((label . name) . reason) …
+  (define current-test (make-parameter '(? . ?)))
+
+  (define (skip! reason)
+    (set! skipped (cons (cons (current-test) reason) skipped)))
+
+  (define (when-posix proc)
+    (if (windows-host?) (skip! "posix-only") (proc)))
+  (define (when-windows proc)
+    (if (windows-host?) (proc) (skip! "windows-only")))
 
   ;; 每个测试临时目录登记在此,run-suites 在**每条用例之后**统一清 —— 夹具的 mktmp
   ;; 从前谁造谁清、大多没清,一轮下来 /tmp 攒上万个目录直到 tmpfs 撑满,mktemp 返回
@@ -150,15 +168,44 @@
                           (newline)
                           (k #f))
                         (lambda ()
-                          (thunk)
+                          ;; 用例名进 parameter,好让 skip! 报得出是谁跳了
+                          (parameterize ([current-test (cons label name)])
+                            (thunk))
                           (set! pass (+ pass 1))
                           (k #t)))))
                   ;; 无论过失,清掉这条用例造的临时目录(k 逃逸回到此处后仍会跑)。
                   (clear-test-tmps!)))
               suite)))
         suites)
-      (printf "~%tests: ~a passed, ~a failed~%" pass failn)
+      (report-skips)
+      (printf "~%tests: ~a passed, ~a failed, ~a skipped~%" pass failn (length skipped))
       (= failn 0)))
+
+  ;; 跳过的逐条列出来。**没有这段,「N passed」在另一个平台上就是个假象** ——
+  ;; 一条用例被平台门挡掉与它跑过并通过,在汇总数字上长得一模一样。
+  ;; 按原因分组,组内保持声明顺序。
+  (define (report-skips)
+    (unless (null? skipped)
+      (let ([items (reverse skipped)])
+        (printf "~%skipped ~a test(s) on ~a:~%"
+                (length items)
+                (if (windows-host?) "windows" "posix"))
+        (for-each
+          (lambda (reason)
+            (let ([of-reason (filter (lambda (s) (string=? reason (cdr s))) items)])
+              (unless (null? of-reason)
+                (printf "  [~a]~%" reason)
+                (for-each (lambda (s)
+                            (printf "    ~a / ~a~%" (car (car s)) (cdr (car s))))
+                          of-reason))))
+          (reasons-of items)))))
+
+  ;; 出现过的 reason,按首次出现顺序去重
+  (define (reasons-of items)
+    (let loop ([xs items] [acc '()])
+      (cond [(null? xs) (reverse acc)]
+            [(member (cdr (car xs)) acc) (loop (cdr xs) acc)]
+            [else (loop (cdr xs) (cons (cdr (car xs)) acc))])))
 
   (define (show-condition e)
     (cond

@@ -26,7 +26,10 @@
            ;; 平台开关 + 两侧引用实现:导出供**平台参数化测试**。
            ;; 生成的命令串是纯字符串逻辑,值得逐字断言;而 CI 跑在 Linux 上,
            ;; 不参数化就等于 Windows 这半边代码从来没被执行过。
-           windows-shell? sh-quote cmd-quote cd-prefix)
+           windows-shell? sh-quote cmd-quote cd-prefix
+           ;; 全仓唯一的 system 出口 + `cmd /c` 外层引号(D68)。
+           ;; cmd-outer-quote 是纯函数,导出供往返验证(designs/14 §3.4)。
+           shell-system shell-command-line cmd-outer-quote)
   (import (chezscheme)
           (chandler util)
           (chandler layout)      ; windows-mt?(layout 不依赖 proc,无环)
@@ -122,6 +125,53 @@
     (string-join (map shell-quote (cons prog args)) " "))
 
   ;; ══════════════════════════════════════════════════════════════════
+  ;; §1b `cmd /c` 的外层引号 —— Windows 上解析的**第三层**
+  ;;
+  ;; §1 处理的是后两层(cmd 的元字符扫描 + 被调程序的 MSVCRT argv 解析)。
+  ;; 但在它们之前还有一层:Chez 的 `system` 在 Windows 上走 `%COMSPEC%`,
+  ;; 即 `cmd /c <命令行>`,而 **`cmd /c` 自己先对引号动一次手**(`cmd /?` 有载):
+  ;;
+  ;;   1. 若同时满足「恰好两个引号 + 中间无 `& < > ( ) @ ^ |` + 中间有空白
+  ;;      + 中间那串是一个可执行文件名」,引号原样保留;
+  ;;   2. 否则:**若首字符是引号,剥掉第一个引号与最后一个引号**,
+  ;;      保留最后一个引号之后的文本,剩下的才交给解析器。
+  ;;
+  ;; 我们生成的命令行必然以引号开头(程序名被 cmd-quote 包了),参数一多就有
+  ;; 四个以上引号 —— 条件 1 永远不成立,于是必然踩中条件 2:
+  ;;
+  ;;   生成  "where" "git" >"…\out" 2>"…\err"
+  ;;   剥后  where" "git" >"…\out" 2>"…\err
+  ;;   cmd 把 `where" "git"` 整个当命令名 → is not recognized
+  ;;
+  ;; 对策是**多包一层**:剥掉的正好是我们多加的那对,内层原封不动送进解析器。
+  ;; 且包完之后引号数恒 ≥ 4,条件 1 再也不可能被触发 —— 行为是确定的,
+  ;; 不依赖「中间那串是不是可执行文件」这种运行期判断。
+  ;;
+  ;; **只在首字符是引号时包**:不以引号开头的命令行(带 `cd /d …` 或
+  ;; `set "K=v" …` 前缀的那些)根本不触发该规则,无差别包裹只会平添一层改写。
+  ;;
+  ;; **【必须作用在含重定向的最终整行上】**:`run-capture` 会在后面接
+  ;; ` >"out" 2>"err"`。只包参数段的话,「最后一个引号」变成重定向路径的收尾
+  ;; 引号,剥掉它反而把路径拆坏。所以全仓的 `system` 出口收敛成下面一个
+  ;; `shell-system`,不允许各处直接调 `system`。
+  ;;
+  ;; 来源:这一层不是推出来的,是 bake 在真 Windows 上撞出来的(bake TASK.md
+  ;; D68)。chandler 的 C5 只考虑了两层 —— 教训见 designs/14 §3.4。
+  ;; ══════════════════════════════════════════════════════════════════
+
+  ;; 纯函数,与当前平台无关(好让 POSIX 机器也能对这一支做往返验证)。
+  (define (cmd-outer-quote line)
+    (if (and (> (string-length line) 0) (char=? #\" (string-ref line 0)))
+        (string-append "\"" line "\"")
+        line))
+
+  (define (shell-command-line line)
+    (if (windows-shell?) (cmd-outer-quote line) line))
+
+  ;; **全仓唯一的 `system` 出口。** 直接调 `system` 会绕过上面那层。
+  (define (shell-system line) (system (shell-command-line line)))
+
+  ;; ══════════════════════════════════════════════════════════════════
   ;; §2 环境注入 / 工作目录前缀
   ;; ══════════════════════════════════════════════════════════════════
 
@@ -191,7 +241,7 @@
               [with-redir (string-append base " >" (shell-quote outf) " 2>" (shell-quote errf))]
               [with-cd (if cwd (string-append (cd-prefix cwd) with-redir) with-redir)]
               [with-env (if env (string-append (env-prefix env) with-cd) with-cd)])
-         (let ([code (system with-env)])
+         (let ([code (shell-system with-env)])
            (let ([out (read-file-string outf)] [err (read-file-string errf)])
              (rm-rf dir)
              (make-proc-result code out err))))]))
@@ -224,7 +274,7 @@
               [base (quote-command prog args)]
               [with-cd (if cwd (string-append (cd-prefix cwd) base) base)]
               [full (if env (string-append (env-prefix env) with-cd) with-cd)])
-         (system full))]))
+         (shell-system full))]))
 
   ;; ══════════════════════════════════════════════════════════════════
   ;; §5 PATH 查找 / 符号链接解引用
