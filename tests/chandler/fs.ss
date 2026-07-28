@@ -168,20 +168,32 @@
         (rm-rf (string-append root "/ro"))
         (assert-false (file-directory? (string-append root "/ro")))))
 
-    ;; 删不掉时**抛**,不再静默成功。用一个不可写的父目录制造真删不掉的情形。
+    ;; 删不掉时**抛**,不再静默成功。
     ;;
-    ;; **POSIX 专属**(C9):制造手段是目录的 w 位,而 Windows 的 ACL 里没有这一位
-    ;; ——Chez 的 chmod 在那边只映射到「只读」属性,对目录内的删除不起作用,于是
-    ;; 这条在 Windows 上会因为「删成功了」而红。它守的是 rm-rf 的**抛/不抛**契约,
-    ;; 那条契约本身与平台无关,只是这个夹具造不出来。
+    ;; **两平台各用自己造得出「删不掉」的手段,不是在 Windows 上跳过**
+    ;; (bake D72:归组前先找夹具 —— 缺的往往不是平台能力,只是某个具体手段)。
+    ;;   POSIX  :父目录去掉 w 位 ⇒ 目录项删不掉
+    ;;   Windows:持有该文件的打开句柄 ⇒ DeleteFile 撞 sharing violation
+    ;; 守的是同一条契约:rm-rf 删不掉时**抛**,而不是静默成功。
+    ;;
+    ;; Windows 那半边**尚未实测**(等 CI):若 Chez 在那边开文件时带了
+    ;; FILE_SHARE_DELETE,这条会因为「删成功了」而红 —— 那也是有用的信息,
+    ;; 比跳过强。
     (rm-rf-raises-when-it-cannot-delete
-      (when-posix (lambda ()
-        (let ([root (tmp)])
-          (write-text (string-append root "/locked/a.txt") "x")
-          (chmod (string-append root "/locked") #o500)        ; r-x:不能删其中的项
-          (let ([raised (guard (e (#t #t)) (rm-rf (string-append root "/locked/a.txt")) #f)])
-            (chmod (string-append root "/locked") #o700)      ; 先还原,好让 harness 清得掉
-            (assert-true raised))))))
+      (let ([root (tmp)])
+        (if (windows-host?)
+            (let ([p (string-append root "/busy.txt")])
+              (write-text p "x")
+              (let ([port (open-file-input-port p)])     ; 占住句柄
+                (let ([raised (guard (e (#t #t)) (rm-rf p) #f)])
+                  (close-port port)                      ; 先放开,好让 harness 清得掉
+                  (assert-true raised))))
+            (begin
+              (write-text (string-append root "/locked/a.txt") "x")
+              (chmod (string-append root "/locked") #o500)   ; r-x:不能删其中的项
+              (let ([raised (guard (e (#t #t)) (rm-rf (string-append root "/locked/a.txt")) #f)])
+                (chmod (string-append root "/locked") #o700) ; 先还原
+                (assert-true raised))))))
 
     ;; 幂等语义不变:目标不存在 = 成功,不抛
     (rm-rf-missing-is-still-silent
@@ -230,6 +242,27 @@
         (make-executable! f)                    ; 两平台都不该抛
         (when-posix (lambda ()
           (assert-equal #o100 (bitwise-and (get-mode f) #o100))))))
+
+    ;; 临时目录的选择链 —— **纯函数,故 Windows 那半边在 Linux 上也逐条验得到**。
+    ;;
+    ;; 兜底那条是重点:先前 Windows 上回落到 `C:\Windows\Temp`,而**普通账户对它
+    ;; 没有写权限**(bake 在真机上踩过)。Windows 没有 `/tmp` 那种人人可写的公共
+    ;; 位置,正确的兜底是 per-user 的 `%USERPROFILE%\AppData\Local\Temp`;
+    ;; 连它都没有就明确报错 —— 报错比生成一条必定失败的命令强。
+    (choose-temp-dir-priority-and-fallback
+      ;; 优先级 TMPDIR > TEMP > TMP,两平台一致
+      (assert-string= "/a" (choose-temp-dir "/a" "/b" "/c" "/u" #f))
+      (assert-string= "/b" (choose-temp-dir #f "/b" "/c" "/u" #f))
+      (assert-string= "/c" (choose-temp-dir #f #f "/c" "/u" #f))
+      (assert-string= "T:\\a" (choose-temp-dir "T:\\a" "T:\\b" #f "U:\\u" #t))
+      ;; POSIX 兜底 /tmp;**Windows 兜底是 per-user 的,不是 C:\Windows\Temp**
+      (assert-string= "/tmp" (choose-temp-dir #f #f #f "/u" #f))
+      (assert-string= "C:\\Users\\t/AppData/Local/Temp"
+                      (choose-temp-dir #f #f #f "C:\\Users\\t" #t))
+      ;; Windows 上四个都没有 → 明确报错(不静默拼一个必失败的路径)
+      (assert-raises (lambda () (choose-temp-dir #f #f #f #f #t)))
+      ;; POSIX 上没有 USERPROFILE 是常态,不该因此报错
+      (assert-string= "/tmp" (choose-temp-dir #f #f #f #f #f)))
 
     ;; system-temp-dir 认三个变量,优先级 TMPDIR > TEMP > TMP
     (system-temp-dir-honors-windows-vars

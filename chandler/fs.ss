@@ -16,7 +16,7 @@
            sweep-empty-parents home-dir
            write-text-if-changed file-byte-size mtime
            path-swap-ext normalize-seps path-segments
-           parent-dir-or-dot system-temp-dir make-temp-dir null-device
+           parent-dir-or-dot system-temp-dir choose-temp-dir make-temp-dir null-device
            path-has-segment? unmanaged-path-segments unmanaged-path?
            relativize rel-files-under)
   (import (chezscheme)
@@ -417,11 +417,29 @@
   ;; 先前只认 `TMPDIR`,于是 Windows 上**所有**临时文件都写向一个不存在的
   ;; `/tmp`:proc 的 make-temp-dir、compile 的编译器探测与并行 fp-tmp、
   ;; recipe 的 run/capture、pack 的 skiff 版本探测,全在这条路径上。
+  ;;
+  ;; **Windows 侧的兜底不是 `C:\Windows\Temp`**:那个目录普通账户没有写权限
+  ;; (bake 在真机上踩过)。Windows 没有 `/tmp` 那种人人可写的公共位置,正确的
+  ;; 兜底是 per-user 的 `%USERPROFILE%\AppData\Local\Temp`;连它都没有就**明确
+  ;; 报错** —— 报错比生成一条必定失败的命令强,后者要到子进程炸了才看得见。
+  ;;
+  ;; 选择逻辑抽成纯函数 `choose-temp-dir`:`windows-paths?` 不是 parameter,
+  ;; 不抽出来的话 Windows 那半边在 Linux 上一行都跑不到。
+  (define (choose-temp-dir tmpdir temp tmp userprofile windows?)
+    (or tmpdir temp tmp
+        (if windows?
+            (if userprofile
+                (path-join* userprofile "AppData/Local/Temp")
+                (error 'system-temp-dir
+                       "no temp directory: TMPDIR, TEMP, TMP and USERPROFILE are all unset"))
+            "/tmp")))
+
   (define (system-temp-dir)
-    (or (env-nonempty "TMPDIR")
-        (env-nonempty "TEMP")
-        (env-nonempty "TMP")
-        (if (windows-paths?) "C:/Windows/Temp" "/tmp")))
+    (choose-temp-dir (env-nonempty "TMPDIR")
+                     (env-nonempty "TEMP")
+                     (env-nonempty "TMP")
+                     (env-nonempty "USERPROFILE")
+                     (windows-paths?)))
 
   ;; 空设备。POSIX 是 `/dev/null`,Windows 是 `NUL`(cmd 的保留设备名,
   ;; 不带路径也不带扩展名)。用在「把子进程的 stdin 接到空」这类重定向上。
@@ -461,7 +479,19 @@
                     (error 'make-temp-dir
                            (format "could not find a free temp directory name under ~a" base))
                     (loop (+ n 1) (+ tries 1)))
-                (begin (mkdir d) d)))))))    ; mkdir 失败即抛(权限 / 磁盘满…),不再吞
+                (begin (mkdir-private d) d)))))))  ; mkdir 失败即抛(权限 / 磁盘满…),不再吞
+
+  ;; **POSIX 侧给 0700。** `run-capture` 把子进程的 stdout/stderr 落进这个目录,
+  ;; 而那里面可能有 git 的输出 —— 带凭据的 remote URL 就在其中。共享 `/tmp` 上
+  ;; 默认权限(0777 & umask)通常是 0755,同机别的用户读得到。
+  ;;
+  ;; Windows 上 mkdir 的 mode 没有语义,私密性由 per-user 的 `%TEMP%`
+  ;; (默认落在 `%USERPROFILE%` 下)提供。
+  ;;
+  ;; 注意上面「已存在即换名重试」那条**不依赖权限位**,依赖的是 mkdir 的
+  ;; 「已存在即失败」—— 那条原子性两个平台都成立,是防共享 tmp 抢占的关键。
+  (define (mkdir-private d)
+    (if (windows-paths?) (mkdir d) (mkdir d #o700)))
 
   ;; 本机是否 Windows。fs 是最底层库(只依赖 util),不能 import layout 拿
   ;; windows-mt?(layout 依赖 fs,会成环)—— 故这里按 machine-type 自己判一次。

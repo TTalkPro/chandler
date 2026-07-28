@@ -86,7 +86,11 @@
   ;; Petite 没有编译器(compile-library 一调就抛 "compile package is not loaded")。
   ;; 真编译的用例在它上面**跳过**而不是放宽断言 —— 那些用例验的正是「产出能被
   ;; Chez 加载的对象」,放宽等于不验。scheme / skiff 上照跑。
-  (define (when-compiler proc) (when (compiler-available?) (proc)))
+  ;;
+  ;; **跳过要报出来**(同平台门):不然 petite 那一遍打出的「N passed」会让人
+  ;; 以为编译产物也验过了。
+  (define (when-compiler proc)
+    (if (compiler-available?) (proc) (skip! "no-compiler")))
 
   ;; ── lock 里按名取一条依赖 ──
   ;; 曾是 (chandler lock) 的导出,但生产代码从不用它 —— 只有断言在用。
