@@ -120,6 +120,55 @@ Chez 的 `system` 走 `%COMSPEC%`,即 `cmd.exe`。所以:
 含 `%` 的值必须改走环境变量传递,或接受失真。npm / yarn / mise 的 Windows shim
 同样活在这个限制下。
 
+### 3.4 其实是**三层** —— `cmd /c` 自己先动一次手(D40)
+
+上面写「两层」是**错的**,而且错了很久。在那两层之前还有一层:Chez 的 `system`
+走 `%COMSPEC%`,即 `cmd /c <命令行>`,而 `cmd /c` 在把命令行交给解析器**之前**
+先对引号处理一遍(`cmd /?` 原文):
+
+1. 若同时满足「恰好两个引号 + 中间无 `& < > ( ) @ ^ |` + 中间有空白 +
+   中间那串是一个可执行文件名」,引号原样保留;
+2. **否则,若首字符是引号,剥掉第一个引号与最后一个引号**,保留最后一个引号
+   之后的文本,剩下的才拿去解析。
+
+我们生成的命令行必然以引号开头(程序名被 `cmd-quote` 包了),参数一多就有四个
+以上引号 —— 条件 1 永远不成立,于是**必然**踩中条件 2:
+
+```
+生成  "where" "git" >"…\out" 2>"…\err"
+剥后  where" "git" >"…\out" 2>"…\err
+      └─ cmd 把 `where" "git"` 整个当命令名 → is not recognized
+```
+
+**影响面**:凡是「有参数、且没有 `cd /d …` 或 `set "K=v" …` 前缀」的调用全中 ——
+`fetch` 的所有 git 调用、`which`、`run-foreground`(`run`/`exec`/`repl`)、
+两个版本探针、`recipe` 的多参数 `run`。带前缀的反而安全(首字符不是引号,
+规则根本不触发),所以 native 三个后端没事。
+
+**对策**:首字符是引号时**整行再包一对**,剥掉的正好是多加的那对。包完之后
+引号数恒 ≥ 4,条件 1 再也不可能成立 —— 行为因此是确定的,不依赖「中间那串
+是不是一个可执行文件」这种运行期判断。
+
+两条实现约束:
+
+- **必须作用在含重定向的最终整行上**。`run-capture` 会在后面接
+  ` >"out" 2>"err"`;只包参数段的话,「最后一个引号」变成重定向路径的收尾引号,
+  剥掉它反而把路径拆坏。故全仓 `system` 出口收敛成 `proc` 的 `shell-system`
+  一个,`bootstrap.ss` 另有一份自包含副本(由 bootstrap-parity 钉住)。
+- **不以引号开头的行不包**。那类根本不触发规则,包了只是平添一层改写。
+
+**这一层不是推出来的,是 bake 在真 Windows 上撞出来的**(bake TASK.md D68):
+第一轮报 `''scheme''`(转义缺失),第二轮报 `'scheme" "--script" "tests'` ——
+正是被剥掉外层引号后粘连出来的命令名。chandler 这边直到照着复查才发现同样中招。
+
+**教训(bake D69)**:平台相关代码要**两种验法,缺一不可**。
+**静态** —— 把对方的解析规则独立实现一遍做往返(`tests/chandler/proc.ss` 的
+`cmd-c-strip`),平台无关、任何机器都能跑,且「生成与解析两边同时写错成互补的
+错」的概率远低于单边写错。**动态** —— 真过一遍 shell 拉起真外部程序,只验当前
+平台,但覆盖了静态验法证明不了的那一段:shell 自己那层。
+C5 只对 MSVCRT 做了静态往返,没对 `cmd /c` 做 —— 于是
+「往返验证能证明**转义符合我理解的规则**,证明不了**我理解的规则就是全部的规则**」。
+
 ## 4. 设计决策
 
 | # | 决策 | 理由 |
@@ -131,6 +180,8 @@ Chez 的 `system` 走 `%COMSPEC%`,即 `cmd.exe`。所以:
 | **D37** | `-j` 并行编译在 Windows 上**退化为串行 + 明确提示** | `run-chunk` 的 sh 脚本是在补 Chez 缺失的「等多个子进程」原语;cmd 没有等价物。`-j` 是开发者便利,不值得为它引入 pwsh 依赖(可选增强见 §8.4) |
 | **D38** | 跨平台字节一致性靠 `.gitattributes` + 二进制写,而非 hash 时归一化 | 归一化会让 hash 不再是「文件真实内容的指纹」,verify 的语义就废了。源头钉死换行才是对的 |
 | **D39** | native 的 `(script …)` 收**多个**脚本,按扩展名挑本平台能跑的 | 脚本是用别的语言写的,解释器两个平台不一样(sh / cmd)。要两边都能建就得两边各带一份 —— 这是事实,不是我们造出来的复杂度。挑不出来即 config 错(§12.2) |
+| **D40** | Windows 命令行是**三层**不是两层:`cmd /c` 的首尾引号剥离由 `shell-system` 抵消,全仓 `system` 出口收敛成一个 | §3.4。首字符是引号时必然被剥,而我们生成的命令行必然以引号开头 —— **凡是有参数、无 cwd/env 前缀的调用在 Windows 上全是坏的**。包裹必须作用在含重定向的最终整行上 |
+| **D41** | 跳过的用例**必须在汇总里报出来**(逐条列名 + 原因) | 一条被平台/环境门挡掉的用例,与它跑过并通过,在「N passed」里长得一模一样。静默跳过让另一个平台上的绿色变成假象 —— 实测:petite 那一遍原来藏着 22 条 |
 
 ## 5. 子进程层(D33)—— ✅ 已实现
 
@@ -175,7 +226,17 @@ Chez 的 `system` 走 `%COMSPEC%`,即 `cmd.exe`。所以:
 
 ## 7. 环境与临时目录 —— ✅ 已实现
 
-- `system-temp-dir`(`fs.ss:188`):`TMPDIR` → `TEMP` → `TMP` → 平台默认。
+- `system-temp-dir`:`TMPDIR` → `TEMP` → `TMP` → 平台兜底。
+  **Windows 的兜底不是 `C:\Windows\Temp`** —— 普通账户对它没有写权限
+  (bake 真机踩过)。Windows 没有 `/tmp` 那种人人可写的公共位置,兜底是 per-user
+  的 `%USERPROFILE%\AppData\Local\Temp`;四个都没有就**明确报错**,
+  报错比生成一条必定失败的命令强。选择逻辑抽成纯函数 `choose-temp-dir`,
+  于是 Windows 那半边在 Linux 上也逐条断言得到。
+- `make-temp-dir` 在 POSIX 侧建 **0700**:`run-capture` 把子进程的 stdout/stderr
+  落在那里,而那里面有 git 的输出 —— 带凭据的 remote URL 就在其中,共享 `/tmp`
+  的默认权限(0777 & umask)通常是 0755。Windows 上 mkdir 的 mode 无语义,
+  私密性由 per-user 的 `%TEMP%` 提供。「已存在即换名重试」那条**不依赖权限位**,
+  依赖的是 mkdir 的「已存在即失败」——那条原子性两平台都成立。
 - `fetch.ss:24` `default-cache-root`:Windows 上走 `%LOCALAPPDATA%\chandler\cache`,
   与 `registry.ss` 的 `default-user-libdir` 同一套判别。
 - `.env` 键大小写(P2):记录已知差异,不做归一化 —— 归一化会让 `.env` 的行为
@@ -364,6 +425,29 @@ Windows 上也接受 `/`,把 prefix 传 `%HERE%` 即可,不必为 `.cmd` 再写�
 - **`-j` 并行编译的 Windows 原生实现** —— D37 退化为串行。可选增强:开发态检测到
   pwsh 时用 `Start-Job`/`Wait-Job`,但**不作为默认、不作为依赖**。
 
+## 11b. 借自 bake 的真机经验(2026-07-28)
+
+bake 在真 Windows 上跑过四轮,其 Phase L / D67–D73 的结论逐条比对过。采纳的:
+
+| bake | chandler 的处置 |
+|---|---|
+| **D68** 三层解析 | 采纳 → §3.4(**当时是 chandler 的 P0 真 bug**) |
+| **D69** 静态往返 + 动态实跑,两种验法缺一不可 | 采纳 → `cmd-c-strip` 往返测试;写进 §3.4 与 §12 |
+| **D72** 判「平台不适用」前先分清缺的是**能力**还是**某个命令** | 采纳 → `rm-rf` 删不掉那条不再跳过,Windows 侧改用「持有打开句柄」的夹具;平台门的注释里写明这条纪律 |
+| `run-all` 结尾必须报出跳过 | 采纳 → D41 |
+| `%tmp-dir` 兜底不能是 `C:\Windows\Temp`(普通账户不可写) | 采纳 → `choose-temp-dir` 改为 per-user 链,四个都没有即报错 |
+| `%mkdir-private` 在 POSIX 侧给 0700 | 采纳 → `make-temp-dir`;`run-capture` 落的是 git 输出,带凭据的 remote URL 就在其中 |
+| **D67** 平台判别看 `machine-type` 不看 `COMSPEC`/`OS` | 结论本已一致,补上更锋利的论证:**Git Bash 下父 shell 是 sh,而 Chez 的 `system` 仍走 `%COMSPEC%` 拉 cmd —— 判平台要判子进程 shell 是谁** |
+| **D70** 端到端验 argv 要用 `scheme --script` 当探针 | 结论已一致(C9 独立得出),互为佐证 |
+
+未采纳的,理由不同而非疏漏:
+
+- **`%` 的处置**:bake 在多参数形式下**拒绝**含 `%` 的参数,chandler **放行**。
+  场景不同 —— bake 引的是 recipe 作者写的命令,chandler 引的是 git URL 与路径,
+  而 `%20` 这类 URL 编码随处可见,一律拒会造出大量假阳性。取舍见 §3.3。
+- **D73**(Windows 的 broken pipe 因 `_dosmaperr` 未收录 109 而报 `invalid argument`):
+  chandler 全库没有按错误文案分派的地方,不适用。
+
 ## 12. 验证策略
 
 Windows 支持最大的风险不是写不对,而是**写完没人跑**。三层:
@@ -401,7 +485,7 @@ Windows 支持最大的风险不是写不对,而是**写完没人跑**。三层:
 | pack 版本探针的 `sh -c "… < /dev/null"` | `run-capture` 的 `(env . …)` / `(stdin . null)`;空设备名由 `fs` 的 `null-device` 按平台给出 |
 | 只在 `/bin/sh` 语义下成立的断言 | 保留,但用 `when-posix` **明确跳过**另一侧,并在注释里写明对侧由谁守 —— 跳过不是放宽 |
 
-## 12.2 native `script` 后端的 Windows 分支(D39)
+### 12.2 native `script` 后端的 Windows 分支(D39)
 
 **问题**:`run-script-backend` 原先写死 `sh <script>`。Windows 上没有 sh,于是
 声明了 `(build (script …))` 的依赖根本建不起来,报出来的还是 cmd 的一句

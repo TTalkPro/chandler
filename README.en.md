@@ -287,6 +287,8 @@ petite  --libdirs . --program tests/run-tests.sps   # same (Petite-subset check)
 skiff   --libdirs . --program tests/run-tests.sps   # same (Skiff runtime)
 ```
 
+The suite ends by **listing every skipped test with its reason** (platform gate / no compiler / no cc); the summary line reads `N passed, M failed, K skipped`. A test held back by a gate and a test that ran and passed look identical inside "N passed" — without the report, a green run on the other platform is an illusion (Petite, for instance, skips 22 compile tests).
+
 CI lives in `.github/workflows/{linux,windows}.yml`. The two are **deliberately isomorphic**: `run-tests.sps` → `bootstrap.ss` (which smoke-tests the launcher itself) → `build` + `pack` a minimal app and **actually run the launcher inside the pack**. They share one fixture, `tests/fixtures/packsmoke/`. The Linux job additionally runs the suite under Petite. Installing Chez takes a detour on both: scoop on Windows (releases only ship an installer), mise-from-source on Linux (Ubuntu ships 9.5.8, and upstream publishes no Linux binaries).
 
 `tests/chandler/launcher-parity.ss` renders **both** the sh and `.cmd` launcher families and diffs them: the sidecar path they read, how the runner path is assembled, the runtime-discovery order, and all five exit codes must match; the deliberate divergences (cmd has no `exec`; `%*` vs `"$@"`) are pinned explicitly. **It runs as part of `run-tests.sps` — no Windows and no pwsh needed.**

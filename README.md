@@ -261,6 +261,8 @@ petite  --libdirs . --program tests/run-tests.sps   # 同上(Petite 子集校验
 skiff   --libdirs . --program tests/run-tests.sps   # 同上(Skiff 运行时)
 ```
 
+套件结尾会**逐条列出被跳过的用例与原因**（平台门 / 无编译器 / 无 cc），汇总行是 `N passed, M failed, K skipped` —— 一条被门挡掉的用例和一条跑过并通过的，在「N passed」里长得一模一样，不报出来另一个平台上的绿色就是假象（例：petite 那一遍会跳过 22 条编译用例）。
+
 CI 在 `.github/workflows/{linux,windows}.yml`,两份**刻意同构**:`run-tests.sps` → `bootstrap.ss` 自举(它自带启动器冒烟)→ 最小 app 的 `build` + `pack` + **实跑包里的启动器**。夹具共用 `tests/fixtures/packsmoke/`。Linux 那份另跑一遍 Petite。装 Chez 两边都得绕一下:Windows 走 scoop(release 只挂安装器),Linux 走 mise 从源码建(Ubuntu 仓库是 9.5.8,官方 release 没有 Linux 二进制)。
 
 `tests/chandler/launcher-parity.ss` 把 sh 与 `.cmd` 两族启动器**都渲染出来对拍**:读的 sidecar 路径、runner 路径拼法、运行时发现顺序、五个退出码必须一致,刻意保留的差异(cmd 无 `exec`、`%*` vs `"$@"`)则显式钉住。**跑 `run-tests.sps` 就跑到,不需要 Windows,也不需要 pwsh。**
