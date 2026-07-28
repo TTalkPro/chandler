@@ -97,6 +97,22 @@
 (define (q s)
   (if (win?) (q-cmd s) (q-sh s)))
 
+;; `cmd /c` 的**外层**引号 —— Windows 上解析的第三层,与上面那两层无关。
+;; Chez 的 `system` 走 `%COMSPEC%`,而 `cmd /c` 在交给解析器之前先看首字符:
+;; 是引号(且不满足「恰好两个引号 + …」那个特例)就**剥掉第一个与最后一个引号**。
+;; 本文件生成的命令行都以 `(q interp)` 开头 —— 必然以引号开头,必然踩中:
+;;   "scheme" -q --libdirs "…"   →   剥成   scheme" -q --libdirs "…
+;; 多包一层,让它剥掉的正好是多加的那对。与 (chandler proc) 的 cmd-outer-quote
+;; 同语义(自包含红线要求另写一份;两份由 bootstrap-parity 逐条钉住)。
+;;
+;; 【必须作用在最终整行上】—— 出口只有下面的 `sys`,别处不许直接 `system`。
+(define (cmd-outer-quote line)
+  (if (and (> (string-length line) 0) (char=? #\" (string-ref line 0)))
+      (string-append "\"" line "\"")
+      line))
+
+(define (sys cmd) (system (if (win?) (cmd-outer-quote cmd) cmd)))
+
 (define (q-sh s)
   (let ([op (open-output-string)])
     (display #\' op)
@@ -282,7 +298,7 @@
 
 (define (run-or-die cmd what)
   (printf "bootstrap: ~a...~%" what)
-  (let ([rc (system cmd)])
+  (let ([rc (sys cmd)])
     (unless (and (fixnum? rc) (= rc 0))
       (die 70 "~a failed (exit ~a)" what rc))))
 
