@@ -1,0 +1,86 @@
+
+# Windows CI —— designs/14 §12 第 3 层,TASK.md C9 的验收关口。
+#
+# 在此之前 Windows 支持只有「平台参数化单元测试 + parity 对拍」两层:它们在 Linux
+# 上逐字断言生成的命令串与启动器模板,但**没有一行在真 Windows 上跑过**。这份
+# workflow 就是那条缺失的证据链。
+#
+# 三步,与 designs/14 §12 列的一致:
+#   ① run-tests.sps  —— 全套单测 + 端到端(C9 之后不再依赖 sh / mktemp / /tmp)
+#   ② bootstrap.ss   —— 三段式自举:源码直载 → 自托管重建 → 装到前缀并**冒烟启动器**
+#   ③ pack + 实跑    —— 打一个最小 app 出来,再真的执行包里的 .cmd 启动器
+#
+# 刻意**不给 chandler 装 cmd.exe 之外的任何东西**:产品路径只依赖 cmd.exe。
+# 这里的 pwsh 只用来驱动 CI 步骤本身(装运行时、写夹具文件),chandler 自己
+# 一律经 `bin\chandler.cmd` 或装出来的 `.cmd` 启动器调用。
+
+name: windows
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Chez >= 10.0。scoop 的 Main bucket 有维护好的 chezscheme 清单,装完
+      # `scheme` 就在 PATH 上(shim),正是启动器的运行时发现要找的名字。
+      - name: Install Chez Scheme
+        run: |
+          Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
+          Invoke-Expression "& {$(Invoke-RestMethod get.scoop.sh)} -RunAsAdmin"
+          scoop install chezscheme
+          "$env:USERPROFILE\scoop\shims" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Show runtime
+        run: |
+          scheme --version
+          cmd /c "where scheme"
+
+      # ① 全套测试。C9 之后套件里不再有 `sh -c` / `mktemp -d` / 硬编码 `/tmp`;
+      #    只在 /bin/sh 语义下才成立的断言由 when-posix 明确跳过(不是放宽)。
+      - name: Test suite
+        run: scheme --libdirs . --program tests/run-tests.sps
+
+      # ② 自举。bootstrap.ss 自己会在最后冒烟启动器(C3 起 Windows 上也真的跑,
+      #    不再是印一行提示了事),故这一步同时验了 install 态的 .cmd 启动器。
+      - name: Bootstrap into a temp prefix
+        run: scheme --script bootstrap.ss --prefix="$env:RUNNER_TEMP\chandler-prefix"
+
+      - name: Installed launcher runs
+        run: |
+          & "$env:RUNNER_TEMP\chandler-prefix\bin\chandler.cmd" --version
+          if ($LASTEXITCODE -ne 0) { throw "installed launcher exited $LASTEXITCODE" }
+
+      # ③ pack 一个最小 app,再**真的执行**包里的启动器。
+      #    夹具文件从仓库里拷,不在 YAML 里内联 —— 内联的 here-string 要同时满足
+      #    YAML 的块缩进与 PowerShell 的「终止符必须顶格」,两条规则打架,写出来
+      #    的东西没人敢改。放成真文件还顺带让它们在 Linux 上也能被跑一遍。
+      - name: Pack smoke test
+        run: |
+          $app = "$env:RUNNER_TEMP\packsmoke"
+          New-Item -ItemType Directory -Force -Path $app | Out-Null
+          Copy-Item "tests/fixtures/packsmoke/*" -Destination $app -Force
+
+          $chandler = "$env:RUNNER_TEMP\chandler-prefix\bin\chandler.cmd"
+          & $chandler -C $app build
+          if ($LASTEXITCODE -ne 0) { throw "build exited $LASTEXITCODE" }
+          & $chandler -C $app pack --name=hello --version=0.1.0 --runtime=petite
+          if ($LASTEXITCODE -ne 0) { throw "pack exited $LASTEXITCODE" }
+
+          # 包名带 machine-type 后缀,不写死 —— scoop 装的是 a6nt(非线程),
+          # 换个来源可能是 ta6nt。
+          $packed = Get-ChildItem "$app\dist" -Directory | Select-Object -First 1
+          $out = & "$($packed.FullName)\bin\hello.cmd"
+          if ($LASTEXITCODE -ne 0) { throw "packed launcher exited $LASTEXITCODE" }
+          if ($out -notmatch 'hello from pack') { throw "packed app printed: $out" }
+          Write-Host "packed launcher output: $out"

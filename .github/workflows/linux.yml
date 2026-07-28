@@ -1,0 +1,91 @@
+
+# Linux CI —— 与 `windows.yml` **同样的三步**,跑在开发主力平台上。
+#
+#   ① run-tests.sps  —— 全套单测 + 端到端
+#   ② bootstrap.ss   —— 三段式自举:源码直载 → 自托管重建 → 装到前缀并冒烟启动器
+#   ③ pack + 实跑    —— 打一个最小 app 出来,再真的执行包里的启动器
+#
+# 两个 workflow 刻意保持同构:C9 的整件事就是「同一套断言在两个平台上跑」,
+# 若 Linux 这边悄悄少跑一步,那句话就不成立了。夹具也共用
+# (`tests/fixtures/packsmoke/`),不是各写一份。
+#
+# ── 为什么装 Chez 要从源码建 ──
+#
+# Ubuntu 仓库里的 chezscheme 是 **9.5.8**,够不着 manifest 里的 `(chez ">=10.0")`;
+# 而 cisco/ChezScheme 的 release 只挂**源码** tar.gz 和一个 Windows 安装器,没有
+# Linux 二进制。于是走 mise —— 它的 chezscheme 插件下载官方 release 源码、
+# `./configure --threads && make install`,产出的正是开发者本地那份
+# (machine-type `ta6le`,与 README 推荐的 `mise use chezscheme` 同一条路)。
+# mise-action 默认缓存 ~/.local/share/mise,故只有版本变了才重建一次。
+
+name: linux
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Chez 从源码建的两个头文件依赖(BUILDING §PREREQUISITES:ncurses + X11)。
+      # 不用 --disable-curses / --disable-x11 把它们绕开 —— 那样建出来的运行时
+      # 就和开发者本地那份不是同一个配置了,而 CI 的意义正在于跑同一份东西。
+      - name: Chez build prerequisites
+        run: sudo apt-get update && sudo apt-get install -y libncurses-dev libx11-dev
+
+      - uses: jdx/mise-action@v2
+        with:
+          mise_toml: |
+            [tools]
+            chezscheme = "10.4.1"
+
+      - name: Show runtime
+        run: |
+          scheme --version
+          petite --version
+
+      # ① 全套测试。
+      - name: Test suite (Chez)
+        run: scheme --libdirs . --program tests/run-tests.sps
+
+      # Petite 没有编译器,要编译的用例由 when-compiler **跳过**而不是放宽断言。
+      # 仍然值得跑:README 把 petite 列为跑套件的方式之一,而「跳过」这件事本身
+      # 也会坏 —— 一条本该跳过的用例若在 petite 上跑起来,就是 compiler-available?
+      # 判错了,只有真在 petite 上跑才看得见。
+      - name: Test suite (Petite)
+        run: petite --libdirs . --program tests/run-tests.sps
+
+      # ② 自举(最后一段会冒烟启动器)。
+      - name: Bootstrap into a temp prefix
+        run: scheme --script bootstrap.ss --prefix="$RUNNER_TEMP/chandler-prefix"
+
+      - name: Installed launcher runs
+        run: "$RUNNER_TEMP/chandler-prefix/bin/chandler --version"
+
+      # ③ pack 一个最小 app,再**真的执行**包里的启动器。
+      #    夹具与 windows.yml 共用 —— 两边打的是同一个包。
+      - name: Pack smoke test
+        run: |
+          set -eu
+          app="$RUNNER_TEMP/packsmoke"
+          mkdir -p "$app"
+          cp tests/fixtures/packsmoke/* "$app/"
+
+          chandler="$RUNNER_TEMP/chandler-prefix/bin/chandler"
+          "$chandler" -C "$app" build
+          "$chandler" -C "$app" pack --name=hello --version=0.1.0 --runtime=petite
+
+          # 包名带 machine-type 后缀,不写死
+          packed=$(find "$app/dist" -mindepth 1 -maxdepth 1 -type d | head -1)
+          out=$("$packed/bin/hello")
+          echo "packed launcher output: $out"
+          case "$out" in
+            *"hello from pack"*) ;;
+            *) echo "unexpected output from packed app: $out" >&2; exit 1 ;;
+          esac
