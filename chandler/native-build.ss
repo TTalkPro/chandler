@@ -17,6 +17,9 @@
   (export native-task native-task*
           native-owner-segs native-soname-of native-fingerprint toolchain-id
           run-native-backend chez-include-dir
+          ;; script 后端的两个**纯**部件:导出供平台参数化测试逐字断言
+          ;; (`windows-shell?` 是 parameter,于是 cmd 那半边在 Linux 上也跑得到)
+          pick-script script-command
           native-gen-dir native-loader-source
           record-native-loader! emit-native-loaders! prescan-native-loaders!
           install-native-hooks! reset-native-state!)
@@ -50,8 +53,10 @@
     (cond
       ((getenv* "CHEZ_INCLUDE_DIR") => validated)
       (else
+       ;; C9:`command -v` 是 POSIX shell 内建,Windows 上没有。proc 的 `which`
+       ;; 是同一件事的单一出处(那边按平台走 `command -v` / `where.exe`)。
        (let* ((rt  (worker-runtime))
-              (exe (guard (e (#t "")) (string-trim (run/capture "command -v" (shq rt))))))
+              (exe (or (guard (e (#t #f)) (which rt)) "")))
          (when (string=? exe "")
            (bail-config "cannot locate `~a` on PATH to derive CHEZ_INCLUDE (set CHEZ_INCLUDE_DIR)" rt))
          ;; <...>/bin/scheme → <...>/lib/csv<ver>/<mt>/
@@ -68,7 +73,10 @@
   ;;     (lib chez-async)              ; **所属库** —— native 嵌在它下面;
   ;;                                   ; 默认 (symbol->string name)(独立)
   ;;     (dir "native/async")          ; 源码目录;默认 "native/<name>"
-  ;;     (build (script "build.sh"))   ; 后端:(script "x") | make | (cmake …)
+  ;;     (build (script "build.sh"))   ; 后端:(script "x" …) | make | (cmake …)
+  ;;                                   ; script 可列多份,按平台挑能跑的那个:
+  ;;                                   ; (script "build.sh" "build.cmd") 两边都能建
+  ;;                                   ; (见下面 run-script-backend 的注释)
   ;;     (chez-api #t)                 ; 默认 #f(Model A);#t → 注入 CHEZ_INCLUDE
   ;;     (produces "async"))           ; soname;默认 (symbol->string name)
   ;;
@@ -151,16 +159,25 @@
   ;; 清掉它等于没缓存;而「同一进程内工具链换了」不是真实场景。
   (define toolchain-cache (make-hashtable string-hash string=?))
 
+  ;; `<prog> --version` 的首行。**不再拼 `2>/dev/null | head -1`** —— 那是 POSIX
+  ;; shell 的写法,Windows 上 `/dev/null` 不是路径、`head` 不是程序,于是整条命令
+  ;; 失败、被 guard 吞成 ""。后果不是崩,是**指纹里的工具链分量恒为空**:换了
+  ;; 编译器也不会让 native 产物失效 —— 正是本函数存在的理由被静默取消。
+  ;; run-capture 本来就把 stderr 分开捕获(不需要 2>),首行在 Scheme 里取。
+  (define (first-line s)
+    (let ([i (char-index s #\newline)])
+      (string-trim (if i (substring s 0 i) s))))
+
   (define (toolchain-id build)
-    (define (ver cmd) (guard (e (#t "")) (string-trim (run/capture cmd))))
+    (define (ver prog) (guard (e (#t "")) (first-line (proc-result-out (run-capture prog '("--version"))))))
     (let ([key (datum->string build)])
       (or (hashtable-ref toolchain-cache key #f)
           (let ([id (sha256-string
                       (string-append
-                        "cc\n"   (ver "cc --version 2>/dev/null | head -1")
+                        "cc\n"   (ver "cc")
                         "\nbk\n" (cond ((and (pair? build) (eq? (car build) 'cmake))
-                                        (ver "cmake --version 2>/dev/null | head -1"))
-                                       ((eq? build 'make) (ver "make --version 2>/dev/null | head -1"))
+                                        (ver "cmake"))
+                                       ((eq? build 'make) (ver "make"))
                                        (else ""))))])
             (hashtable-set! toolchain-cache key id)
             id))))
@@ -185,7 +202,8 @@
     (let ((inc (and chez-api (chez-include-dir))))
       (cond
         ((and (pair? build) (eq? (car build) 'script))
-         (run-script-backend dir (cadr build) landing inc))
+         ;; (cdr build) —— `(script "a")` 与 `(script "a" "b")` 同一条路径
+         (run-script-backend name dir (cdr build) landing inc))
         ((eq? build 'make)
          (run-make-backend dir landing inc))
         ((and (pair? build) (eq? (car build) 'cmake))
@@ -199,29 +217,91 @@
     ;; 记下指纹,于是下次运行会跳过没变的构建(designs/07 —— 与 compile-lib 同招)。
     (hashtable-set! fp-manifest target (fingerprint-of target)))
 
-  ;; script 后端(designs/20 §script 后端:环境契约):在包源码目录里跑脚本,带上
-  ;; NATIVE_OUT/MACHINE_TYPE/SOEXT [+ CHEZ_INCLUDE]。环境前缀用 (chandler proc)
-  ;; 的 env-prefix(它跳过值为 #f 的项,正是 CHEZ_INCLUDE 可选所需)。
+  ;; ────────────────────────────────────────────────────────────────────
+  ;; script 后端:环境契约 + **平台派发**
+  ;;
+  ;; 在包源码目录里跑脚本,带上 NATIVE_OUT / MACHINE_TYPE / SOEXT [+ CHEZ_INCLUDE]。
+  ;; 环境前缀走 (chandler proc) 的 env-prefix(它跳过值为 #f 的项,正是
+  ;; CHEZ_INCLUDE 可选所需),cwd 前缀走 cd-prefix(Windows 上要 `cd /d`)。
+  ;;
+  ;; ── 为什么 `(script …)` 收**多个**脚本 ──
+  ;;
+  ;; 脚本是**用别的语言写的**,而那门语言的解释器两个平台不一样:POSIX 上是
+  ;; `sh`,Windows 上只有 `cmd.exe`(装没装 sh 不在我们的假设里,designs/14 §1)。
+  ;; 一个包要想两边都能建,就得两边各带一份脚本 —— 这是事实,不是我们造出来的
+  ;; 复杂度。于是:
+  ;;
+  ;;     (build (script "build.sh"))                ; 只在 POSIX 上能建
+  ;;     (build (script "build.sh" "build.cmd"))    ; 两边都能建
+  ;;
+  ;; 按**扩展名**挑第一个本平台能跑的:
+  ;;   • Windows:`.cmd` / `.bat`(大小写不敏感),用 `call` 起 —— 不带 `call`
+  ;;     调另一个批处理时控制权不返回,后面的命令不会执行、errorlevel 也不回传
+  ;;   • POSIX:除 `.cmd` / `.bat` 之外的一律交 `sh`。**刻意不要求 `.sh`** ——
+  ;;     现存的包写 `(script "build")` / `"mk.bash"` 都是合法的,收紧扩展名等于
+  ;;     无端把它们判死
+  ;;
+  ;; 挑不出来 → **config 错**,当场说清该加什么。先前是无条件 `sh <script>`:
+  ;; Windows 上 cmd 报一句「'sh' 不是内部或外部命令」,而那句话既不提 native-task
+  ;; 也不提该怎么办。
+  ;;
+  ;; 多带一个脚本会改 native-fingerprint(build 声明进哈希)—— 这是对的:构建
+  ;; 描述变了,依赖的 `--allow-build` 授权本就该重新确认(designs/07)。
+  ;; ────────────────────────────────────────────────────────────────────
 
-  (define (run-script-backend dir script landing inc)
-    (let ((cmd (string-append
-                 "cd " (shq dir) " && "
-                 (env-prefix (list (cons "NATIVE_OUT"   (%abs landing))
-                                   (cons "MACHINE_TYPE" (current-machine-type))
-                                   (cons "SOEXT"        (so-ext))
-                                   (cons "CHEZ_INCLUDE" inc)))
-                 "sh " (shq script))))
-      (unless (*quiet*)
-        (display "native: script ") (display dir) (display "/") (display script) (newline))
-      (let ((rc (system cmd)))
-        (unless (= rc 0)
-          (bail-exec "native script backend failed (exit ~a): ~a" rc cmd)))))
+  ;; cmd.exe 认得的批处理扩展名(大小写不敏感)
+  (define (batch-script? path)
+    (let ((e (path-ext path)))
+      (and e (let ((l (string-downcase e)))
+               (or (string=? l "cmd") (string=? l "bat"))))))
+
+  (define (script-runnable? path)
+    (if (windows-shell?) (batch-script? path) (not (batch-script? path))))
+
+  (define (pick-script scripts)
+    (cond ((null? scripts) #f)
+          ((script-runnable? (car scripts)) (car scripts))
+          (else (pick-script (cdr scripts)))))
+
+  ;; 纯字符串:生成要交给 shell 的整条命令。**导出供平台参数化测试逐字断言** ——
+  ;; Windows 那半边(`cd /d` + `set "K=v" &&` + `call`)在 Linux 上就能验,
+  ;; 不这么做它在 CI 里等于从来没被执行过(与 proc 的引用层同一条纪律)。
+  (define (script-command dir script landing inc)
+    (string-append
+      (cd-prefix dir)
+      (env-prefix (list (cons "NATIVE_OUT"   (%abs landing))
+                        (cons "MACHINE_TYPE" (current-machine-type))
+                        (cons "SOEXT"        (so-ext))
+                        (cons "CHEZ_INCLUDE" inc)))
+      (if (windows-shell?) "call " "sh ")
+      (shq script)))
+
+  (define (run-script-backend name dir scripts landing inc)
+    (let ((script (pick-script scripts)))
+      (unless script
+        (bail-config
+          (string-append
+            "native-task ~a: no build script runnable on this platform\n"
+            "  declared: ~a\n"
+            "  ~a\n"
+            "  fix: ship both and declare (build (script \"build.sh\" \"build.cmd\"))")
+          (symbol->string name)
+          (if (null? scripts) "(none)" (string-join scripts " "))
+          (if (windows-shell?)
+              "on Windows the script backend runs .cmd / .bat via cmd.exe -- there is no sh"
+              "on POSIX the script backend runs the script with sh -- .cmd / .bat are not runnable")))
+      (let ((cmd (script-command dir script landing inc)))
+        (unless (*quiet*)
+          (display "native: script ") (display dir) (display "/") (display script) (newline))
+        (let ((rc (system cmd)))
+          (unless (= rc 0)
+            (bail-exec "native script backend failed (exit ~a): ~a" rc cmd))))))
 
   ;; make 后端:autotools 的 DESTDIR/PREFIX 都指向落点目录。
   (define (run-make-backend dir landing inc)
     (let ((abs (%abs landing)))
       (let ((cmd (string-append
-                   "cd " (shq dir) " && "
+                   (cd-prefix dir)        ; 同上:单一出处在 proc 的 cd-prefix
                    ;; autotools 契约(PREFIX/DESTDIR)+ 与 script 后端同样的
                    ;; MACHINE_TYPE/SOEXT,好让 Makefile 可移植地命名输出
                    ;; (.so/.dylib/.dll)。
