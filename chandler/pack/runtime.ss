@@ -84,11 +84,11 @@
            [probe (join-paths dir "probe.ss")])
       (ensure-dir dir)
       (write-text probe skiff-probe-src)
-      (let* ([r (run-capture "sh"
-                             (list "-c"
-                                   (string-append "SKIFF_QUIET=1 " (shell-quote exe)
-                                                  " --script " (shell-quote probe)
-                                                  " < /dev/null")))]
+      ;; C9:先前是自己拼一条 `sh -c "SKIFF_QUIET=1 … < /dev/null"`。改走 run-capture
+      ;; 的 env / stdin 选项 —— 环境注入与空设备名两个平台各不相同,单一出处在 proc。
+      (let* ([r (run-capture exe (list "--script" probe)
+                             (list (cons 'env '(("SKIFF_QUIET" . "1")))
+                                   (cons 'stdin 'null)))]
              [v (version-token (proc-result-out r))])
         (rm-rf dir)
         (unless (has-digit? v)
@@ -100,8 +100,10 @@
   ;; 被捆 Chez 的版本号(不是跑 chandler 的那一份 —— chandler 可能跑在 skiff 上,
   ;; 而 PATH 上的 `scheme` 未必同版本)。`scheme --version` 把版本印到 stderr。
   (define (probe-chez-version exe)
-    (let* ([r (run-capture "sh"
-                           (list "-c" (string-append (shell-quote exe) " --version 2>&1 < /dev/null")))]
-           [v (version-token (proc-result-out r))])
+    ;; `--version` 印在 **stderr** 上 —— 先前靠 `2>&1` 合流,现在 run-capture 本来
+    ;; 就把两股分开捕获,直接两股都看(顺序:先 stdout,空则退 stderr)。
+    (let* ([r (run-capture exe '("--version") '((stdin . null)))]
+           [v (let ([o (version-token (proc-result-out r))])
+                (if (has-digit? o) o (version-token (proc-result-err r))))])
       (if (has-digit? v) v (chez-version-string))))
   )

@@ -100,5 +100,5 @@
           (write-text-crlf (join-paths bindir (string-append app ".cmd")) cmd)
           (let ([f (join-paths bindir app)])
             (write-text f sh)
-            (run-status "chmod" (list "+x" f))))))
+            (make-executable! f)))))      ; C9:先前是 `chmod +x` 子进程
   )
