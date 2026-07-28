@@ -4,10 +4,11 @@
 基线版本：0.1.6（d4965cf）。
 
 - **A / B 部分**（算法性能、公共代码提取）：已完成，见 [完成情况](#完成情况)。
-- **C 部分**（Windows 可移植性）：**C1–C8 已完成，只剩 C9**（测试套件去 shell
-  依赖 + Windows CI）。设计见
+- **C 部分**（Windows 可移植性）：**C1–C8、C10 完成；C9 的套件侧完成，
+  两份 CI workflow 已写但都没在 GitHub Actions 上跑过**（Linux 那份的每一步
+  在本机原样验过，Windows 那份一步也没跑过）。设计见
   [designs/14-windows-portability.md](designs/14-windows-portability.md)，
-  编号与该文 §13 的落地顺序一一对应。
+  编号与该文 §13 的落地顺序一一对应（C10 = §13 第 8 步）。
   **在 C9 跑绿前，Windows 支持一律标注「未验证」** —— 已落地的部分由平台参数化
   测试在 Linux 上逐字断言，但没有一行在真 Windows 上跑过。
 
@@ -459,17 +460,114 @@ cmd 的 `where <cand>` 行）。
       Ctrl+C 的 `Terminate batch job (Y/N)?`
 - [x] 从旧版升级的说明（重装一次换成 `.cmd`；`uninstall` 会清 `.ps1`）
 - [x] 两个 README 里对已删文件 `tests/powershell-run.sh` 的引用 → launcher-parity
-- [ ] **留给 C5/C7**：`-j` 在 Windows 退化为串行的说明（D37 还没实现，
-      现在写上去就是提前描述一个不存在的行为）
+- [x] `-j` 在 Windows 退化为串行的说明（D37）：C5 落地后补上，两个 README 的
+      「Windows 已知限制」各加一段 —— 退化是**有提示**的（`compile.ss:640`
+      在 `-j N>1` 且非 quiet 时打一行 stderr），构建结果与串行一致
 
-### C9. 测试套件去 shell 依赖 + Windows CI
-> 设计 §12。**前面所有工作的验收关口** —— 不做这步，Windows 支持就是「没人跑过」。
+### C9. 测试套件去 shell 依赖 + CI ⚠️ 套件侧已完成，Windows CI 尚未跑绿
+> 设计 §12 / §12.1。**前面所有工作的验收关口** —— 不做这步，Windows 支持就是「没人跑过」。
 
-- [ ] 测试套件里的 `sh -c` / `/tmp` 硬编码抽象掉
-      （`tests/chandler/proc.ss`、`cli.ss:367`、`sexp.ss:10`、`lock.ss:56`、
-      `registry.ss:296`、`registered.ss:219`）
-- [ ] Windows CI：跑 `bootstrap.ss` + `run-tests.sps` + 一次 `pack` 后实跑
-- [ ] CI 绿之前，README / 设计文档里 Windows 支持一律标注「未验证」
+- [x] **临时目录去子进程**：`make-temp-dir` 从 `proc.ss` 下移到 `fs.ss`（它一次子进程
+      都不起），harness 加 `mktmp` 统一「造 + 登记」。两处 `mktemp -d` 子进程下线 ——
+      那个程序 Windows 上没有，失败时还静默返回空串（于是夹具把内容写进仓库根）
+- [x] **硬编码 `/tmp` 清掉**：`sexp.ss`（还是个从来没人清的固定文件名）与 `lock.ss`
+      改为每用例一个临时目录；`registry.ss:296` / `registered.ss:219` 是**纯字符串**
+      （一次也不落盘），字面量改成不像临时目录的形状 + 注释说明，免得下一个人
+      以为那里需要一个真存在的路径
+- [x] **端到端探针换成 Scheme 运行时本身**（harness 的 `run-probe`）：`sh -c` /
+      `echo` / `pwd` / `true` / `false` 在 Windows 上一个都没有，而换成批处理也不行
+      —— cmd 的 `%*` 给的是**原始命令行尾部**（我们加的引号还在）、`%1` 又脱一层
+      引号，两者都证明不了「参数原样进了 argv」，而那恰恰是 `cmd-quote` 要保证的事。
+      `proc` 的 argv / env / cwd / stderr / 退出码五条端到端**两平台都跑**
+- [x] **启动器端到端两族共用**：`cli.ss` 的 5 条 shim 用例按平台渲染 sh 或 `.cmd`
+      并实跑，差异只在夹具函数里。模板对拍证明不了 `set /p ACTIVE=<file` 真能读出
+      版本号，正如它也证明不了 `IFS= read -r`
+- [x] **只在 sh 语义下成立的断言用 `when-posix` 明确跳过**（不是放宽），并在注释里
+      写明对侧由谁守：`bootstrap-parity` 穿 sh 那条、`proc` 的单引号不展开两条、
+      `fs` 的「用目录 w 位造一个删不掉的文件」那条
+- [x] **顺带收口的 shell-out**（生产侧，同一类问题）：三处 `chmod +x` 子进程 →
+      `fs` 的 `make-executable!`；`mkdir -p` → `ensure-dir`；native-build 的
+      `command -v` → `proc` 的 `which`、两处手拼 `cd X && ` → `cd-prefix`
+      （Windows 上要 `cd /d`，漏了会静默不切盘）；pack 两个版本探针的
+      `sh -c "… < /dev/null"` → `run-capture` 的 `(env . …)` / `(stdin . null)`，
+      空设备名由 `fs` 的 `null-device` 按平台给出
+- [x] 新增 5 条测试（579 → 584）：`make-temp-dir` 唯一且可写、`null-device` 的平台
+      形态、`make-executable!` 的 x 位与 Windows 空操作、stdin 重定向接文件、
+      `'null` 解析成空设备
+- [x] **验证非空转**：三处故意分叉各自变红 —— `sh-quote` 退回双引号（新端到端
+      用例全红）、`make-executable!` 变空操作、stdin 选项不接线。
+      `null-device` 那条只有在 Windows 上才验得到 Windows 分支，
+      **没有假装它在 Linux 上也被验过**
+- [x] Windows CI：`.github/workflows/windows.yml` —— scoop 装 Chez → `run-tests.sps`
+      → `bootstrap.ss --prefix=…`（它自带启动器冒烟）→ 装出来的 `.cmd` 实跑 →
+      最小 app 的 `build` + `pack` + **执行包里的 `.cmd`**。pack 那步的夹具放在
+      `tests/fixtures/packsmoke/`（真文件，不内联进 YAML —— here-string 要同时满足
+      YAML 的块缩进和 PowerShell 的「终止符顶格」，两条规则打架），整条命令序列
+      先在 Linux 上原样跑通过再写进 workflow
+- [x] Linux CI：`.github/workflows/linux.yml` —— **与 Windows 那份同构的三步**，
+      外加一遍 Petite（README 把它列为跑套件的方式之一；而「跳过」这件事本身也会坏 ——
+      一条本该被 `when-compiler` 跳过的用例若在 Petite 上跑起来，就是
+      `compiler-available?` 判错了，只有真在 Petite 上跑才看得见）。
+      两个 workflow 共用 `tests/fixtures/packsmoke/` 夹具，不各写一份 ——
+      C9 的整件事就是「同一套断言在两个平台上跑」，Linux 这边悄悄少跑一步，
+      那句话就不成立了
+- [x] **Linux 装 Chez 只能从源码建**：Ubuntu 仓库里的 chezscheme 是 **9.5.8**、
+      够不着 `(chez ">=10.0")`，而 cisco/ChezScheme 的 release 只挂**源码** tar.gz
+      和一个 Windows 安装器，没有 Linux 二进制。走 mise（它的 chezscheme 插件下载
+      官方源码 `./configure --threads && make install`）—— 产出的正是开发者本地
+      那份（`ta6le`，README 推荐的 `mise use chezscheme` 同一条路）。
+      `--disable-curses` / `--disable-x11` **刻意不用**：那样建出来就不是同一个配置，
+      而 CI 的意义正在于跑同一份东西；改为装 `libncurses-dev` / `libx11-dev`
+      （Chez `BUILDING` §PREREQUISITES 的两条）。mise-action 默认缓存装好的树
+- [x] CI 绿之前，两个 README / 设计文档里 Windows 支持一律标注「未验证」
+
+**两份 workflow 的验证程度不一样，别混为一谈**：
+
+- **Linux 那份逐步在本机原样跑过**（三步 + Petite 那遍 + `set -eu` 的失败分支），
+  唯二没跑的是 `apt-get` 与 `mise-action` 这两个装环境的步骤
+- **Windows 那份一步也没跑过** —— 我没法从这里执行它。第一次推上去多半要调 scoop
+  那一步（Windows runner 上装 Chez 的方式）。**在它绿之前，Windows 支持照旧标
+  「未验证」**，C9 的验收那一半仍然欠着
+
+### C10. native `script` 后端的 Windows 分支（D39）✅ 已完成
+> 设计 §12.2。C9 收尾时点出的缺口，单独做掉。
+
+**问题**：`run-script-backend` 写死 `sh <script>`。Windows 上没有 sh，于是声明了
+`(build (script …))` 的依赖根本建不起来，而报出来的还是 cmd 的一句
+「'sh' 不是内部或外部命令」—— 既不提 native-task，也不提该怎么办。
+
+**为什么不能只换个解释器**：脚本是**用别的语言写的**，`sh build.sh` 换成
+`cmd /c build.sh` 不会让 sh 脚本变得能跑；要求 Windows 用户装 sh 又和「只依赖
+cmd.exe」的底线冲突。**一个包要两边都能建，就得两边各带一份脚本 —— 这是事实，
+不是我们造出来的复杂度。**
+
+- [x] `(script …)` 收**一个或多个**脚本，按扩展名挑第一个本平台能跑的：
+      Windows 认 `.cmd` / `.bat`（大小写不敏感）用 `call` 起；POSIX **除**这两者
+      之外一律交 `sh`。`(build (script "build.sh" "build.cmd"))` 两边都能建
+- [x] **`call` 不能省**：cmd 里不带 `call` 调另一个批处理时控制权**不返回** ——
+      后面的命令不执行、errorlevel 也不回传。这类问题不会崩，只会让失败的构建
+      看起来成功了
+- [x] **POSIX 侧刻意不要求 `.sh`**：现存的包写 `(script "build")` / `"mk.bash"`
+      都合法，收紧扩展名等于无端把它们判死。只排除 `.cmd` / `.bat` 就够
+- [x] 挑不出来 → **config 错**，当场说清本平台认什么、该补什么，而不是把命令
+      扔给 shell 让它用自己的话报错
+- [x] **顺带修掉一处静默失效**：`toolchain-id` 用
+      `cc --version 2>/dev/null | head -1` 取工具链版本 —— 那是 POSIX shell 写法，
+      Windows 上 `/dev/null` 不是路径、`head` 不是程序，整条命令失败后被 guard
+      吞成 `""`。于是**指纹里的工具链分量恒为空**：换了编译器也不会让 native 产物
+      失效，而这个函数存在的唯一理由就是那个。改走 `run-capture` + 在 Scheme 里
+      取首行；**逐字节比对过 POSIX 上结果不变**，故已有指纹不失效、不触发重建
+- [x] `pick-script` / `script-command` 都是纯函数并导出，两侧用 `windows-shell?`
+      参数化在 Linux 上逐字断言（`cd /d` / `set "K=v" &&` / `call` 三处差异）
+- [x] 夹具的 native 依赖同时带 `build.sh` 与 `build.cmd`，于是 build / pack 的
+      native 端到端用例**两平台跑同一组断言** —— C9 里加的那道 `when-native-script`
+      POSIX 门随之删掉
+- [x] 测试 584 → 589（5 条）；`scheme` / `petite` / `skiff` 三个运行时都跑
+- [x] **验证非空转**：三处故意分叉 —— Windows 分支退回 `sh`、挑脚本不看平台、
+      挑不出来时不报错。**第三处第一次没变红**：后端跑完还有一道「产物在不在
+      落点」的核验，那条也会抛，于是 `assert-raises` 被它喂饱了。改成断言
+      **stderr 里的诊断文本**（说清了平台、声明了什么、该补什么）之后才真的
+      红 —— 一条只看「抛没抛」的用例，在有第二个抛点的地方等于没写
 
 ### C 部分的验证纪律
 

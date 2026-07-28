@@ -1,10 +1,11 @@
 # 14 — Windows 可移植性
 
 > 状态: **代码侧已完成,尚未在 Windows 上验证**。本文是 Windows 支持的权威设计。
-> D33–D38 **全部落地**(TASK.md 的 C1–C8);只剩 **C9**:测试套件去 shell 依赖
-> \+ Windows CI。
+> D33–D39 **全部落地**(TASK.md 的 C1–C10),测试套件也已去掉 shell 依赖(§12.1);
+> 只剩 **Windows CI 跑绿**这一步 —— workflow 已写(`.github/workflows/windows.yml`),
+> 但没有在 GitHub Actions 上执行过。
 >
-> **在 C9 跑绿前,Windows 支持一律标注「未验证」。** 已落地的部分由平台参数化
+> **在 CI 跑绿前,Windows 支持一律标注「未验证」。** 已落地的部分由平台参数化
 > 测试在 Linux 上逐字断言(cmd 引用规则另与 MSVCRT 参考实现交叉验证过),
 > 但**没有一行在真 Windows 上跑过**。少数条目连断言都做不到 ——
 > 比如「Windows 的 rename 不覆盖既有目标」,POSIX 上把补丁去掉测试照样绿,
@@ -68,7 +69,7 @@
 - NTFS 大小写不敏感:registry 里 `Foo` 与 `foo` 撞同一目录;库名叫 `aux`/`con`/`nul`/`prn` 造不出文件。
 - `fetch.ss:24` `default-cache-root` 落到 `%USERPROFILE%\.cache`,不合 Windows 惯例(`registry.ss` 已区分,cache 没有)。
 - Windows 环境变量大小写不敏感,`.env` 的键与 `getenv` 查找可能对不上。
-- 测试套件自身用 `sh -c` / `/tmp`(`tests/chandler/proc.ss`、`cli.ss:367`、`sexp.ss:10` 等)—— 即使核心修好,**Windows 上也无回归防线**。
+- ✅ 测试套件自身用 `sh -c` / `/tmp`(`tests/chandler/proc.ss`、`cli.ss:367`、`sexp.ss:10` 等)—— 即使核心修好,**Windows 上也无回归防线**。已清理,见 §12.1。
 
 ## 3. 关键约束(实测)
 
@@ -129,6 +130,7 @@ Chez 的 `system` 走 `%COMSPEC%`,即 `cmd.exe`。所以:
 | **D36** | 路径原语同时认 `/` 与 `\`,单一出处 | P1-1 是**静默**错误(清单内容悄悄变错),比崩溃更危险 |
 | **D37** | `-j` 并行编译在 Windows 上**退化为串行 + 明确提示** | `run-chunk` 的 sh 脚本是在补 Chez 缺失的「等多个子进程」原语;cmd 没有等价物。`-j` 是开发者便利,不值得为它引入 pwsh 依赖(可选增强见 §8.4) |
 | **D38** | 跨平台字节一致性靠 `.gitattributes` + 二进制写,而非 hash 时归一化 | 归一化会让 hash 不再是「文件真实内容的指纹」,verify 的语义就废了。源头钉死换行才是对的 |
+| **D39** | native 的 `(script …)` 收**多个**脚本,按扩展名挑本平台能跑的 | 脚本是用别的语言写的,解释器两个平台不一样(sh / cmd)。要两边都能建就得两边各带一份 —— 这是事实,不是我们造出来的复杂度。挑不出来即 config 错(§12.2) |
 
 ## 5. 子进程层(D33)—— ✅ 已实现
 
@@ -372,8 +374,81 @@ Windows 支持最大的风险不是写不对,而是**写完没人跑**。三层:
 2. **launcher parity 测试**:照 `bootstrap-parity` / `pack-verifier-parity` 的模式,
    渲染 sh 与 cmd 两份,解析出 (registry 路径, runner 路径, runtime 候选序,
    五个退出码) 五元组并断言一致。**必须验证非空转** —— 故意制造分叉,确认它会红。
-3. **Windows CI**:至少跑 `bootstrap.ss` + `run-tests.sps` + 一次 `pack` 后的实跑。
-   在此之前,Windows 支持一律标注为「未验证」。
+3. **CI**:至少跑 `bootstrap.ss` + `run-tests.sps` + 一次 `pack` 后的实跑。
+   `.github/workflows/{linux,windows}.yml` **刻意同构** —— 本节的整个主张就是
+   「同一套断言在两个平台上跑」,少跑一步那句话就不成立。Linux 那份另加一遍
+   Petite(「跳过」本身也会坏:一条本该被 `when-compiler` 跳过的用例若在 Petite
+   上跑起来,就是 `compiler-available?` 判错了)。
+   **Windows 那份跑绿之前,Windows 支持一律标注为「未验证」。**
+
+   装运行时两边都不容易,理由不同:Windows 上 release 只有安装器(走 scoop);
+   Linux 上 Ubuntu 仓库的 chezscheme 是 9.5.8、够不着 `>=10.0`,而官方 release
+   **没有 Linux 二进制**,只能从源码建(走 mise 的 chezscheme 插件,
+   `./configure --threads`,产出的就是开发者本地那份 `ta6le`)。
+
+### 12.1 测试套件自身的 shell 依赖(C9)—— ✅ 已清理
+
+第 1、2 层都跑在 `run-tests.sps` 里,于是**套件自己不能依赖 POSIX 工具**,
+否则第 3 层根本起不来。清掉的与保留的:
+
+| 原来 | 现在 |
+|------|------|
+| 夹具的 `mktemp -d` 子进程(两处) | `(chandler fs)` 的 `make-temp-dir`,由 harness 的 `mktmp` 统一登记清理 |
+| 硬编码 `/tmp/…`(sexp / lock) | 每用例一个临时目录;纯字符串用的字面量改成不像临时目录的形状,免得被当成需要真存在的路径 |
+| `sh -c` + `echo` / `pwd` / `true` / `false` 做端到端 | **探针程序 = Scheme 运行时本身**(harness 的 `run-probe`)。它两平台都在,且按各自规则解析 argv —— 批处理做不到:cmd 的 `%*` 给的是原始命令行尾部(引号还在),`%1` 又脱一层引号,两者都证明不了 argv 里到底是什么 |
+| `chmod +x` / `mkdir -p` 子进程 | `fs` 的 `make-executable!` / `ensure-dir`(生产侧三处 `chmod +x` 也一并收口) |
+| `command -v`(native-build 的 include 探测) | `proc` 的 `which`(按平台走 `command -v` / `where.exe`) |
+| pack 版本探针的 `sh -c "… < /dev/null"` | `run-capture` 的 `(env . …)` / `(stdin . null)`;空设备名由 `fs` 的 `null-device` 按平台给出 |
+| 只在 `/bin/sh` 语义下成立的断言 | 保留,但用 `when-posix` **明确跳过**另一侧,并在注释里写明对侧由谁守 —— 跳过不是放宽 |
+
+## 12.2 native `script` 后端的 Windows 分支(D39)
+
+**问题**:`run-script-backend` 原先写死 `sh <script>`。Windows 上没有 sh,于是
+声明了 `(build (script …))` 的依赖根本建不起来,报出来的还是 cmd 的一句
+「'sh' 不是内部或外部命令」—— 既不提 native-task,也不提该怎么办。
+
+**为什么不能只换个解释器**:脚本是**用别的语言写的**,而那门语言的解释器两个
+平台不一样。`sh build.sh` 换成 `cmd /c build.sh` 不会让 sh 脚本变得能跑;要求
+Windows 用户装 sh 又和 §1 的底线("只依赖 cmd.exe")冲突。**一个包要两边都能建,
+就得两边各带一份脚本 —— 这是事实,不是我们造出来的复杂度。**
+
+**D39**:`(script …)` 收**一个或多个**脚本,按扩展名挑第一个本平台能跑的。
+
+```scheme
+(build (script "build.sh"))                ; 只在 POSIX 上能建
+(build (script "build.sh" "build.cmd"))    ; 两边都能建
+```
+
+| | 可跑的扩展名 | 起法 |
+|---|---|---|
+| Windows | `.cmd` / `.bat`(大小写不敏感) | `call <script>` |
+| POSIX | **除** `.cmd` / `.bat` 之外的一律可跑 | `sh <script>` |
+
+三条取舍,都有理由:
+
+- **`call` 不能省**:cmd 里不带 `call` 调另一个批处理时,控制权**不返回** ——
+  后面的命令不执行,errorlevel 也不回传。这类问题不会崩,只会让失败的构建
+  看起来成功了。
+- **POSIX 侧刻意不要求 `.sh`**:现存的包写 `(script "build")` / `"mk.bash"`
+  都是合法的,收紧扩展名等于无端把它们判死。只排除 `.cmd` / `.bat` 就够 ——
+  它们在多脚本声明里必须让位给 sh 那份。
+- **挑不出来 → config 错,当场说清该加什么**,而不是把命令扔给 shell 让它
+  用自己的话报错。
+
+**连带**:多带一个脚本会改 `native-fingerprint`(build 声明进哈希)。这是对的 ——
+构建描述变了,依赖的 `--allow-build` 授权本就该重新确认(designs/07)。
+
+**同一处顺带修掉的静默失效**:`toolchain-id` 原先用
+`cc --version 2>/dev/null | head -1` 取工具链版本。那是 POSIX shell 的写法 ——
+Windows 上 `/dev/null` 不是路径、`head` 不是程序,整条命令失败后被 guard 吞成 `""`。
+于是**指纹里的工具链分量恒为空**:换了编译器也不会让 native 产物失效,而
+这个函数存在的唯一理由就是那个。改走 `run-capture`(stderr 本就分开捕获,
+不需要 `2>`)+ 在 Scheme 里取首行;POSIX 上逐字节同结果,故已有指纹不失效。
+
+**验证**:`pick-script` / `script-command` 都是纯函数并导出,两侧在 Linux 上
+用 `windows-shell?` 参数化逐字断言(`cd /d` / `set "K=v" &&` / `call` 三处差异
+一次看清);夹具的 native 依赖同时带 `build.sh` 与 `build.cmd`,于是 build / pack
+的 native 端到端用例**两平台跑同一组断言**,不再有 POSIX 门。
 
 ## 13. 落地顺序
 
@@ -387,7 +462,8 @@ Windows 支持最大的风险不是写不对,而是**写完没人跑**。三层:
 | 4 | `.gitattributes` + 二进制写(D38) | 独立;不做则跨平台协作随机报错 |
 | 5 | `proc.ss` 平台派发层(D33) | 最大一块,但可独立单元测试;做完 Windows 才「开发得动」 |
 | 6 | 路径原语认 `\`(D36)+ `system-temp-dir` + 文件系统语义(§10) | 依赖第 5 步的实跑才能验证 |
-| 7 | 测试套件去 shell 依赖 + Windows CI | 前面所有工作的验收关口 |
+| 7 | 测试套件去 shell 依赖 + CI | 前面所有工作的验收关口。套件侧已清理(§12.1);CI 见 `.github/workflows/{linux,windows}.yml`,两份**都还没在 Actions 上跑过** |
+| 8 | native `script` 后端的 Windows 分支(D39) | 第 7 步收尾时点出的缺口 —— 它不挡「装得上、发得出」,只挡「建得了带 native 的依赖」,故排在验收关口之后单独做(§12.2) |
 
 ## 相关文档
 
