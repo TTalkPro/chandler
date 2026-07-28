@@ -10,13 +10,13 @@
            path-sep-char? has-path-sep?
            ensure-dir ensure-parent
            dir-entries files-under dir-empty?
-           rm-rf copy-file move-file
+           rm-rf copy-file move-file make-executable!
            read-file-string read-lines write-text write-text-atomic write-text-crlf
            call-with-text-input-file call-with-text-output-file
            sweep-empty-parents home-dir
            write-text-if-changed file-byte-size mtime
            path-swap-ext normalize-seps path-segments
-           parent-dir-or-dot system-temp-dir
+           parent-dir-or-dot system-temp-dir make-temp-dir null-device
            path-has-segment? unmanaged-path-segments unmanaged-path?
            relativize rel-files-under)
   (import (chezscheme)
@@ -198,6 +198,14 @@
   ;; 失败无所谓:外层还会再试一次删除,仍不行才抛。
   (define (clear-read-only! path)
     (chmod path (bitwise-ior (get-mode path) #o200)))
+
+  ;; 置执行位。**Windows 上是空操作** —— 那里没有执行位(可执行性看扩展名),
+  ;; 而无条件 shell-out 到 `chmod` 会往 stderr 喷「'chmod' 不是内部或外部命令」。
+  ;; 三个写启动器/拷贝可执行文件的地方共用这一份(先前 pack/core 用 Chez 的 chmod、
+  ;; 另外两处各起一个 `chmod +x` 子进程 —— 同一件事三种写法)。
+  (define (make-executable! path)
+    (unless (windows-paths?)
+      (chmod path (bitwise-ior (get-mode path) #o111))))
 
   ;; 删除因某文件消失而变空的祖先目录链
   (define (sweep-empty-parents path)
@@ -415,9 +423,45 @@
         (env-nonempty "TMP")
         (if (windows-paths?) "C:/Windows/Temp" "/tmp")))
 
+  ;; 空设备。POSIX 是 `/dev/null`,Windows 是 `NUL`(cmd 的保留设备名,
+  ;; 不带路径也不带扩展名)。用在「把子进程的 stdin 接到空」这类重定向上。
+  (define (null-device) (if (windows-paths?) "NUL" "/dev/null"))
+
   (define (env-nonempty name)
     (let ([v (getenv name)])
       (and v (> (string-length v) 0) v)))
+
+  ;; 新建一个**唯一**的临时目录并返回其路径。住在 fs 而不是 proc:它一次子进程
+  ;; 都不起,而调用方(proc 的 run-capture、测试 harness)一个在 proc 之上、
+  ;; 一个不该为了 mkdir 去 import 整个 proc —— 从前测试拿 `mktemp -d` 起子进程,
+  ;; 那既是 shell 依赖,也是 Windows 上没有的程序。
+  ;;
+  ;; **区分「已存在」与真错误**:先前对任何 mkdir 失败都重试,于是临时目录根本
+  ;; 不存在时(Windows 上 system-temp-dir 曾回落到不存在的 `/tmp`)会**死循环**。
+  ;; 现在只在目标已存在时换名重试,其余原样抛 —— 并附上最可能的那条原因。
+  (define temp-counter 0)
+  (define (next-temp-counter) (set! temp-counter (+ temp-counter 1)) temp-counter)
+
+  (define (make-temp-dir)
+    (let ([base (system-temp-dir)])
+      (unless (file-directory? base)
+        (ensure-dir base)
+        (unless (file-directory? base)
+          (error 'make-temp-dir
+                 (format "temp directory does not exist and could not be created: ~a~%  (set TMPDIR / TEMP / TMP to a writable directory)"
+                         base))))
+      (let ([t (current-time 'time-utc)])
+        (let loop ([n (+ (* (time-second t) 1000000)
+                         (quotient (time-nanosecond t) 1000)
+                         (next-temp-counter))]
+                   [tries 0])
+          (let ([d (path-join* base (string-append "chandler-" (number->string n)))])
+            (if (or (file-directory? d) (file-exists? d))
+                (if (> tries 10000)
+                    (error 'make-temp-dir
+                           (format "could not find a free temp directory name under ~a" base))
+                    (loop (+ n 1) (+ tries 1)))
+                (begin (mkdir d) d)))))))    ; mkdir 失败即抛(权限 / 磁盘满…),不再吞
 
   ;; 本机是否 Windows。fs 是最底层库(只依赖 util),不能 import layout 拿
   ;; windows-mt?(layout 依赖 fs,会成环)—— 故这里按 machine-type 自己判一次。
