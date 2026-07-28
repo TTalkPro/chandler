@@ -513,6 +513,10 @@
                           (display-condition e (current-error-port))
                           (newline (current-error-port))
                           (exit 1)))
+              ;; 这里的裸 `system` 是**唯一**不走 proc 的 shell-system 的一处:
+              ;; 它在 quasiquote 的 worker 脚本 datum 里,那份要作为独立脚本跑,
+              ;; `shell-system` 在其中未绑定(同 B5 对 `eprintf` 的处置)。
+              ;; 命令是固定的 `sleep N`,不以引号开头,故 D68 那层与它无关。
               (let ((s (getenv "CHANDLER_WORKER_SLEEP")))   ; 测试钩子(designs/11 L4)
                 (when s (system (string-append "sleep " s))))
               (ensure-dir (parent-or-dot target))
@@ -605,7 +609,7 @@
           ok
           ;; 不短路:一批里后面的命令照跑,好让一次构建把所有错都报出来,
           ;; 与并行分支(全部 wait 完再汇总)的可观察行为一致
-          (loop (cdr cs) (and (= 0 (system (car cs))) ok)))))
+          (loop (cdr cs) (and (= 0 (shell-system (car cs))) ok)))))
 
   (define (run-chunk-parallel cmds)
     (let ((tmp (fp-tmp)) (n (length cmds)))
@@ -621,7 +625,7 @@
           (put-string p "exit $rc\n"))
         'truncate)
       ;; tmp 落在 system-temp-dir 下,TMPDIR 含空格时不引用就会被 sh 拆成两个参数
-      (let ((rc (system (string-append "sh " (shq tmp)))))
+      (let ((rc (shell-system (string-append "sh " (shq tmp)))))
         (delete-file tmp)
         (= rc 0))))
 

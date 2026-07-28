@@ -243,11 +243,13 @@
 
   (define (run/code . args)
     ;; 经 shell 跑,返回退出码。不抛。
-    (system (%join-args args)))
+    ;; 走 proc 的 shell-system(全仓唯一 system 出口)—— Windows 上多参数形式
+    ;; 生成的命令行以引号开头,要先抵消 `cmd /c` 的首尾引号剥离(D68)。
+    (shell-system (%join-args args)))
 
   (define (run . args)
     ;; 跑命令;非零即抛 —— 构建工具的安全默认(designs/02)。
-    (let ((code (system (%join-args args))))
+    (let ((code (shell-system (%join-args args))))
       (unless (= code 0)
         (errorf 'run "command exited with ~s: ~a" code (%join-args args)))))
 
@@ -260,7 +262,9 @@
            (tmp (string-append (system-temp-dir) "/chandler-capture-"
                                (number->string (get-process-id)) "-"
                                (number->string %capture-counter)))
-           (code (system (string-append cmd " > " (shq tmp)))))
+           ;; **包裹作用在接上重定向之后的整行上** —— 只包 cmd 段的话,
+           ;; 「最后一个引号」会变成临时文件路径的收尾引号,剥掉它把路径拆坏。
+           (code (shell-system (string-append cmd " > " (shq tmp)))))
       (let ((out (if (file-exists? tmp) (file->string tmp) "")))
         (when (file-exists? tmp) (delete-file tmp))
         (unless (= code 0)
